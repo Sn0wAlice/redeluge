@@ -1,0 +1,25 @@
+*~
+build
+.cache
+dist
+docs/source/modules/deluge*.rst
+*.egg-info/
+*.dist-info/
+*.egg
+*.log
+__pycache__/
+*.py[cod]
+*.tar.*
+.tox/
+deluge/i18n/*/
+deluge/ui/web/js/*.js
+deluge/ui/web/js/extjs/ext-extensions*.js
+*.desktop
+*.metainfo.xml
+.build_data*
+osx/app
+RELEASE-VERSION
+.venv*
+# used by setuptools to cache downloaded eggs
+/.eggs
+_pytest_temp/
