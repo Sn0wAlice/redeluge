@@ -1,0 +1,102 @@
+{
+  "description": "libtorrent alerts the daemon handles. The cxx bridge has to flatten each of these into a plain struct.",
+  "alert_count": 24,
+  "alerts": [
+    {
+      "alert": "add_torrent_alert",
+      "handler_key": "add_torrent"
+    },
+    {
+      "alert": "external_ip_alert",
+      "handler_key": "external_ip"
+    },
+    {
+      "alert": "fastresume_rejected_alert",
+      "handler_key": "fastresume_rejected"
+    },
+    {
+      "alert": "file_completed_alert",
+      "handler_key": "file_completed"
+    },
+    {
+      "alert": "file_error_alert",
+      "handler_key": "file_error"
+    },
+    {
+      "alert": "file_renamed_alert",
+      "handler_key": "file_renamed"
+    },
+    {
+      "alert": "metadata_received_alert",
+      "handler_key": "metadata_received"
+    },
+    {
+      "alert": "performance_alert",
+      "handler_key": "performance"
+    },
+    {
+      "alert": "save_resume_data_alert",
+      "handler_key": "save_resume_data"
+    },
+    {
+      "alert": "save_resume_data_failed_alert",
+      "handler_key": "save_resume_data_failed"
+    },
+    {
+      "alert": "session_stats_alert",
+      "handler_key": "session_stats"
+    },
+    {
+      "alert": "state_changed_alert",
+      "handler_key": "state_changed"
+    },
+    {
+      "alert": "state_update_alert",
+      "handler_key": "state_update"
+    },
+    {
+      "alert": "storage_moved_alert",
+      "handler_key": "storage_moved"
+    },
+    {
+      "alert": "storage_moved_failed_alert",
+      "handler_key": "storage_moved_failed"
+    },
+    {
+      "alert": "torrent_checked_alert",
+      "handler_key": "torrent_checked"
+    },
+    {
+      "alert": "torrent_finished_alert",
+      "handler_key": "torrent_finished"
+    },
+    {
+      "alert": "torrent_need_cert_alert",
+      "handler_key": "torrent_need_cert"
+    },
+    {
+      "alert": "torrent_paused_alert",
+      "handler_key": "torrent_paused"
+    },
+    {
+      "alert": "torrent_resumed_alert",
+      "handler_key": "torrent_resumed"
+    },
+    {
+      "alert": "tracker_announce_alert",
+      "handler_key": "tracker_announce"
+    },
+    {
+      "alert": "tracker_error_alert",
+      "handler_key": "tracker_error"
+    },
+    {
+      "alert": "tracker_reply_alert",
+      "handler_key": "tracker_reply"
+    },
+    {
+      "alert": "tracker_warning_alert",
+      "handler_key": "tracker_warning"
+    }
+  ]
+}

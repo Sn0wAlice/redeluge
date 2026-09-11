@@ -1,100 +1,40 @@
-# Deluge dependencies
+# Dependencies
 
-The following are required to install and run Deluge. They are separated into
-sections to distinguish the precise requirements for each module.
+## To run
 
-All modules will require the [common](#common) section dependencies.
+- **libtorrent-rasterbar 2.0** and the OpenSSL it was built against. From the
+  distribution rather than vendored: Debian trixie ships 2.0.11, the version
+  Deluge is tested against.
 
-## Prerequisite
+On Debian or Ubuntu:
 
-- [Python] _>= 3.10_
+    sudo apt install libtorrent-rasterbar2.0t64
 
-## Build
+That is the whole runtime. The two binaries are static apart from libtorrent
+and libc, and the Web UI assets are compiled into `redeluge-web`.
 
-- [setuptools]
-- [intltool] - Optional: Desktop file translation for \*nix.
-- [closure-compiler] - Minify javascript (alternative is [rjsmin])
+## To build
 
-## Common
+- **Rust**, the version in `rust-toolchain.toml`.
+- **A C++17 compiler**, for the libtorrent bridge.
+- **libtorrent-rasterbar-dev** and **pkg-config**, which the bridge's build
+  script uses to find the headers and the ABI flags.
 
-- [Twisted] _>= 17.1_ - Use `TLS` extras for `service_identity` and `idna`.
-- [OpenSSL] _>= 1.0.1_
-- [pyOpenSSL]
-- [rencode] _>= 1.0.2_ - Encoding library.
-- [PyXDG] - Access freedesktop.org standards for \*nix.
-- [xdg-utils] - Provides xdg-open for \*nix.
-- [zope.interface]
-- [chardet] - Optional: Encoding detection.
-- [setproctitle] - Optional: Renaming processes.
-- [Pillow] - Optional: Support for resizing tracker icons.
-- [dbus-python] - Optional: Show item location in filemanager.
-- [ifaddr] - Optional: Verify network interfaces.
+      sudo apt install build-essential libtorrent-rasterbar-dev pkg-config
 
-### Linux and BSD
+Rust dependencies are pinned in `Cargo.lock` and the container build uses
+`--locked`, so a rebuild cannot resolve something newer by accident.
 
-- [distro] - Optional: OS platform information.
+## To migrate from the Python Deluge
 
-### Windows OS
+- **Python 3**, standard library only, for `tools/migrate_state.py`. Needed
+  once, and not by anything that runs afterwards.
 
-- [pywin32]
-- [certifi]
+## To work on it
 
-## Core (deluged daemon)
-
-- [libtorrent] _>= 1.2.0_
-- [GeoIP] or [pygeoip] - Optional: IP address country lookup. (_Debian: `python-geoip`_)
-
-## GTK UI
-
-- [GTK+] >= 3.10
-- [PyGObject]
-- [Pycairo]
-- [librsvg] _>= 2_
-- [ayatanaappindicator3] w/GIR - Optional: Ubuntu system tray icon.
-
-### MacOS
-
-- [GtkOSXApplication]
-
-## Web UI
-
-- [mako]
-
-## Plugins
-
-### Notifications
-
-- [pygame] - Optional: Play sounds
-- [libnotify] w/GIR - Optional: Desktop popups.
-
-[python]: https://www.python.org/
-[setuptools]: https://setuptools.readthedocs.io/en/latest/
-[intltool]: https://freedesktop.org/wiki/Software/intltool/
-[closure-compiler]: https://developers.google.com/closure/compiler/
-[rjsmin]: https://pypi.org/project/rjsmin/
-[openssl]: https://www.openssl.org/
-[pyopenssl]: https://pyopenssl.org
-[twisted]: https://twistedmatrix.com
-[pillow]: https://pypi.org/project/Pillow/
-[libtorrent]: https://libtorrent.org/
-[zope.interface]: https://pypi.org/project/zope.interface/
-[distro]: https://github.com/nir0s/distro
-[pywin32]: https://github.com/mhammond/pywin32
-[certifi]: https://pypi.org/project/certifi/
-[dbus-python]: https://pypi.org/project/dbus-python/
-[setproctitle]: https://pypi.org/project/setproctitle/
-[gtkosxapplication]: https://github.com/jralls/gtk-mac-integration
-[chardet]: https://chardet.github.io/
-[rencode]: https://github.com/aresch/rencode
-[pyxdg]: https://www.freedesktop.org/wiki/Software/pyxdg/
-[xdg-utils]: https://www.freedesktop.org/wiki/Software/xdg-utils/
-[gtk+]: https://www.gtk.org/
-[pycairo]: https://cairographics.org/pycairo/
-[pygobject]: https://pygobject.readthedocs.io/en/latest/
-[geoip]: https://pypi.org/project/GeoIP/
-[mako]: https://www.makotemplates.org/
-[pygame]: https://www.pygame.org/
-[libnotify]: https://developer.gnome.org/libnotify/
-[ayatanaappindicator3]: https://lazka.github.io/pgi-docs/AyatanaAppIndicator3-0.1/index.html
-[librsvg]: https://wiki.gnome.org/action/show/Projects/LibRsvg
-[ifaddr]: https://pypi.org/project/ifaddr/
+- **Docker**, which is how the tests run: `docker/rust.sh` builds the
+  environment and runs the whole gate, so the result does not depend on what is
+  installed locally.
+- The tools under `tools/` that regenerate the conformance corpora need the
+  Python `rencode` module. They are only rerun when the wire format changes,
+  which it has not since 2007.

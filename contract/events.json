@@ -1,0 +1,185 @@
+{
+  "description": "Events the daemon broadcasts to subscribed clients.",
+  "event_count": 22,
+  "events": [
+    {
+      "name": "ClientDisconnectedEvent",
+      "args": [
+        "session_id"
+      ],
+      "summary": "Emitted when a client disconnects.",
+      "source": "deluge/event.py:301"
+    },
+    {
+      "name": "ConfigValueChangedEvent",
+      "args": [
+        "key",
+        "value"
+      ],
+      "summary": "Emitted when a config value changes in the Core.",
+      "source": "deluge/event.py:269"
+    },
+    {
+      "name": "CreateTorrentProgressEvent",
+      "args": [
+        "piece_count",
+        "num_pieces"
+      ],
+      "summary": "Emitted when creating a torrent file remotely.",
+      "source": "deluge/event.py:222"
+    },
+    {
+      "name": "ExternalIPEvent",
+      "args": [
+        "external_ip"
+      ],
+      "summary": "Emitted when the external ip address is received from libtorrent.",
+      "source": "deluge/event.py:310"
+    },
+    {
+      "name": "NewVersionAvailableEvent",
+      "args": [
+        "new_release"
+      ],
+      "summary": "Emitted when a more recent version of Deluge is available.",
+      "source": "deluge/event.py:231"
+    },
+    {
+      "name": "PluginDisabledEvent",
+      "args": [
+        "plugin_name"
+      ],
+      "summary": "Emitted when a plugin is disabled in the Core.",
+      "source": "deluge/event.py:292"
+    },
+    {
+      "name": "PluginEnabledEvent",
+      "args": [
+        "plugin_name"
+      ],
+      "summary": "Emitted when a plugin is enabled in the Core.",
+      "source": "deluge/event.py:283"
+    },
+    {
+      "name": "PreTorrentRemovedEvent",
+      "args": [
+        "torrent_id"
+      ],
+      "summary": "Emitted when a torrent is about to be removed from the session.",
+      "source": "deluge/event.py:82"
+    },
+    {
+      "name": "SessionPausedEvent",
+      "args": [],
+      "summary": "Emitted when the session has been paused.",
+      "source": "deluge/event.py:253"
+    },
+    {
+      "name": "SessionResumedEvent",
+      "args": [],
+      "summary": "Emitted when the session has been resumed.",
+      "source": "deluge/event.py:261"
+    },
+    {
+      "name": "SessionStartedEvent",
+      "args": [],
+      "summary": "Emitted when a session has started.  This typically only happens once when",
+      "source": "deluge/event.py:244"
+    },
+    {
+      "name": "TorrentAddedEvent",
+      "args": [
+        "torrent_id",
+        "from_state"
+      ],
+      "summary": "Emitted when a new torrent is successfully added to the session.",
+      "source": "deluge/event.py:54"
+    },
+    {
+      "name": "TorrentFileCompletedEvent",
+      "args": [
+        "torrent_id",
+        "index"
+      ],
+      "summary": "Emitted when a file completes.",
+      "source": "deluge/event.py:192"
+    },
+    {
+      "name": "TorrentFileRenamedEvent",
+      "args": [
+        "torrent_id",
+        "index",
+        "name"
+      ],
+      "summary": "Emitted when a file within a torrent has been renamed.",
+      "source": "deluge/event.py:149"
+    },
+    {
+      "name": "TorrentFinishedEvent",
+      "args": [
+        "torrent_id"
+      ],
+      "summary": "Emitted when a torrent finishes downloading.",
+      "source": "deluge/event.py:166"
+    },
+    {
+      "name": "TorrentFolderRenamedEvent",
+      "args": [
+        "torrent_id",
+        "old",
+        "new"
+      ],
+      "summary": "Emitted when a folder within a torrent has been renamed.",
+      "source": "deluge/event.py:132"
+    },
+    {
+      "name": "TorrentQueueChangedEvent",
+      "args": [],
+      "summary": "Emitted when the queue order has changed.",
+      "source": "deluge/event.py:124"
+    },
+    {
+      "name": "TorrentRemovedEvent",
+      "args": [
+        "torrent_id"
+      ],
+      "summary": "Emitted when a torrent has been removed from the session.",
+      "source": "deluge/event.py:69"
+    },
+    {
+      "name": "TorrentResumedEvent",
+      "args": [
+        "torrent_id"
+      ],
+      "summary": "Emitted when a torrent resumes from a paused state.",
+      "source": "deluge/event.py:179"
+    },
+    {
+      "name": "TorrentStateChangedEvent",
+      "args": [
+        "torrent_id",
+        "state"
+      ],
+      "summary": "Emitted when a torrent changes state.",
+      "source": "deluge/event.py:95"
+    },
+    {
+      "name": "TorrentStorageMovedEvent",
+      "args": [
+        "torrent_id",
+        "path"
+      ],
+      "summary": "Emitted when the storage location for a torrent has been moved.",
+      "source": "deluge/event.py:207"
+    },
+    {
+      "name": "TorrentTrackerStatusEvent",
+      "args": [
+        "torrent_id",
+        "status"
+      ],
+      "summary": "Emitted when a torrents tracker status changes.",
+      "source": "deluge/event.py:110"
+    }
+  ]
+}

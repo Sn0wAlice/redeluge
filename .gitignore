@@ -1,25 +1,20 @@
-*~
-build
-.cache
-dist
-docs/source/modules/deluge*.rst
-*.egg-info/
-*.dist-info/
-*.egg
+# Build output
+/target
+/target-docker
+/target-amd64
+
+# Local runtime: config, logs, the daemon keypair, downloaded torrents
+/data/
 *.log
+
+# Docker environment, holds the Web UI password
+.env
+
+# Tooling caches
+.ruff_cache/
 __pycache__/
 *.py[cod]
-*.tar.*
-.tox/
-deluge/i18n/*/
-deluge/ui/web/js/*.js
-deluge/ui/web/js/extjs/ext-extensions*.js
-*.desktop
-*.metainfo.xml
-.build_data*
-osx/app
-RELEASE-VERSION
-.venv*
-# used by setuptools to cache downloaded eggs
-/.eggs
-_pytest_temp/
+
+# Editor leftovers
+*~
+.DS_Store

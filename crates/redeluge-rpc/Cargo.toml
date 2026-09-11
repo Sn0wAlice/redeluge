@@ -1,0 +1,24 @@
+[package]
+name = "redeluge-rpc"
+description = "The DelugeRPC wire protocol: framing, messages and client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+redeluge-rencode = { path = "../redeluge-rencode" }
+flate2 = "1"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "sync", "time", "rt", "macros"] }
+tokio-rustls.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+ring.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+redeluge-contract = { path = "../redeluge-contract" }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

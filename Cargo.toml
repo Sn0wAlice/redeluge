@@ -1,0 +1,43 @@
+# redeluge: the Rust replacement for the Python management layer.
+#
+# libtorrent stays as it is. Everything above it moves here, one crate at a
+# time, while the Python daemon keeps running beside it.
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/redeluge-contract",
+    "crates/redeluge-daemon",
+    "crates/redeluge-libtorrent",
+    "crates/redeluge-rencode",
+    "crates/redeluge-rpc",
+    "crates/redeluge-web",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Sn0wAlice/redeluge"
+
+[workspace.dependencies]
+cxx = "1.0"
+cxx-build = "1.0"
+pkg-config = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+tokio = { version = "1", default-features = false }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = "1"
+# Already in the tree via rustls; used directly for the certificate fingerprint.
+ring = "0.17"
+tracing = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

@@ -1,0 +1,111 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! What the server holds while it runs.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use redeluge_rpc::{Client, ClientSettings};
+use tokio::sync::{Mutex, RwLock};
+
+use crate::auth::{Sessions, StoredPassword};
+use crate::config::ConfigFile;
+
+/// A daemon the Web UI can connect to, from `hostlist.conf`.
+#[derive(Debug, Clone)]
+pub struct Host {
+    pub id: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+}
+
+/// Settings the server needs, gathered from `web.conf` and the environment.
+#[derive(Debug, Clone)]
+pub struct Settings {
+    pub config_dir: PathBuf,
+    pub interface: String,
+    pub port: u16,
+    /// Path prefix, for serving under a reverse proxy subpath. Always ends in `/`.
+    pub base: String,
+    pub session_timeout: Duration,
+    pub theme: String,
+    /// Host id to connect to without being asked.
+    pub default_daemon: Option<String>,
+    /// Version reported to the browser, which shows it in the page title.
+    pub version: String,
+}
+
+/// Shared across every request.
+pub struct AppState {
+    pub settings: Settings,
+    pub password: RwLock<StoredPassword>,
+    pub sessions: Mutex<Sessions>,
+    pub hosts: RwLock<Vec<Host>>,
+    /// The daemon connection, once one has been made.
+    pub daemon: RwLock<Option<DaemonConnection>>,
+    pub client_settings: ClientSettings,
+    /// Events the browser asked to be told about, and those that have arrived.
+    pub events: Mutex<EventQueue>,
+    /// Raw `web.conf`, so unknown keys survive a read/write cycle.
+    pub web_config: RwLock<ConfigFile>,
+}
+
+/// A live connection plus which host it is to.
+pub struct DaemonConnection {
+    pub host_id: String,
+    pub client: Client,
+}
+
+/// Events the browser has registered for.
+///
+/// The Web UI polls `web.get_events`, so events have to be held between polls.
+/// The queue is bounded: a browser tab that registers for an event and then
+/// stops polling must not grow this without limit.
+#[derive(Debug, Default)]
+pub struct EventQueue {
+    registered: Vec<String>,
+    pending: Vec<(String, Vec<serde_json::Value>)>,
+}
+
+/// Most events a queue holds before the oldest are dropped.
+const MAX_PENDING_EVENTS: usize = 512;
+
+impl EventQueue {
+    pub fn register(&mut self, name: &str) {
+        if !self.registered.iter().any(|known| known == name) {
+            self.registered.push(name.to_owned());
+        }
+    }
+
+    pub fn deregister(&mut self, name: &str) {
+        self.registered.retain(|known| known != name);
+        self.pending.retain(|(known, _)| known != name);
+    }
+
+    pub fn is_registered(&self, name: &str) -> bool {
+        self.registered.iter().any(|known| known == name)
+    }
+
+    pub fn push(&mut self, name: String, args: Vec<serde_json::Value>) {
+        if !self.is_registered(&name) {
+            return;
+        }
+        if self.pending.len() >= MAX_PENDING_EVENTS {
+            self.pending.remove(0);
+        }
+        self.pending.push((name, args));
+    }
+
+    /// Takes everything queued, which is what a poll does.
+    pub fn drain(&mut self) -> Vec<(String, Vec<serde_json::Value>)> {
+        std::mem::take(&mut self.pending)
+    }
+
+    pub fn registered(&self) -> &[String] {
+        &self.registered
+    }
+}
+
+pub type SharedState = Arc<AppState>;

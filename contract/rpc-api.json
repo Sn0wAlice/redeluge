@@ -1,0 +1,2213 @@
+{
+  "description": "RPC surface the redeluge daemon must reproduce. Extracted from the Python tree by tools/extract_contract.py; do not hand-edit.",
+  "auth_levels": {
+    "AUTH_LEVEL_NONE": 0,
+    "AUTH_LEVEL_READONLY": 1,
+    "AUTH_LEVEL_NORMAL": 5,
+    "AUTH_LEVEL_ADMIN": 10,
+    "AUTH_LEVEL_DEFAULT": 5
+  },
+  "method_count": 99,
+  "methods": [
+    {
+      "name": "auth.change_password",
+      "namespace": "auth",
+      "method": "change_password",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "old_password",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "new_password",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Change the password.",
+      "source": "deluge/ui/web/auth.py:205"
+    },
+    {
+      "name": "auth.check_session",
+      "namespace": "auth",
+      "method": "check_session",
+      "transport": "web",
+      "auth_level": 0,
+      "returns": null,
+      "params": [
+        {
+          "name": "session_id",
+          "annotation": null,
+          "required": false,
+          "default": "None"
+        }
+      ],
+      "summary": "Check a session to see if it's still valid.",
+      "source": "deluge/ui/web/auth.py:219"
+    },
+    {
+      "name": "auth.delete_session",
+      "namespace": "auth",
+      "method": "delete_session",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [],
+      "summary": "Removes a session.",
+      "source": "deluge/ui/web/auth.py:229"
+    },
+    {
+      "name": "auth.login",
+      "namespace": "auth",
+      "method": "login",
+      "transport": "web",
+      "auth_level": 0,
+      "returns": null,
+      "params": [
+        {
+          "name": "password",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Test a password to see if it's valid.",
+      "source": "deluge/ui/web/auth.py:240"
+    },
+    {
+      "name": "core.add_torrent_file",
+      "namespace": "core",
+      "method": "add_torrent_file",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "Optional[str]",
+      "params": [
+        {
+          "name": "filename",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "filedump",
+          "annotation": "Union[str, bytes]",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "options",
+          "annotation": "dict",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Adds a torrent file to the session.",
+      "source": "deluge/core/core.py:457"
+    },
+    {
+      "name": "core.add_torrent_file_async",
+      "namespace": "core",
+      "method": "add_torrent_file_async",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "'defer.Deferred[Optional[str]]'",
+      "params": [
+        {
+          "name": "filename",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "filedump",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "options",
+          "annotation": "dict",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "save_state",
+          "annotation": "bool",
+          "required": false,
+          "default": "True"
+        }
+      ],
+      "summary": "Adds a torrent file to the session asynchronously.",
+      "source": "deluge/core/core.py:403"
+    },
+    {
+      "name": "core.add_torrent_files",
+      "namespace": "core",
+      "method": "add_torrent_files",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "'defer.Deferred[List[AddTorrentError]]'",
+      "params": [
+        {
+          "name": "torrent_files",
+          "annotation": "List[Tuple[str, Union[str, bytes], dict]]",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Adds multiple torrent files to the session asynchronously.",
+      "source": "deluge/core/core.py:484"
+    },
+    {
+      "name": "core.add_torrent_magnet",
+      "namespace": "core",
+      "method": "add_torrent_magnet",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "str",
+      "params": [
+        {
+          "name": "uri",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "options",
+          "annotation": "dict",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Adds a torrent from a magnet link.",
+      "source": "deluge/core/core.py:551"
+    },
+    {
+      "name": "core.add_torrent_url",
+      "namespace": "core",
+      "method": "add_torrent_url",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "'defer.Deferred[Optional[str]]'",
+      "params": [
+        {
+          "name": "url",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "options",
+          "annotation": "dict",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "headers",
+          "annotation": "dict",
+          "required": false,
+          "default": "None"
+        }
+      ],
+      "summary": "Adds a torrent from a URL. Deluge will attempt to fetch the torrent",
+      "source": "deluge/core/core.py:515"
+    },
+    {
+      "name": "core.connect_peer",
+      "namespace": "core",
+      "method": "connect_peer",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "ip",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "port",
+          "annotation": "int",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:674"
+    },
+    {
+      "name": "core.create_account",
+      "namespace": "core",
+      "method": "create_account",
+      "transport": "daemon",
+      "auth_level": 10,
+      "returns": "bool",
+      "params": [
+        {
+          "name": "username",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "password",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "authlevel",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:1361"
+    },
+    {
+      "name": "core.create_torrent",
+      "namespace": "core",
+      "method": "create_torrent",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "path",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "tracker",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "piece_length",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "comment",
+          "annotation": null,
+          "required": false,
+          "default": "None"
+        },
+        {
+          "name": "target",
+          "annotation": null,
+          "required": false,
+          "default": "None"
+        },
+        {
+          "name": "webseeds",
+          "annotation": null,
+          "required": false,
+          "default": "None"
+        },
+        {
+          "name": "private",
+          "annotation": null,
+          "required": false,
+          "default": "False"
+        },
+        {
+          "name": "created_by",
+          "annotation": null,
+          "required": false,
+          "default": "None"
+        },
+        {
+          "name": "trackers",
+          "annotation": null,
+          "required": false,
+          "default": "None"
+        },
+        {
+          "name": "add_to_session",
+          "annotation": null,
+          "required": false,
+          "default": "False"
+        },
+        {
+          "name": "torrent_format",
+          "annotation": null,
+          "required": false,
+          "default": "metafile.TorrentFormat.V1"
+        },
+        {
+          "name": "ca_cert",
+          "annotation": null,
+          "required": false,
+          "default": "None"
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:1053"
+    },
+    {
+      "name": "core.force_reannounce",
+      "namespace": "core",
+      "method": "force_reannounce",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [
+        {
+          "name": "torrent_ids",
+          "annotation": "List[str]",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:651"
+    },
+    {
+      "name": "core.force_recheck",
+      "namespace": "core",
+      "method": "force_recheck",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [
+        {
+          "name": "torrent_ids",
+          "annotation": "List[str]",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Forces a data recheck on torrent_ids",
+      "source": "deluge/core/core.py:938"
+    },
+    {
+      "name": "core.get_auth_levels_mappings",
+      "namespace": "core",
+      "method": "get_auth_levels_mappings",
+      "transport": "daemon",
+      "auth_level": 0,
+      "returns": "Tuple[Dict[str, int], Dict[int, str]]",
+      "params": [],
+      "summary": null,
+      "source": "deluge/core/core.py:1357"
+    },
+    {
+      "name": "core.get_completion_paths",
+      "namespace": "core",
+      "method": "get_completion_paths",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "Dict[str, Any]",
+      "params": [
+        {
+          "name": "args",
+          "annotation": "Dict[str, Any]",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Returns the available path completions for the input value.",
+      "source": "deluge/core/core.py:1348"
+    },
+    {
+      "name": "core.get_config",
+      "namespace": "core",
+      "method": "get_config",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "dict",
+      "params": [],
+      "summary": "Get all the preferences as a dictionary",
+      "source": "deluge/core/core.py:849"
+    },
+    {
+      "name": "core.get_config_value",
+      "namespace": "core",
+      "method": "get_config_value",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "Any",
+      "params": [
+        {
+          "name": "key",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Get the config value for key",
+      "source": "deluge/core/core.py:854"
+    },
+    {
+      "name": "core.get_config_values",
+      "namespace": "core",
+      "method": "get_config_values",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "Dict[str, Any]",
+      "params": [
+        {
+          "name": "keys",
+          "annotation": "List[str]",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Get the config values for the entered keys",
+      "source": "deluge/core/core.py:859"
+    },
+    {
+      "name": "core.get_external_ip",
+      "namespace": "core",
+      "method": "get_external_ip",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "str",
+      "params": [],
+      "summary": "Returns the external IP address received from libtorrent.",
+      "source": "deluge/core/core.py:1334"
+    },
+    {
+      "name": "core.get_filter_tree",
+      "namespace": "core",
+      "method": "get_filter_tree",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "Dict",
+      "params": [
+        {
+          "name": "show_zero_hits",
+          "annotation": "bool",
+          "required": false,
+          "default": "True"
+        },
+        {
+          "name": "hide_cat",
+          "annotation": "List[str]",
+          "required": false,
+          "default": "None"
+        }
+      ],
+      "summary": "returns {field: [(value,count)] }",
+      "source": "deluge/core/core.py:834"
+    },
+    {
+      "name": "core.get_free_space",
+      "namespace": "core",
+      "method": "get_free_space",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "int",
+      "params": [
+        {
+          "name": "path",
+          "annotation": "str",
+          "required": false,
+          "default": "None"
+        }
+      ],
+      "summary": "Returns the number of free bytes at path",
+      "source": "deluge/core/core.py:1311"
+    },
+    {
+      "name": "core.get_known_accounts",
+      "namespace": "core",
+      "method": "get_known_accounts",
+      "transport": "daemon",
+      "auth_level": 10,
+      "returns": "List[Dict[str, Any]]",
+      "params": [],
+      "summary": null,
+      "source": "deluge/core/core.py:1353"
+    },
+    {
+      "name": "core.get_libtorrent_version",
+      "namespace": "core",
+      "method": "get_libtorrent_version",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "str",
+      "params": [],
+      "summary": "Returns the libtorrent version.",
+      "source": "deluge/core/core.py:1339"
+    },
+    {
+      "name": "core.get_listen_port",
+      "namespace": "core",
+      "method": "get_listen_port",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "int",
+      "params": [],
+      "summary": "Returns the active listen port",
+      "source": "deluge/core/core.py:873"
+    },
+    {
+      "name": "core.get_magnet_uri",
+      "namespace": "core",
+      "method": "get_magnet_uri",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "str",
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:971"
+    },
+    {
+      "name": "core.get_path_size",
+      "namespace": "core",
+      "method": "get_path_size",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "path",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Returns the size of the file or folder 'path' and -1 if the path is",
+      "source": "deluge/core/core.py:1047"
+    },
+    {
+      "name": "core.get_proxy",
+      "namespace": "core",
+      "method": "get_proxy",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "Dict[str, Any]",
+      "params": [],
+      "summary": "Returns the proxy settings",
+      "source": "deluge/core/core.py:889"
+    },
+    {
+      "name": "core.get_session_state",
+      "namespace": "core",
+      "method": "get_session_state",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "List[str]",
+      "params": [],
+      "summary": "Returns a list of torrent_ids in the session.",
+      "source": "deluge/core/core.py:843"
+    },
+    {
+      "name": "core.get_session_status",
+      "namespace": "core",
+      "method": "get_session_status",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "Dict[str, Union[int, float]]",
+      "params": [
+        {
+          "name": "keys",
+          "annotation": "List[str]",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Gets the session status values for 'keys', these keys are taking",
+      "source": "deluge/core/core.py:620"
+    },
+    {
+      "name": "core.get_ssl_listen_port",
+      "namespace": "core",
+      "method": "get_ssl_listen_port",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "int",
+      "params": [],
+      "summary": "Returns the active SSL listen port",
+      "source": "deluge/core/core.py:878"
+    },
+    {
+      "name": "core.get_torrent_status",
+      "namespace": "core",
+      "method": "get_torrent_status",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "dict",
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "keys",
+          "annotation": "List[str]",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "diff",
+          "annotation": "bool",
+          "required": false,
+          "default": "False"
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:801"
+    },
+    {
+      "name": "core.get_torrents_status",
+      "namespace": "core",
+      "method": "get_torrents_status",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "dict",
+      "params": [
+        {
+          "name": "filter_dict",
+          "annotation": "dict",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "keys",
+          "annotation": "List[str]",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "diff",
+          "annotation": "bool",
+          "required": false,
+          "default": "False"
+        }
+      ],
+      "summary": "returns all torrents , optionally filtered by filter_dict.",
+      "source": "deluge/core/core.py:818"
+    },
+    {
+      "name": "core.glob",
+      "namespace": "core",
+      "method": "glob",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "List[str]",
+      "params": [
+        {
+          "name": "path",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:1284"
+    },
+    {
+      "name": "core.is_session_paused",
+      "namespace": "core",
+      "method": "is_session_paused",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "bool",
+      "params": [],
+      "summary": "Returns the activity of the session",
+      "source": "deluge/core/core.py:754"
+    },
+    {
+      "name": "core.move_storage",
+      "namespace": "core",
+      "method": "move_storage",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_ids",
+          "annotation": "List[str]",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "dest",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:731"
+    },
+    {
+      "name": "core.pause_session",
+      "namespace": "core",
+      "method": "pause_session",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [],
+      "summary": "Pause the entire session",
+      "source": "deluge/core/core.py:738"
+    },
+    {
+      "name": "core.pause_torrent",
+      "namespace": "core",
+      "method": "pause_torrent",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Pauses a torrent",
+      "source": "deluge/core/core.py:657"
+    },
+    {
+      "name": "core.pause_torrents",
+      "namespace": "core",
+      "method": "pause_torrents",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [
+        {
+          "name": "torrent_ids",
+          "annotation": "List[str]",
+          "required": false,
+          "default": "None"
+        }
+      ],
+      "summary": "Pauses a list of torrents",
+      "source": "deluge/core/core.py:666"
+    },
+    {
+      "name": "core.prefetch_magnet_metadata",
+      "namespace": "core",
+      "method": "prefetch_magnet_metadata",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "Tuple[str, bytes]",
+      "params": [
+        {
+          "name": "magnet",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "timeout",
+          "annotation": "int",
+          "required": false,
+          "default": "30"
+        }
+      ],
+      "summary": "Download magnet metadata without adding to Deluge session.",
+      "source": "deluge/core/core.py:437"
+    },
+    {
+      "name": "core.queue_bottom",
+      "namespace": "core",
+      "method": "queue_bottom",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [
+        {
+          "name": "torrent_ids",
+          "annotation": "List[str]",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:1270"
+    },
+    {
+      "name": "core.queue_down",
+      "namespace": "core",
+      "method": "queue_down",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [
+        {
+          "name": "torrent_ids",
+          "annotation": "List[str]",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:1245"
+    },
+    {
+      "name": "core.queue_top",
+      "namespace": "core",
+      "method": "queue_top",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [
+        {
+          "name": "torrent_ids",
+          "annotation": "List[str]",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:1206"
+    },
+    {
+      "name": "core.queue_up",
+      "namespace": "core",
+      "method": "queue_up",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [
+        {
+          "name": "torrent_ids",
+          "annotation": "List[str]",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:1220"
+    },
+    {
+      "name": "core.remove_account",
+      "namespace": "core",
+      "method": "remove_account",
+      "transport": "daemon",
+      "auth_level": 10,
+      "returns": "bool",
+      "params": [
+        {
+          "name": "username",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:1369"
+    },
+    {
+      "name": "core.remove_torrent",
+      "namespace": "core",
+      "method": "remove_torrent",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "bool",
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "remove_data",
+          "annotation": "bool",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Removes a single torrent from the session.",
+      "source": "deluge/core/core.py:566"
+    },
+    {
+      "name": "core.remove_torrents",
+      "namespace": "core",
+      "method": "remove_torrents",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "'defer.Deferred[List[Tuple[str, str]]]'",
+      "params": [
+        {
+          "name": "torrent_ids",
+          "annotation": "List[str]",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "remove_data",
+          "annotation": "bool",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Remove multiple torrents from the session.",
+      "source": "deluge/core/core.py:583"
+    },
+    {
+      "name": "core.rename_files",
+      "namespace": "core",
+      "method": "rename_files",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "defer.Deferred",
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "filenames",
+          "annotation": "List[Tuple[int, str]]",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Rename files in ``torrent_id``.  Since this is an asynchronous operation by",
+      "source": "deluge/core/core.py:1162"
+    },
+    {
+      "name": "core.rename_folder",
+      "namespace": "core",
+      "method": "rename_folder",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "defer.Deferred",
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "folder",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "new_folder",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Renames the 'folder' to 'new_folder' in 'torrent_id'.  Watch for the",
+      "source": "deluge/core/core.py:1185"
+    },
+    {
+      "name": "core.resume_session",
+      "namespace": "core",
+      "method": "resume_session",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [],
+      "summary": "Resume the entire session",
+      "source": "deluge/core/core.py:745"
+    },
+    {
+      "name": "core.resume_torrent",
+      "namespace": "core",
+      "method": "resume_torrent",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Resumes a torrent",
+      "source": "deluge/core/core.py:759"
+    },
+    {
+      "name": "core.resume_torrents",
+      "namespace": "core",
+      "method": "resume_torrents",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [
+        {
+          "name": "torrent_ids",
+          "annotation": "List[str]",
+          "required": false,
+          "default": "None"
+        }
+      ],
+      "summary": "Resumes a list of torrents",
+      "source": "deluge/core/core.py:768"
+    },
+    {
+      "name": "core.set_config",
+      "namespace": "core",
+      "method": "set_config",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "config",
+          "annotation": "Dict[str, Any]",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Set the config with values from dictionary",
+      "source": "deluge/core/core.py:864"
+    },
+    {
+      "name": "core.set_ssl_torrent_cert",
+      "namespace": "core",
+      "method": "set_ssl_torrent_cert",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "certificate",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "private_key",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "dh_params",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "save_to_disk",
+          "annotation": "bool",
+          "required": false,
+          "default": "True"
+        }
+      ],
+      "summary": "Set the SSL certificates used to connect to SSL peers of the given torrent.",
+      "source": "deluge/core/core.py:680"
+    },
+    {
+      "name": "core.set_torrent_auto_managed",
+      "namespace": "core",
+      "method": "set_torrent_auto_managed",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "value",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Deprecated: Use set_torrent_options with 'auto_managed'",
+      "source": "deluge/core/core.py:1012"
+    },
+    {
+      "name": "core.set_torrent_file_priorities",
+      "namespace": "core",
+      "method": "set_torrent_file_priorities",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "priorities",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Deprecated: Use set_torrent_options with 'file_priorities'",
+      "source": "deluge/core/core.py:1000"
+    },
+    {
+      "name": "core.set_torrent_max_connections",
+      "namespace": "core",
+      "method": "set_torrent_max_connections",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "value",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Deprecated: Use set_torrent_options with 'max_connections'",
+      "source": "deluge/core/core.py:976"
+    },
+    {
+      "name": "core.set_torrent_max_download_speed",
+      "namespace": "core",
+      "method": "set_torrent_max_download_speed",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "value",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Deprecated: Use set_torrent_options with 'max_download_speed'",
+      "source": "deluge/core/core.py:994"
+    },
+    {
+      "name": "core.set_torrent_max_upload_slots",
+      "namespace": "core",
+      "method": "set_torrent_max_upload_slots",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "value",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Deprecated: Use set_torrent_options with 'max_upload_slots'",
+      "source": "deluge/core/core.py:982"
+    },
+    {
+      "name": "core.set_torrent_max_upload_speed",
+      "namespace": "core",
+      "method": "set_torrent_max_upload_speed",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "value",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Deprecated: Use set_torrent_options with 'max_upload_speed'",
+      "source": "deluge/core/core.py:988"
+    },
+    {
+      "name": "core.set_torrent_move_completed",
+      "namespace": "core",
+      "method": "set_torrent_move_completed",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "value",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Deprecated: Use set_torrent_options with 'move_completed'",
+      "source": "deluge/core/core.py:1036"
+    },
+    {
+      "name": "core.set_torrent_move_completed_path",
+      "namespace": "core",
+      "method": "set_torrent_move_completed_path",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "value",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Deprecated: Use set_torrent_options with 'move_completed_path'",
+      "source": "deluge/core/core.py:1042"
+    },
+    {
+      "name": "core.set_torrent_options",
+      "namespace": "core",
+      "method": "set_torrent_options",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [
+        {
+          "name": "torrent_ids",
+          "annotation": "List[str]",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "options",
+          "annotation": "Dict[str, Any]",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Sets the torrent options for torrent_ids",
+      "source": "deluge/core/core.py:944"
+    },
+    {
+      "name": "core.set_torrent_prioritize_first_last",
+      "namespace": "core",
+      "method": "set_torrent_prioritize_first_last",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "value",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Deprecated: Use set_torrent_options with 'prioritize_first_last'",
+      "source": "deluge/core/core.py:1006"
+    },
+    {
+      "name": "core.set_torrent_remove_at_ratio",
+      "namespace": "core",
+      "method": "set_torrent_remove_at_ratio",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "value",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Deprecated: Use set_torrent_options with 'remove_at_ratio'",
+      "source": "deluge/core/core.py:1030"
+    },
+    {
+      "name": "core.set_torrent_stop_at_ratio",
+      "namespace": "core",
+      "method": "set_torrent_stop_at_ratio",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "value",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Deprecated: Use set_torrent_options with 'stop_at_ratio'",
+      "source": "deluge/core/core.py:1018"
+    },
+    {
+      "name": "core.set_torrent_stop_ratio",
+      "namespace": "core",
+      "method": "set_torrent_stop_ratio",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "value",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Deprecated: Use set_torrent_options with 'stop_ratio'",
+      "source": "deluge/core/core.py:1024"
+    },
+    {
+      "name": "core.set_torrent_trackers",
+      "namespace": "core",
+      "method": "set_torrent_trackers",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "trackers",
+          "annotation": "List[Dict[str, Any]]",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Sets a torrents tracker list. trackers will be ``[{\"url\", \"tier\"}]``",
+      "source": "deluge/core/core.py:964"
+    },
+    {
+      "name": "core.test_listen_port",
+      "namespace": "core",
+      "method": "test_listen_port",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "'defer.Deferred[Optional[bool]]'",
+      "params": [],
+      "summary": "Checks if the active port is open",
+      "source": "deluge/core/core.py:1288"
+    },
+    {
+      "name": "core.update_account",
+      "namespace": "core",
+      "method": "update_account",
+      "transport": "daemon",
+      "auth_level": 10,
+      "returns": "bool",
+      "params": [
+        {
+          "name": "username",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "password",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "authlevel",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:1365"
+    },
+    {
+      "name": "daemon.authorized_call",
+      "namespace": "daemon",
+      "method": "authorized_call",
+      "transport": "daemon",
+      "auth_level": 1,
+      "returns": null,
+      "params": [
+        {
+          "name": "rpc",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Determines if session auth_level is authorized to call RPC.",
+      "source": "deluge/core/daemon.py:173"
+    },
+    {
+      "name": "daemon.get_method_list",
+      "namespace": "daemon",
+      "method": "get_method_list",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [],
+      "summary": "Returns a list of the exported methods.",
+      "source": "deluge/core/daemon.py:163"
+    },
+    {
+      "name": "daemon.get_version",
+      "namespace": "daemon",
+      "method": "get_version",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [],
+      "summary": "Returns the daemon version",
+      "source": "deluge/core/daemon.py:168"
+    },
+    {
+      "name": "daemon.shutdown",
+      "namespace": "daemon",
+      "method": "shutdown",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "*args",
+          "annotation": null,
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "**kwargs",
+          "annotation": null,
+          "required": false,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/daemon.py:153"
+    },
+    {
+      "name": "web.add_host",
+      "namespace": "web",
+      "method": "add_host",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "host",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "port",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "username",
+          "annotation": null,
+          "required": false,
+          "default": "''"
+        },
+        {
+          "name": "password",
+          "annotation": null,
+          "required": false,
+          "default": "''"
+        }
+      ],
+      "summary": "Adds a host to the list.",
+      "source": "deluge/ui/web/json_api.py:773"
+    },
+    {
+      "name": "web.add_torrents",
+      "namespace": "web",
+      "method": "add_torrents",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrents",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Add torrents by file",
+      "source": "deluge/ui/web/json_api.py:707"
+    },
+    {
+      "name": "web.connect",
+      "namespace": "web",
+      "method": "connect",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "host_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Connect the web client to a daemon.",
+      "source": "deluge/ui/web/json_api.py:452"
+    },
+    {
+      "name": "web.connected",
+      "namespace": "web",
+      "method": "connected",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [],
+      "summary": "The current connection state.",
+      "source": "deluge/ui/web/json_api.py:467"
+    },
+    {
+      "name": "web.deregister_event_listener",
+      "namespace": "web",
+      "method": "deregister_event_listener",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "event",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Remove an event listener from the event queue.",
+      "source": "deluge/ui/web/json_api.py:938"
+    },
+    {
+      "name": "web.disconnect",
+      "namespace": "web",
+      "method": "disconnect",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [],
+      "summary": "Disconnect the web interface from the connected daemon.",
+      "source": "deluge/ui/web/json_api.py:477"
+    },
+    {
+      "name": "web.download_torrent_from_url",
+      "namespace": "web",
+      "method": "download_torrent_from_url",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "url",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "cookie",
+          "annotation": null,
+          "required": false,
+          "default": "None"
+        }
+      ],
+      "summary": "Download a torrent file from a URL to a temporary directory.",
+      "source": "deluge/ui/web/json_api.py:645"
+    },
+    {
+      "name": "web.edit_host",
+      "namespace": "web",
+      "method": "edit_host",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "host_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "host",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "port",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "username",
+          "annotation": null,
+          "required": false,
+          "default": "''"
+        },
+        {
+          "name": "password",
+          "annotation": null,
+          "required": false,
+          "default": "''"
+        }
+      ],
+      "summary": "Edit host details in the hostlist.",
+      "source": "deluge/ui/web/json_api.py:794"
+    },
+    {
+      "name": "web.get_config",
+      "namespace": "web",
+      "method": "get_config",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [],
+      "summary": "Get the configuration dictionary for the web interface.",
+      "source": "deluge/ui/web/json_api.py:845"
+    },
+    {
+      "name": "web.get_events",
+      "namespace": "web",
+      "method": "get_events",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [],
+      "summary": "Retrieve the pending events for the session.",
+      "source": "deluge/ui/web/json_api.py:948"
+    },
+    {
+      "name": "web.get_host_status",
+      "namespace": "web",
+      "method": "get_host_status",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "host_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Returns the current status for the specified host.",
+      "source": "deluge/ui/web/json_api.py:758"
+    },
+    {
+      "name": "web.get_hosts",
+      "namespace": "web",
+      "method": "get_hosts",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [],
+      "summary": "Return the hosts in the hostlist.",
+      "source": "deluge/ui/web/json_api.py:750"
+    },
+    {
+      "name": "web.get_magnet_info",
+      "namespace": "web",
+      "method": "get_magnet_info",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "uri",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Parse a magnet URI for hash and name.",
+      "source": "deluge/ui/web/json_api.py:702"
+    },
+    {
+      "name": "web.get_torrent_files",
+      "namespace": "web",
+      "method": "get_torrent_files",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Gets the files for a torrent in tree format",
+      "source": "deluge/ui/web/json_api.py:630"
+    },
+    {
+      "name": "web.get_torrent_info",
+      "namespace": "web",
+      "method": "get_torrent_info",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "filename",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Return information about a torrent on the filesystem.",
+      "source": "deluge/ui/web/json_api.py:675"
+    },
+    {
+      "name": "web.get_torrent_status",
+      "namespace": "web",
+      "method": "get_torrent_status",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "torrent_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "keys",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Get the status for a torrent, filtered by status keys.",
+      "source": "deluge/ui/web/json_api.py:625"
+    },
+    {
+      "name": "web.register_event_listener",
+      "namespace": "web",
+      "method": "register_event_listener",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "event",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Add a listener to the event queue.",
+      "source": "deluge/ui/web/json_api.py:928"
+    },
+    {
+      "name": "web.remove_host",
+      "namespace": "web",
+      "method": "remove_host",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "host_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Removes a host from the hostlist.",
+      "source": "deluge/ui/web/json_api.py:811"
+    },
+    {
+      "name": "web.set_config",
+      "namespace": "web",
+      "method": "set_config",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "config",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Sets the configuration dictionary for the web interface.",
+      "source": "deluge/ui/web/json_api.py:859"
+    },
+    {
+      "name": "web.set_theme",
+      "namespace": "web",
+      "method": "set_theme",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "theme",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Sets a new Theme to the WebUI",
+      "source": "deluge/ui/web/json_api.py:955"
+    },
+    {
+      "name": "web.start_daemon",
+      "namespace": "web",
+      "method": "start_daemon",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "port",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Starts a local daemon.",
+      "source": "deluge/ui/web/json_api.py:824"
+    },
+    {
+      "name": "web.stop_daemon",
+      "namespace": "web",
+      "method": "stop_daemon",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "host_id",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/ui/web/json_api.py:832"
+    },
+    {
+      "name": "web.update_ui",
+      "namespace": "web",
+      "method": "update_ui",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "keys",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "filter_dict",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Gather the information required for updating the web interface.",
+      "source": "deluge/ui/web/json_api.py:490"
+    },
+    {
+      "name": "webutils.get_languages",
+      "namespace": "webutils",
+      "method": "get_languages",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [],
+      "summary": "Get the available translated languages",
+      "source": "deluge/ui/web/json_api.py:974"
+    },
+    {
+      "name": "webutils.get_themes",
+      "namespace": "webutils",
+      "method": "get_themes",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [],
+      "summary": "Get the available themes",
+      "source": "deluge/ui/web/json_api.py:984"
+    }
+  ],
+  "removed_count": 10,
+  "removed": [
+    {
+      "name": "core.disable_plugin",
+      "namespace": "core",
+      "method": "disable_plugin",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "'defer.Deferred[bool]'",
+      "params": [
+        {
+          "name": "plugin",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:934",
+      "removed_because": "no plugin system"
+    },
+    {
+      "name": "core.enable_plugin",
+      "namespace": "core",
+      "method": "enable_plugin",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "'defer.Deferred[bool]'",
+      "params": [
+        {
+          "name": "plugin",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": null,
+      "source": "deluge/core/core.py:930",
+      "removed_because": "no plugin system"
+    },
+    {
+      "name": "core.get_available_plugins",
+      "namespace": "core",
+      "method": "get_available_plugins",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "List[str]",
+      "params": [],
+      "summary": "Returns a list of plugins available in the core",
+      "source": "deluge/core/core.py:920",
+      "removed_because": "no plugin system"
+    },
+    {
+      "name": "core.get_enabled_plugins",
+      "namespace": "core",
+      "method": "get_enabled_plugins",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "List[str]",
+      "params": [],
+      "summary": "Returns a list of enabled plugins in the core",
+      "source": "deluge/core/core.py:925",
+      "removed_because": "no plugin system"
+    },
+    {
+      "name": "core.rescan_plugins",
+      "namespace": "core",
+      "method": "rescan_plugins",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [],
+      "summary": "Re-scans the plugin folders for new plugins",
+      "source": "deluge/core/core.py:1157",
+      "removed_because": "no plugin system"
+    },
+    {
+      "name": "core.upload_plugin",
+      "namespace": "core",
+      "method": "upload_plugin",
+      "transport": "daemon",
+      "auth_level": 5,
+      "returns": "None",
+      "params": [
+        {
+          "name": "filename",
+          "annotation": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "filedump",
+          "annotation": "Union[str, bytes]",
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "This method is used to upload new plugins to the daemon.  It is used",
+      "source": "deluge/core/core.py:1139",
+      "removed_because": "no plugin system, and it executed uploaded code"
+    },
+    {
+      "name": "web.get_plugin_info",
+      "namespace": "web",
+      "method": "get_plugin_info",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "name",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Get the details for a plugin.",
+      "source": "deluge/ui/web/json_api.py:891",
+      "removed_because": "no plugin system"
+    },
+    {
+      "name": "web.get_plugin_resources",
+      "namespace": "web",
+      "method": "get_plugin_resources",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "name",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Get the resource data files for a plugin.",
+      "source": "deluge/ui/web/json_api.py:896",
+      "removed_because": "no plugin system"
+    },
+    {
+      "name": "web.get_plugins",
+      "namespace": "web",
+      "method": "get_plugins",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [],
+      "summary": "All available and enabled plugins within WebUI.",
+      "source": "deluge/ui/web/json_api.py:874",
+      "removed_because": "no plugin system"
+    },
+    {
+      "name": "web.upload_plugin",
+      "namespace": "web",
+      "method": "upload_plugin",
+      "transport": "web",
+      "auth_level": 5,
+      "returns": null,
+      "params": [
+        {
+          "name": "filename",
+          "annotation": null,
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "path",
+          "annotation": null,
+          "required": true,
+          "default": null
+        }
+      ],
+      "summary": "Upload a plugin to config.",
+      "source": "deluge/ui/web/json_api.py:901",
+      "removed_because": "no plugin system"
+    }
+  ]
+}

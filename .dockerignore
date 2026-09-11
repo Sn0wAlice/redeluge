@@ -1,0 +1,13 @@
+# Keep the build context small and the build reproducible.
+.git
+.env
+data
+docs
+wiki
+target
+target-docker
+target-amd64
+.ruff_cache
+__pycache__
+*.py[cod]
+*.log

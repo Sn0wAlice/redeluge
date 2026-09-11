@@ -1,12 +1,128 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+All notable changes to this project are documented in this file. The format
+follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Intended Effort Versioning (EffVer)](https://jacobtomlinson.dev/effver/).
+redeluge numbers its own releases from 0.1.0. The version the daemon reports
+to clients stays `2.2.1`, because that is the Deluge a client expects to be
+talking to.
 
-## [Unreleased]
+## [0.1.0] — 2026-09-11
+
+**This is where Deluge became redeluge.**
+
+The fork point is Deluge `2.2.1.dev0-43`, upstream commit
+[`e58075416`](https://github.com/deluge-torrent/deluge/commit/e58075416dedd53636e89b1cd240f86f2e7c2ee0).
+Everything in this section is the fork. Everything below
+[Deluge, before the fork](#deluge-before-the-fork) is upstream history, kept
+because it is where the behaviour redeluge reproduces came from.
+
+The Python management layer was replaced by Rust in five phases. libtorrent
+stays as it is and is reached through a C++ bridge. The wire protocol, the
+configuration files and the Web UI are unchanged, so existing clients and
+existing installations keep working.
+
+### Added
+
+- `redeluged`, the daemon: DelugeRPC on port 58846 over TLS, all 70 methods of
+  the daemon transport, the 22 events, torrent state, preferences, scrypt
+  authentication, and labels.
+- `redeluge-web`, the Web UI server: the JSON-RPC endpoint on port 8112 and the
+  ExtJS front end, embedded in the binary rather than read from a directory.
+- A frozen contract under `contract/`, extracted from the Python tree before it
+  was deleted and now the reference the tests check against: 99 RPC methods,
+  22 events, 96 configuration keys, 24 libtorrent alerts, 73 rencode
+  conformance cases and 10 captured wire frames.
+- Six crates: `redeluge-contract`, `redeluge-rencode`, `redeluge-rpc`,
+  `redeluge-libtorrent`, `redeluge-daemon`, `redeluge-web`.
+- `tools/migrate_state.py`, which converts the pickled torrent list to JSON. It
+  is standalone, refuses to unpickle anything but the expected classes, and is
+  the only Python that survives.
+- A test gate, `docker/rust.sh`: formatting, clippy with warnings denied, the
+  test suite, the contract check and the converter self-test, run on x86-64 and
+  arm64. 286 tests.
+- Container image with no interpreter in it, 189 MB, and systemd units for both
+  binaries.
+- Per-file `SPDX-License-Identifier` headers, and `AUTHORS` listing upstream
+  authorship and the licences of the bundled front end.
+- Four of Deluge's plugins as daemon features, off by default and configured
+  through `core.conf` rather than through a plugin namespace of their own:
+  labels, watched directories, the block list and the weekly schedule. See
+  the Features page of the wiki.
+- A label is a torrent option, set with `core.set_torrent_options`, reported in
+  the status and counted in `core.get_filter_tree` beside state, tracker and
+  owner. It is no longer a second file keyed by torrent id that can drift out
+  of step with the first.
+- `set_ip_filter` on the libtorrent bridge, which is what the block list
+  installs into.
+- Documentation as a wiki under `wiki/`, mirrored to the GitHub wiki by a
+  workflow on every push that touches it. The repository is the source; pages
+  edited in the wiki interface are overwritten.
+- `docs/openapi.yaml`: an OpenAPI 3.1 description of the HTTP API, one schema
+  per method, generated from the frozen contract by `tools/gen_openapi.py` and
+  checked by the gate so it cannot drift.
+- `webutils.get_themes` and `webutils.get_languages`, which the contract
+  records and the dispatcher did not answer. Aliases of their `web.*` twins, as
+  in Deluge.
+
+### Changed
+
+- Labels are a daemon feature rather than a plugin, because they shape the
+  status a client asks for.
+- The Web UI is English only. The translation catalogue was a server-rendered
+  template masquerading as a static asset; dropping it removed the render step
+  and the class of bug that came with it.
+- Frames are bounded on read: 16 MiB per frame, 64 MiB per decompressed body.
+  A compressed body declares its size only after it expands, and 200 KB
+  expanding to 200 MB was accepted before.
+- The daemon writes its configuration on first start. Loading filled in the
+  defaults and nothing saved them, so a fresh install had no `core.conf`.
 
 ### Removed
+
+- The Python implementation, in full: daemon, Web UI, GTK and console
+  interfaces, plugins, translations, and the setuptools build.
+- The plugin interface in the Web UI: the preferences page, the install dialog,
+  the loader and the registry. `web.get_plugins` still answers, because it is
+  in the contract, and nothing shipped calls it.
+- Windows and macOS support. Linux only, from source or from the image.
+
+### Fixed
+
+Defects inherited from upstream and found while porting:
+
+- The daemon would not start with pyOpenSSL 26.4, which removed
+  `crypto.X509Req`. Rust generates the keypair itself and the dependency is
+  gone.
+- The daemon certificate Deluge writes is X.509 version 1, which modern TLS
+  stacks refuse. An unusable pair is moved aside, not overwritten, and
+  regenerated.
+- A version string containing `dev` made the Web UI request unbundled sources
+  that a release build does not ship.
+- `rencode` 1.0.8 hardcoded x86 compiler flags and would not build on arm64.
+- Two configuration keys were missing, one was listed twice and one did not
+  exist; found by checking the implementation against the contract.
+
+### Migration
+
+- Run `python3 tools/migrate_state.py ~/.config/deluge` once. Nothing is
+  deleted, and the daemon refuses to start until it is done rather than
+  presenting an empty torrent list.
+- `core.conf`, `web.conf`, `hostlist.conf` and the auth file are read as they
+  are. A password stored as the old single-round SHA-1 is rewritten as scrypt
+  on first use. The `localclient` account stays as it is, because local tools
+  read that password back out of the file.
+
+---
+
+## Deluge, before the fork
+
+Everything below is the upstream Deluge changelog at commit `e58075416`,
+unchanged.
+
+## Deluge 2.2.1.dev0 (unreleased upstream)
+
+### Breaking changes
 
 - Dropped support for Python 3.8 or older. (Requires Python >= 3.10)
 

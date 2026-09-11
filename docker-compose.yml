@@ -1,0 +1,42 @@
+services:
+  redeluge:
+    build:
+      context: .
+    image: redeluge:${REDELUGE_VERSION:-2.2.1}
+    container_name: redeluge
+    restart: unless-stopped
+
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      UMASK: "022"
+      RUST_LOG: ${RUST_LOG:-info}
+      # Applied on first boot only, unless DELUGE_WEB_PASSWORD_RESET=1.
+      DELUGE_WEB_PASSWORD: ${DELUGE_WEB_PASSWORD:?copy .env.example to .env and set a web password}
+      DELUGE_WEB_PASSWORD_RESET: ${DELUGE_WEB_PASSWORD_RESET:-0}
+
+    volumes:
+      - ./data/config:/config
+      - ./data/downloads:/downloads
+
+    ports:
+      # The Web UI authenticates with a single password and has no rate
+      # limiting, so it stays on loopback. Put a reverse proxy with TLS in front
+      # of it before exposing it to a network.
+      - "127.0.0.1:8112:8112"
+      # BitTorrent peer traffic, which does need to be reachable.
+      - "58946:58946/tcp"
+      - "58946:58946/udp"
+      # Daemon RPC, for a thin client. allow_remote must be turned on in
+      # core.conf first, and the port is deliberately left closed by default.
+      #- "127.0.0.1:58846:58846"
+
+    healthcheck:
+      test: ["CMD", "redeluge-web", "--health-check"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+    security_opt:
+      - no-new-privileges:true

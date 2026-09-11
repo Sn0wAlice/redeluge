@@ -1,0 +1,111 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! The page itself.
+//!
+//! Which script bundle to serve is the one piece of logic here, and it is the
+//! Python server's: a version containing `dev` asks for unbundled sources, a
+//! `?debug=true` query asks for the unminified bundle, and otherwise the
+//! minified bundle is used. Falling back when files are missing matters,
+//! because an install without the build step has only the debug bundle.
+
+use crate::assets;
+use crate::template::{render, Context, Error};
+
+/// Which set of scripts the page should load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptSet {
+    /// Minified bundles. What a release install serves.
+    Normal,
+    /// Concatenated but unminified. The fallback, and what `?debug=true` asks for.
+    Debug,
+}
+
+impl ScriptSet {
+    fn scripts(self) -> &'static [&'static str] {
+        match self {
+            // Real paths under the web root, so a plain static handler
+            // resolves them. The Python server maps logical names onto these,
+            // which buys nothing here.
+            Self::Normal => &[
+                "js/extjs/ext-base.js",
+                "js/extjs/ext-all.js",
+                "js/extjs/ext-extensions.js",
+                "js/deluge-all.js",
+            ],
+            Self::Debug => &[
+                "js/extjs/ext-base-debug.js",
+                "js/extjs/ext-all-debug.js",
+                "js/extjs/ext-extensions-debug.js",
+                "js/deluge-all-debug.js",
+            ],
+        }
+    }
+
+    /// Whether every file this set needs was embedded.
+    ///
+    /// The minified bundles are produced by a step this build does not run yet,
+    /// so in practice only the debug set is complete. Checking rather than
+    /// assuming means adding minification later changes nothing here.
+    pub fn available(self) -> bool {
+        self.scripts().iter().all(|path| assets::contains(path))
+    }
+}
+
+/// Picks the best script set that was actually embedded.
+pub fn choose_scripts(debug_requested: bool) -> ScriptSet {
+    let wanted = if debug_requested {
+        ScriptSet::Debug
+    } else {
+        ScriptSet::Normal
+    };
+    if wanted.available() {
+        return wanted;
+    }
+
+    let other = match wanted {
+        ScriptSet::Normal => ScriptSet::Debug,
+        ScriptSet::Debug => ScriptSet::Normal,
+    };
+    if other.available() {
+        tracing::debug!(?wanted, ?other, "using the other script set");
+        return other;
+    }
+
+    tracing::error!("no complete script set was embedded; the Web UI will not load");
+    wanted
+}
+
+const STYLESHEETS: &[&str] = &[
+    "css/ext-all-notheme.css",
+    "css/ext-extensions.css",
+    "css/deluge.css",
+];
+
+/// Renders `index.html` with the values the page asks for.
+pub fn render_index(
+    template: &str,
+    base: &str,
+    version: &str,
+    theme: &str,
+    js_config: &serde_json::Value,
+    debug_requested: bool,
+) -> Result<String, Error> {
+    let scripts = choose_scripts(debug_requested);
+
+    let mut stylesheets: Vec<String> = STYLESHEETS.iter().map(|name| (*name).to_owned()).collect();
+    // The theme sheet is ordered last so it overrides the others, which is what
+    // the Python server does and what the ExtJS themes assume.
+    stylesheets.push(format!("themes/css/xtheme-{theme}.css"));
+
+    let mut script_list = vec!["js/gettext.js".to_owned()];
+    script_list.extend(scripts.scripts().iter().map(|name| (*name).to_owned()));
+
+    let context = Context::new()
+        .set("version", version)
+        .set("base", base)
+        .set("js_config", js_config.to_string())
+        .set("debug", if debug_requested { "true" } else { "false" })
+        .list("stylesheets", stylesheets)
+        .list("scripts", script_list);
+
+    render(template, &context)
+}

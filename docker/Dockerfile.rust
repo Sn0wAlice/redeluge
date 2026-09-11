@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1
+
+# Build and test environment for the Rust side of redeluge.
+#
+# libtorrent comes from Debian rather than being vendored: trixie ships 2.0.11,
+# which is the version Deluge itself is tested against, and it arrives with the
+# pkg-config metadata the build script needs.
+
+ARG RUST_TAG=1.98.1-slim-trixie
+
+FROM rust:${RUST_TAG} AS base
+
+ENV CARGO_TERM_COLOR=always \
+    CARGO_INCREMENTAL=0 \
+    RUSTFLAGS="-D warnings"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        clang \
+        libssl-dev \
+        libtorrent-rasterbar-dev \
+        pkg-config \
+        python3 \
+        python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    # The four scripts under tools/ are the only Python left, and they are
+    # still linted and formatted like the rest of the project.
+    && pip install --break-system-packages --no-cache-dir ruff==0.15.5
+
+# Fail early and loudly if the distribution ever moves off libtorrent 2.x,
+# rather than halfway through a cxx compile.
+RUN pkg-config --modversion libtorrent-rasterbar \
+    && pkg-config --atleast-version=2.0.0 libtorrent-rasterbar
+
+WORKDIR /src
+
+# ------------------------------------------------------------------ toolchain
+FROM base AS check
+
+RUN rustup component add rustfmt clippy
+
+COPY Cargo.toml rust-toolchain.toml ./
+COPY contract ./contract
+COPY crates ./crates
+
+# Formatting and lints first: they need no linking and fail in seconds.
+RUN cargo fmt --all -- --check
+RUN cargo clippy --workspace --all-targets -- -D warnings
+RUN cargo build --workspace --all-targets
+RUN cargo test --workspace -- --nocapture

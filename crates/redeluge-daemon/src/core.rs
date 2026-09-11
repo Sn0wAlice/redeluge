@@ -1,0 +1,1939 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! The methods the daemon exposes.
+//!
+//! Authorisation levels are not written here: they come from
+//! `contract/rpc-api.json`, extracted from the Python daemon. A method whose
+//! level drifted would otherwise be invisible until someone with a read-only
+//! account deleted a torrent.
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use redeluge_contract::{Contract, Transport};
+use redeluge_libtorrent::{flags, AddTorrent, FlagChange};
+use redeluge_rencode::Value;
+use tokio::sync::Mutex;
+
+use crate::auth::{AuthLevel, AuthManager};
+use crate::config::Config;
+use crate::events::Event;
+use crate::manager::{restore_request, Manager};
+use crate::prefs;
+use crate::rpc::{CallContext, Rpc, RpcError};
+use crate::state::TorrentState;
+use crate::torrent::{Torrent, TorrentOptions};
+
+/// The daemon's version, as reported to clients.
+///
+/// Deluge's own version rather than this crate's: clients compare it against
+/// what they know how to speak, and telling them "0.1.0" makes every one of
+/// them refuse to connect.
+pub const REPORTED_VERSION: &str = "2.2.1";
+
+/// Everything a call can reach.
+pub struct Core {
+    pub manager: Manager,
+    pub config: Mutex<Config>,
+    pub auth: Mutex<AuthManager>,
+    pub config_dir: PathBuf,
+    /// Set when `daemon.shutdown` is called, so the main loop can stop.
+    pub shutdown: tokio::sync::Notify,
+}
+
+impl Core {
+    pub fn new(
+        manager: Manager,
+        config: Config,
+        auth: AuthManager,
+        config_dir: PathBuf,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            manager,
+            config: Mutex::new(config),
+            auth: Mutex::new(auth),
+            config_dir,
+            shutdown: tokio::sync::Notify::new(),
+        })
+    }
+
+    /// Restores the torrents a previous run left behind.
+    pub async fn restore(&self) -> usize {
+        let config_dir = self.config_dir.clone();
+        let restored = self
+            .manager
+            .with(move |state| {
+                let saved = crate::manager::SessionState::load_state(&config_dir);
+                let state_dir = state.state_dir();
+                let mut count = 0;
+
+                for options in saved {
+                    let Some(mut request) = restore_request(&options, &state_dir) else {
+                        tracing::warn!(id = %options.torrent_id,
+                            "no torrent file or magnet, skipping");
+                        continue;
+                    };
+                    // Resume data is what makes this a restore rather than a
+                    // fresh add: without it every torrent rechecks from disk.
+                    if let Some(blob) = state.load_resume_data(&options.torrent_id) {
+                        request.resume_data = blob;
+                    }
+
+                    match state.session.add_torrent(&request) {
+                        Ok(id) => {
+                            state.torrents.insert(id.clone(), Torrent::new(id, options));
+                            count += 1;
+                        }
+                        Err(err) => tracing::error!(id = %options.torrent_id,
+                            error = %err, "could not restore a torrent"),
+                    }
+                }
+                count
+            })
+            .await
+            .unwrap_or(0);
+
+        if restored > 0 {
+            tracing::info!(restored, "restored torrents from the previous run");
+        }
+        restored
+    }
+
+    /// Writes the configuration, so a fresh install has a file to edit.
+    ///
+    /// Loading fills in every missing key, which on a first run is all of them.
+    /// Without this the file never appears and an operator has nothing to
+    /// change, which is how the first run of this daemon shipped with no
+    /// core.conf at all.
+    pub async fn save_config(&self) {
+        let mut config = self.config.lock().await;
+        if let Err(err) = config.save() {
+            tracing::error!(error = %err, "could not write the configuration");
+        }
+    }
+
+    /// Pushes the whole configuration into libtorrent.
+    pub async fn apply_config(&self) {
+        let settings = {
+            let config = self.config.lock().await;
+            prefs::to_settings(&config)
+        };
+        let count = settings.len();
+
+        let outcome = self
+            .manager
+            .with(move |state| state.session.apply_settings(&settings))
+            .await;
+
+        match outcome {
+            Ok(Ok(())) => tracing::info!(count, "applied session settings"),
+            Ok(Err(err)) => tracing::error!(error = %err, "could not apply session settings"),
+            Err(err) => tracing::error!(error = %err, "the torrent manager is not answering"),
+        }
+    }
+
+    /// Pauses or resumes every torrent, and remembers which it is.
+    ///
+    /// The session flag is what makes a paused session report every torrent as
+    /// paused rather than as whatever it was; the schedule uses this for its
+    /// stopped hours, and so does `core.pause_session`.
+    pub async fn set_session_paused(&self, paused: bool) -> Result<(), String> {
+        self.manager
+            .with(move |state| {
+                state.session_paused = paused;
+                let hashes = state.session.torrent_hashes();
+                for id in hashes {
+                    let change = FlagChange::new().set_to(flags::PAUSED, paused);
+                    let _ = state.session.set_flags(&id, change);
+                }
+            })
+            .await
+            .map_err(|err| err.to_string())?;
+
+        self.manager.announce(if paused {
+            Event::SessionPaused
+        } else {
+            Event::SessionResumed
+        });
+        Ok(())
+    }
+
+    /// Adds a torrent and remembers its options.
+    ///
+    /// Public because a watched directory adds torrents without an RPC call
+    /// ever arriving, and it has to go through exactly the same path as one
+    /// that did.
+    pub async fn add(
+        &self,
+        mut request: AddTorrent,
+        options: TorrentOptions,
+    ) -> Result<Value, RpcError> {
+        // A torrent with no save path of its own goes where the config says.
+        if request.save_path.is_empty() {
+            let config = self.config.lock().await;
+            request.save_path = config
+                .string("download_location")
+                .unwrap_or_default()
+                .to_owned();
+        }
+        if request.save_path.is_empty() {
+            return Err(RpcError::invalid_argument("no download location is set"));
+        }
+
+        let add_paused = {
+            let config = self.config.lock().await;
+            config.boolean("add_paused").unwrap_or(false)
+        };
+        let mut options = options;
+        options.paused |= add_paused;
+        options.save_path = Some(request.save_path.clone());
+        request.flags = request
+            .flags
+            .set_to(flags::PAUSED, options.paused)
+            .set_to(flags::AUTO_MANAGED, options.auto_managed);
+
+        let stored = options.clone();
+        // Kept so the torrent can be restored after a restart. Without it a
+        // torrent added from a file comes back as nothing at all.
+        let torrent_file = request.torrent_file.clone();
+
+        let id = self
+            .manager
+            .with(move |state| {
+                let id = state.session.add_torrent(&request)?;
+
+                if !torrent_file.is_empty() {
+                    let path = crate::manager::torrent_file_path(&state.state_dir(), &id);
+                    if let Err(err) = std::fs::create_dir_all(state.state_dir())
+                        .and_then(|()| std::fs::write(&path, &torrent_file))
+                    {
+                        tracing::error!(torrent = %id, error = %err,
+                            "could not store the torrent file; it will not survive a restart");
+                    }
+                }
+
+                let mut stored = stored;
+                stored.torrent_id = id.clone();
+                state
+                    .torrents
+                    .insert(id.clone(), Torrent::new(id.clone(), stored));
+                state.mark_dirty();
+                let _ = state.save_state();
+                Ok::<String, redeluge_libtorrent::Error>(id)
+            })
+            .await
+            .map_err(|err| RpcError::invalid_argument(err.to_string()))?
+            .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+
+        self.manager.announce(Event::TorrentAdded {
+            torrent_id: id.clone(),
+            from_state: false,
+        });
+        Ok(Value::Str(id))
+    }
+}
+
+fn string_arg(args: &[Value], index: usize, what: &str) -> Result<String, RpcError> {
+    args.get(index)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| RpcError::invalid_argument(format!("{what} is required")))
+}
+
+fn bytes_arg(args: &[Value], index: usize, what: &str) -> Result<Vec<u8>, RpcError> {
+    match args.get(index) {
+        Some(Value::Bytes(raw)) => Ok(raw.clone()),
+        // Clients that cannot send raw bytes send base64 text, which is what
+        // the Web UI does when it forwards an uploaded file.
+        Some(Value::Str(text)) => base64_decode(text)
+            .ok_or_else(|| RpcError::invalid_argument(format!("{what} is not valid base64"))),
+        _ => Err(RpcError::invalid_argument(format!("{what} is required"))),
+    }
+}
+
+/// Minimal base64, because one decode does not justify a dependency.
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut lookup = [255u8; 256];
+    for (index, byte) in TABLE.iter().enumerate() {
+        lookup[*byte as usize] = index as u8;
+    }
+
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let mut buffer = 0u32;
+    let mut bits = 0u32;
+
+    for byte in text.bytes() {
+        if byte == b'=' || byte.is_ascii_whitespace() {
+            continue;
+        }
+        let value = lookup[byte as usize];
+        if value == 255 {
+            return None;
+        }
+        buffer = (buffer << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buffer >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+fn torrent_ids(args: &[Value], index: usize) -> Vec<String> {
+    match args.get(index) {
+        Some(Value::List(items)) => items
+            .iter()
+            .filter_map(|item| item.as_str().map(str::to_owned))
+            .collect(),
+        Some(Value::Str(single)) => vec![single.clone()],
+        _ => Vec::new(),
+    }
+}
+
+/// The keys a client asked for, or all of them when it asked for none.
+fn wanted_keys(args: &[Value], index: usize) -> Option<Vec<String>> {
+    match args.get(index) {
+        Some(Value::List(items)) if !items.is_empty() => Some(
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_owned))
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+fn filtered(status: BTreeMap<String, Value>, keys: &Option<Vec<String>>) -> Vec<(Value, Value)> {
+    match keys {
+        None => status
+            .into_iter()
+            .map(|(key, value)| (Value::Str(key), value))
+            .collect(),
+        Some(wanted) => wanted
+            .iter()
+            .filter_map(|key| {
+                status
+                    .get(key)
+                    .map(|value| (Value::Str(key.clone()), value.clone()))
+            })
+            .collect(),
+    }
+}
+
+#[async_trait]
+impl Rpc for Core {
+    fn auth_level(&self, method: &str) -> Option<AuthLevel> {
+        // core.get_auth_levels_mappings is level 0 in the Python daemon, which
+        // makes it reachable before a client has proved anything. Raised here,
+        // as the phase 0 report said it should be.
+        if method == "core.get_auth_levels_mappings" {
+            return Some(AuthLevel::ReadOnly);
+        }
+        Contract::get()
+            .method(method)
+            .filter(|entry| entry.transport == Transport::Daemon)
+            .and_then(|entry| AuthLevel::from_i64(entry.auth_level.as_u8().into()))
+    }
+
+    fn method_list(&self) -> Vec<String> {
+        let mut methods: Vec<String> = Contract::get()
+            .methods_for(Transport::Daemon)
+            .map(|entry| entry.name.clone())
+            .collect();
+        methods.sort();
+        methods
+    }
+
+    fn version(&self) -> String {
+        REPORTED_VERSION.to_owned()
+    }
+
+    async fn authenticate(&self, username: &str, password: &str) -> Result<AuthLevel, RpcError> {
+        let mut auth = self.auth.lock().await;
+        auth.authorize(username, password).map_err(|err| match err {
+            crate::auth::Error::UnknownAccount(_) => RpcError::bad_login("Username does not exist"),
+            crate::auth::Error::BadPassword => RpcError::bad_login("Password does not match"),
+            other => RpcError::new("AuthManagerError", other.to_string()),
+        })
+    }
+
+    async fn disconnected(&self, session_id: i64) {
+        tracing::debug!(session_id, "client gone");
+    }
+
+    async fn set_event_interest(&self, _session_id: i64, _events: Vec<String>) {}
+
+    async fn call(
+        &self,
+        context: &CallContext,
+        method: &str,
+        args: Vec<Value>,
+        _kwargs: Vec<(Value, Value)>,
+    ) -> Result<Value, RpcError> {
+        match method {
+            // ------------------------------------------------------ the daemon
+            "daemon.get_version" => Ok(Value::Str(REPORTED_VERSION.to_owned())),
+            "daemon.shutdown" => {
+                tracing::info!(by = %context.username, "shutdown requested");
+                self.shutdown.notify_waiters();
+                Ok(Value::None)
+            }
+
+            // ------------------------------------------------------- adding
+            "core.add_torrent_file" | "core.add_torrent_file_async" => {
+                let filename = string_arg(&args, 0, "a filename")?;
+                let dump = bytes_arg(&args, 1, "the torrent file")?;
+                let options = options_from(args.get(2));
+                let mut stored = options.clone();
+                stored.filename = filename;
+                self.add(AddTorrent::from_file(dump, String::new()), stored)
+                    .await
+            }
+            "core.add_torrent_magnet" => {
+                let uri = string_arg(&args, 0, "a magnet uri")?;
+                let mut stored = options_from(args.get(1));
+                stored.magnet = Some(uri.clone());
+                self.add(AddTorrent::from_magnet(uri, String::new()), stored)
+                    .await
+            }
+
+            // ------------------------------------------------------ removing
+            "core.remove_torrent" => {
+                let id = string_arg(&args, 0, "a torrent id")?;
+                let with_data = args.get(1).and_then(Value::as_bool).unwrap_or(false);
+
+                self.manager.announce(Event::PreTorrentRemoved {
+                    torrent_id: id.clone(),
+                });
+                let removed = {
+                    let id = id.clone();
+                    self.manager
+                        .with(move |state| {
+                            let outcome = state.session.remove_torrent(&id, with_data);
+                            state.torrents.remove(&id);
+
+                            // The stored torrent file and resume data go with
+                            // it, or a removed torrent comes back at the next
+                            // restart.
+                            let state_dir = state.state_dir();
+                            let _ = std::fs::remove_file(crate::manager::torrent_file_path(
+                                &state_dir, &id,
+                            ));
+                            let _ = std::fs::remove_file(
+                                state_dir.join("resume").join(format!("{id}.resume")),
+                            );
+
+                            state.mark_dirty();
+                            let _ = state.save_state();
+                            outcome
+                        })
+                        .await
+                };
+
+                match removed {
+                    Ok(Ok(())) => {
+                        self.manager
+                            .announce(Event::TorrentRemoved { torrent_id: id });
+                        Ok(Value::Bool(true))
+                    }
+                    Ok(Err(err)) => Err(RpcError::new("InvalidTorrentError", err.to_string())),
+                    Err(err) => Err(RpcError::invalid_argument(err.to_string())),
+                }
+            }
+
+            // ------------------------------------------------------ control
+            "core.pause_torrent" | "core.resume_torrent" => {
+                let pause = method == "core.pause_torrent";
+                let ids = match args.first() {
+                    Some(Value::List(_)) => torrent_ids(&args, 0),
+                    Some(Value::Str(single)) => vec![single.clone()],
+                    _ => return Err(RpcError::invalid_argument("a torrent id is required")),
+                };
+
+                self.manager
+                    .with(move |state| {
+                        for id in ids {
+                            // Pausing by hand also turns off auto-management,
+                            // or the queue would start it again immediately.
+                            let change = FlagChange::new()
+                                .set_to(flags::PAUSED, pause)
+                                .set_to(flags::AUTO_MANAGED, !pause);
+                            let _ = state.session.set_flags(&id, change);
+                            if let Some(torrent) = state.torrents.get_mut(&id) {
+                                torrent.options.paused = pause;
+                                torrent.options.auto_managed = !pause;
+                            }
+                        }
+                        state.mark_dirty();
+                    })
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                Ok(Value::None)
+            }
+
+            "core.pause_session" | "core.resume_session" => {
+                self.set_session_paused(method == "core.pause_session")
+                    .await
+                    .map_err(RpcError::invalid_argument)?;
+                Ok(Value::None)
+            }
+
+            "core.is_session_paused" => {
+                let paused = self
+                    .manager
+                    .with(|state| state.session_paused)
+                    .await
+                    .unwrap_or(false);
+                Ok(Value::Bool(paused))
+            }
+
+            "core.force_recheck" => {
+                let ids = torrent_ids(&args, 0);
+                self.manager
+                    .with(move |state| {
+                        for id in ids {
+                            let _ = state.session.force_recheck(&id);
+                        }
+                    })
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                Ok(Value::None)
+            }
+
+            "core.force_reannounce" => {
+                let ids = torrent_ids(&args, 0);
+                self.manager
+                    .with(move |state| {
+                        for id in ids {
+                            let _ = state.session.force_reannounce(&id, 0);
+                        }
+                    })
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                Ok(Value::None)
+            }
+
+            "core.move_storage" => {
+                let ids = torrent_ids(&args, 0);
+                let destination = string_arg(&args, 1, "a destination")?;
+                self.manager
+                    .with(move |state| {
+                        for id in ids {
+                            if state.session.move_storage(&id, &destination).is_ok() {
+                                if let Some(torrent) = state.torrents.get_mut(&id) {
+                                    torrent.moving_to = Some(destination.clone());
+                                }
+                            }
+                        }
+                    })
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                Ok(Value::None)
+            }
+
+            "core.queue_top" | "core.queue_up" | "core.queue_down" | "core.queue_bottom" => {
+                let ids = torrent_ids(&args, 0);
+                let which = method.to_owned();
+                self.manager
+                    .with(move |state| {
+                        for id in ids {
+                            let _ = match which.as_str() {
+                                "core.queue_top" => state.session.queue_top(&id),
+                                "core.queue_up" => state.session.queue_up(&id),
+                                "core.queue_down" => state.session.queue_down(&id),
+                                _ => state.session.queue_bottom(&id),
+                            };
+                        }
+                    })
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                self.manager.announce(Event::TorrentQueueChanged);
+                Ok(Value::None)
+            }
+
+            "core.rename_files" => {
+                let id = string_arg(&args, 0, "a torrent id")?;
+                let renames: Vec<(i64, String)> = args
+                    .get(1)
+                    .and_then(Value::as_list)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| {
+                                let pair = item.as_list()?;
+                                Some((pair.first()?.as_i64()?, pair.get(1)?.as_str()?.to_owned()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                self.manager
+                    .with(move |state| {
+                        for (index, name) in renames {
+                            let _ = state.session.rename_file(&id, index as i32, &name);
+                        }
+                    })
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                Ok(Value::None)
+            }
+
+            "core.set_torrent_options" => {
+                let ids = torrent_ids(&args, 0);
+                let options = args.get(1).cloned().unwrap_or(Value::Dict(Vec::new()));
+                self.apply_torrent_options(ids, options).await
+            }
+
+            // Deluge deprecated these in favour of set_torrent_options and kept
+            // them working. Every one is that call with a single key, so they
+            // are written as such rather than duplicated.
+            "core.set_torrent_max_connections"
+            | "core.set_torrent_max_upload_slots"
+            | "core.set_torrent_max_upload_speed"
+            | "core.set_torrent_max_download_speed"
+            | "core.set_torrent_prioritize_first_last"
+            | "core.set_torrent_auto_managed"
+            | "core.set_torrent_stop_at_ratio"
+            | "core.set_torrent_stop_ratio"
+            | "core.set_torrent_remove_at_ratio"
+            | "core.set_torrent_move_completed"
+            | "core.set_torrent_move_completed_path"
+            | "core.set_torrent_file_priorities" => {
+                let id = string_arg(&args, 0, "a torrent id")?;
+                let value = args
+                    .get(1)
+                    .cloned()
+                    .ok_or_else(|| RpcError::invalid_argument("a value is required"))?;
+                let key = method
+                    .strip_prefix("core.set_torrent_")
+                    .expect("matched above");
+                // One exception to the naming: the option is called
+                // prioritize_first_last_pieces.
+                let key = if key == "prioritize_first_last" {
+                    "prioritize_first_last_pieces"
+                } else {
+                    key
+                };
+
+                self.apply_torrent_options(
+                    vec![id],
+                    Value::Dict(vec![(Value::Str(key.to_owned()), value)]),
+                )
+                .await
+            }
+
+            "core.set_torrent_trackers" => {
+                let id = string_arg(&args, 0, "a torrent id")?;
+                let trackers: Vec<(String, u8)> = args
+                    .get(1)
+                    .and_then(Value::as_list)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| {
+                                let url = item.get("url")?.as_str()?.to_owned();
+                                let tier = item
+                                    .get("tier")
+                                    .and_then(Value::as_i64)
+                                    .unwrap_or(0)
+                                    .clamp(0, 255) as u8;
+                                Some((url, tier))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let stored = trackers.clone();
+                self.manager
+                    .with(move |state| {
+                        let urls: Vec<String> =
+                            trackers.iter().map(|(url, _)| url.clone()).collect();
+                        let tiers: Vec<u8> = trackers.iter().map(|(_, tier)| *tier).collect();
+                        let _ = state.session.replace_trackers(&id, &urls, &tiers);
+                        if let Some(torrent) = state.torrents.get_mut(&id) {
+                            torrent.options.trackers = stored
+                                .into_iter()
+                                .map(|(url, tier)| crate::torrent::TrackerOption { url, tier })
+                                .collect();
+                        }
+                        state.mark_dirty();
+                    })
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                Ok(Value::None)
+            }
+
+            "core.connect_peer" => {
+                let id = string_arg(&args, 0, "a torrent id")?;
+                let ip = string_arg(&args, 1, "an ip address")?;
+                let port = args
+                    .get(2)
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| RpcError::invalid_argument("a port is required"))?;
+
+                self.manager
+                    .with(move |state| {
+                        state
+                            .session
+                            .connect_peer(&id, &ip, port.clamp(0, 65535) as u16)
+                    })
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                Ok(Value::None)
+            }
+
+            "core.get_magnet_uri" => {
+                let id = string_arg(&args, 0, "a torrent id")?;
+                let uri = self
+                    .manager
+                    .with(move |state| {
+                        let torrent = state.torrents.get(&id)?;
+                        torrent.options.magnet.clone().or_else(|| {
+                            // A torrent added from a file still has a magnet:
+                            // the infohash is all a magnet needs.
+                            Some(format!("magnet:?xt=urn:btih:{}", torrent.id))
+                        })
+                    })
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                Ok(uri.map(Value::Str).unwrap_or(Value::None))
+            }
+
+            "core.get_proxy" => {
+                let config = self.config.lock().await;
+                Ok(config
+                    .get("proxy")
+                    .map(json_to_value)
+                    .unwrap_or(Value::Dict(Vec::new())))
+            }
+
+            "core.get_ssl_listen_port" => {
+                let config = self.config.lock().await;
+                let port = config
+                    .get("ssl_listen_ports")
+                    .and_then(|value| value.as_array())
+                    .and_then(|ports| ports.first())
+                    .and_then(|port| port.as_i64())
+                    .unwrap_or(0);
+                Ok(Value::Int(port))
+            }
+
+            // The plural forms, which every client uses for a multi-selection.
+            "core.pause_torrents" => {
+                Box::pin(self.call(context, "core.pause_torrent", args, _kwargs)).await
+            }
+            "core.resume_torrents" => {
+                Box::pin(self.call(context, "core.resume_torrent", args, _kwargs)).await
+            }
+            "core.remove_torrents" => {
+                let ids = torrent_ids(&args, 0);
+                let with_data = args.get(1).and_then(Value::as_bool).unwrap_or(false);
+
+                // Deluge returns the ones it could not remove, so a client can
+                // say which failed rather than just that something did.
+                let mut failures = Vec::new();
+                for id in ids {
+                    let single = vec![Value::Str(id.clone()), Value::Bool(with_data)];
+                    if let Err(err) =
+                        Box::pin(self.call(context, "core.remove_torrent", single, Vec::new()))
+                            .await
+                    {
+                        failures.push(Value::List(vec![Value::Str(id), Value::Str(err.message)]));
+                    }
+                }
+                Ok(Value::List(failures))
+            }
+
+            "core.add_torrent_files" => {
+                // Each entry is (filename, filedump, options).
+                let files = args
+                    .first()
+                    .and_then(Value::as_list)
+                    .ok_or_else(|| {
+                        RpcError::invalid_argument("a list of torrent files is required")
+                    })?
+                    .to_vec();
+
+                let mut failures = Vec::new();
+                for entry in files {
+                    let Some(fields) = entry.as_list() else {
+                        continue;
+                    };
+                    let single = fields.to_vec();
+                    if let Err(err) =
+                        Box::pin(self.call(context, "core.add_torrent_file", single, Vec::new()))
+                            .await
+                    {
+                        failures.push(Value::List(vec![
+                            fields.first().cloned().unwrap_or(Value::None),
+                            Value::Str(err.message),
+                        ]));
+                    }
+                }
+                Ok(Value::List(failures))
+            }
+
+            "core.rename_folder" => {
+                let id = string_arg(&args, 0, "a torrent id")?;
+                let old = string_arg(&args, 1, "the current folder")?;
+                let new = string_arg(&args, 2, "the new folder")?;
+
+                // libtorrent has no folder rename: a folder is a prefix on file
+                // paths, so this renames every file under it.
+                let renamed = {
+                    let (id, old, new) = (id.clone(), old.clone(), new.clone());
+                    self.manager
+                        .with(move |state| {
+                            let files = state.session.files(&id).unwrap_or_default();
+                            let prefix = old.trim_end_matches('/').to_owned() + "/";
+                            let mut count = 0;
+                            for file in files {
+                                if let Some(rest) = file.path.strip_prefix(&prefix) {
+                                    let target = format!("{}/{rest}", new.trim_end_matches('/'));
+                                    if state.session.rename_file(&id, file.index, &target).is_ok() {
+                                        count += 1;
+                                    }
+                                }
+                            }
+                            count
+                        })
+                        .await
+                        .map_err(|err| RpcError::invalid_argument(err.to_string()))?
+                };
+
+                if renamed == 0 {
+                    return Err(RpcError::invalid_argument(format!("no files under {old}")));
+                }
+                self.manager.announce(Event::TorrentFolderRenamed {
+                    torrent_id: id,
+                    old,
+                    new,
+                });
+                Ok(Value::None)
+            }
+
+            "core.glob" => {
+                // Used by the path chooser to complete a directory.
+                let pattern = string_arg(&args, 0, "a path")?;
+                Ok(Value::List(glob_directory(&pattern)))
+            }
+
+            "core.get_completion_paths" => {
+                let request = args.first().cloned().unwrap_or(Value::Dict(Vec::new()));
+                let path = request
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned();
+                Ok(Value::Dict(vec![
+                    (Value::Str("value".into()), Value::Str(path.clone())),
+                    (
+                        Value::Str("paths".into()),
+                        Value::List(glob_directory(&path)),
+                    ),
+                ]))
+            }
+
+            "core.add_torrent_url" => {
+                let url = string_arg(&args, 0, "a url")?;
+                let options = args.get(2).cloned();
+                let dump = fetch(&url).await?;
+
+                let mut stored = options_from(options.as_ref());
+                stored.filename = filename_from_url(&url);
+                self.add(AddTorrent::from_file(dump, String::new()), stored)
+                    .await
+            }
+
+            "core.test_listen_port" => {
+                // Deluge asks its own site whether the port is reachable. A
+                // failure here means the check could not run, not that the port
+                // is closed, so it answers None rather than false.
+                let port = self
+                    .manager
+                    .with(|state| state.session.listen_port())
+                    .await
+                    .unwrap_or(0);
+                if port == 0 {
+                    return Ok(Value::None);
+                }
+
+                let url = format!("https://deluge-torrent.org/test_port.php?port={port}");
+                match fetch(&url).await {
+                    Ok(body) => Ok(Value::Bool(body.starts_with(b"1"))),
+                    Err(err) => {
+                        tracing::debug!(error = %err.message, "port test failed");
+                        Ok(Value::None)
+                    }
+                }
+            }
+
+            "core.prefetch_magnet_metadata" => {
+                let uri = string_arg(&args, 0, "a magnet uri")?;
+                let timeout = args
+                    .get(1)
+                    .and_then(Value::as_i64)
+                    .unwrap_or(30)
+                    .clamp(1, 120);
+                self.prefetch_metadata(&uri, timeout as u64).await
+            }
+
+            "core.create_torrent" => {
+                let path = string_arg(&args, 0, "a path")?;
+                let trackers: Vec<String> = args
+                    .get(1)
+                    .and_then(Value::as_list)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let piece_length = args
+                    .get(2)
+                    .and_then(Value::as_i64)
+                    .unwrap_or(32 * 1024)
+                    .clamp(16 * 1024, 64 * 1024 * 1024) as i32;
+                let comment = args.get(3).and_then(Value::as_str).unwrap_or("").to_owned();
+                let target = args.get(4).and_then(Value::as_str).map(str::to_owned);
+                let web_seeds: Vec<String> = args
+                    .get(5)
+                    .and_then(Value::as_list)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let private = args.get(6).and_then(Value::as_bool).unwrap_or(false);
+                let creator = args
+                    .get(7)
+                    .and_then(Value::as_str)
+                    .unwrap_or(concat!("redeluge ", "2.2.1"))
+                    .to_owned();
+
+                // Hashing reads every byte of the content, which can take
+                // minutes. On the async runtime that would stall every other
+                // client, so it goes to a blocking thread.
+                let built = tokio::task::spawn_blocking(move || {
+                    redeluge_libtorrent::Session::create_torrent(
+                        &path,
+                        piece_length,
+                        &comment,
+                        &creator,
+                        private,
+                        &trackers,
+                        &web_seeds,
+                    )
+                })
+                .await
+                .map_err(|err| RpcError::invalid_argument(err.to_string()))?
+                .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+
+                match target {
+                    Some(path) if !path.is_empty() => {
+                        std::fs::write(&path, &built).map_err(|err| {
+                            RpcError::invalid_argument(format!("could not write {path}: {err}"))
+                        })?;
+                        Ok(Value::None)
+                    }
+                    _ => Ok(Value::Bytes(built)),
+                }
+            }
+
+            "core.set_ssl_torrent_cert" => {
+                let id = string_arg(&args, 0, "a torrent id")?;
+                let certificate = bytes_arg(&args, 1, "a certificate")?;
+                let private_key = bytes_arg(&args, 2, "a private key")?;
+                let dh_params = args
+                    .get(3)
+                    .and_then(|value| match value {
+                        Value::Bytes(raw) => Some(raw.clone()),
+                        Value::Str(text) => base64_decode(text),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+
+                self.manager
+                    .with(move |state| {
+                        state.session.set_ssl_certificate(
+                            &id,
+                            &certificate,
+                            &private_key,
+                            &dh_params,
+                            "",
+                        )
+                    })
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                Ok(Value::None)
+            }
+
+            "daemon.authorized_call" => {
+                let wanted = string_arg(&args, 0, "a method name")?;
+                let allowed = self
+                    .auth_level(&wanted)
+                    .map(|required| context.level >= required)
+                    .unwrap_or(false);
+                Ok(Value::Bool(allowed))
+            }
+
+            // -------------------------------------------------------- status
+            "core.get_torrent_status" => {
+                let id = string_arg(&args, 0, "a torrent id")?;
+                let keys = wanted_keys(&args, 1);
+                let status = self.status_of(&id).await?;
+                Ok(Value::Dict(filtered(status, &keys)))
+            }
+
+            "core.get_torrents_status" => {
+                let filter = args.first().cloned();
+                let keys = wanted_keys(&args, 1);
+                self.all_status(filter, keys).await
+            }
+
+            "core.get_session_status" => {
+                let wanted: Vec<String> = args
+                    .first()
+                    .and_then(Value::as_list)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.session_status(wanted).await
+            }
+
+            "core.get_filter_tree" => self.filter_tree().await,
+
+            "core.get_session_state" => {
+                let hashes = self
+                    .manager
+                    .with(|state| state.session.torrent_hashes())
+                    .await
+                    .unwrap_or_default();
+                Ok(Value::List(hashes.into_iter().map(Value::Str).collect()))
+            }
+
+            "core.get_external_ip" => {
+                let ip = self
+                    .manager
+                    .with(|state| state.external_ip.clone())
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                Ok(Value::Str(ip))
+            }
+
+            "core.get_listen_port" => {
+                let port = self
+                    .manager
+                    .with(|state| state.session.listen_port())
+                    .await
+                    .unwrap_or(0);
+                Ok(Value::Int(i64::from(port)))
+            }
+
+            "core.get_libtorrent_version" => {
+                Ok(Value::Str(redeluge_libtorrent::libtorrent_version()))
+            }
+
+            "core.get_free_space" | "core.get_available_space" => {
+                let path = match args.first().and_then(Value::as_str) {
+                    Some(path) if !path.is_empty() => path.to_owned(),
+                    _ => {
+                        let config = self.config.lock().await;
+                        config.string("download_location").unwrap_or("/").to_owned()
+                    }
+                };
+                Ok(Value::Int(free_space(&path)))
+            }
+
+            "core.get_path_size" => {
+                let path = string_arg(&args, 0, "a path")?;
+                Ok(Value::Int(path_size(&path)))
+            }
+
+            // ------------------------------------------------------- config
+            "core.get_config" => {
+                let config = self.config.lock().await;
+                Ok(json_map_to_value(config.all()))
+            }
+
+            "core.get_config_value" => {
+                let key = string_arg(&args, 0, "a key")?;
+                let config = self.config.lock().await;
+                Ok(config.get(&key).map(json_to_value).unwrap_or(Value::None))
+            }
+
+            "core.get_config_values" => {
+                let keys: Vec<String> = args
+                    .first()
+                    .and_then(Value::as_list)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let config = self.config.lock().await;
+                Ok(Value::Dict(
+                    keys.into_iter()
+                        .map(|key| {
+                            let value = config.get(&key).map(json_to_value).unwrap_or(Value::None);
+                            (Value::Str(key), value)
+                        })
+                        .collect(),
+                ))
+            }
+
+            "core.set_config" => {
+                let Some(Value::Dict(changes)) = args.first() else {
+                    return Err(RpcError::invalid_argument("a dictionary is required"));
+                };
+
+                let mut applied = Vec::new();
+                {
+                    let mut config = self.config.lock().await;
+                    for (key, value) in changes {
+                        let Some(key) = key.as_str() else { continue };
+                        let json = value_to_json(value);
+                        match config.set(key, json.clone()) {
+                            Ok(()) => applied.push((key.to_owned(), value.clone())),
+                            Err(err) => {
+                                // One bad key must not lose the rest, and the
+                                // client should hear which one was refused.
+                                tracing::warn!(key, error = %err, "refused a config change");
+                            }
+                        }
+                    }
+                    let _ = config.save();
+                }
+
+                for (key, value) in applied {
+                    self.manager
+                        .announce(Event::ConfigValueChanged { key, value });
+                }
+                self.apply_config().await;
+                Ok(Value::None)
+            }
+
+            // -------------------------------------------------------- accounts
+            "core.get_auth_levels_mappings" => Ok(Value::List(vec![
+                Value::Dict(
+                    [
+                        AuthLevel::None,
+                        AuthLevel::ReadOnly,
+                        AuthLevel::Normal,
+                        AuthLevel::Admin,
+                    ]
+                    .into_iter()
+                    .map(|level| {
+                        (
+                            Value::Str(level.as_str().to_owned()),
+                            Value::Int(level.as_i64()),
+                        )
+                    })
+                    .collect(),
+                ),
+                Value::Dict(
+                    [
+                        AuthLevel::None,
+                        AuthLevel::ReadOnly,
+                        AuthLevel::Normal,
+                        AuthLevel::Admin,
+                    ]
+                    .into_iter()
+                    .map(|level| {
+                        (
+                            Value::Int(level.as_i64()),
+                            Value::Str(level.as_str().to_owned()),
+                        )
+                    })
+                    .collect(),
+                ),
+            ])),
+
+            "core.get_known_accounts" => {
+                let auth = self.auth.lock().await;
+                Ok(Value::List(
+                    auth.accounts()
+                        .into_iter()
+                        .map(|(name, level)| {
+                            Value::Dict(vec![
+                                (Value::Str("username".into()), Value::Str(name)),
+                                (
+                                    Value::Str("authlevel".into()),
+                                    Value::Str(level.as_str().to_owned()),
+                                ),
+                                (
+                                    Value::Str("authlevel_int".into()),
+                                    Value::Int(level.as_i64()),
+                                ),
+                            ])
+                        })
+                        .collect(),
+                ))
+            }
+
+            "core.create_account" | "core.update_account" => {
+                let username = string_arg(&args, 0, "a username")?;
+                let password = string_arg(&args, 1, "a password")?;
+                let level = args
+                    .get(2)
+                    .and_then(Value::as_str)
+                    .and_then(AuthLevel::from_name)
+                    .ok_or_else(|| RpcError::invalid_argument("an auth level is required"))?;
+
+                let mut auth = self.auth.lock().await;
+                let outcome = if method == "core.create_account" {
+                    auth.create_account(&username, &password, level)
+                } else {
+                    auth.update_account(&username, &password, level)
+                };
+                outcome.map_err(|err| RpcError::new("AuthManagerError", err.to_string()))?;
+                Ok(Value::Bool(true))
+            }
+
+            "core.remove_account" => {
+                let username = string_arg(&args, 0, "a username")?;
+                if username == context.username {
+                    return Err(RpcError::new(
+                        "AuthManagerError",
+                        "You cannot delete your own account while logged in!",
+                    ));
+                }
+                let mut auth = self.auth.lock().await;
+                auth.remove_account(&username)
+                    .map_err(|err| RpcError::new("AuthManagerError", err.to_string()))?;
+                Ok(Value::Bool(true))
+            }
+
+            // ------------------------------------------------------- the rest
+            other => {
+                // The contract knows this method exists, so the gap is here
+                // rather than in the caller. Saying which one is missing is
+                // what makes the gap closable.
+                tracing::warn!(method = other, "method not implemented yet");
+                Err(RpcError::new(
+                    "NotImplementedError",
+                    format!("{other} is not implemented in this daemon yet"),
+                ))
+            }
+        }
+    }
+}
+
+/// Fetches a URL, for the two methods that need one.
+///
+/// Bounded on purpose: an unbounded download from a URL a client chose is a way
+/// to fill the daemon's memory from the outside.
+async fn fetch(url: &str) -> Result<Vec<u8>, RpcError> {
+    const MAX: usize = 16 * 1024 * 1024;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(concat!("redeluge/", "2.2.1"))
+        .build()
+        .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|err| RpcError::new("HTTPError", err.to_string()))?;
+
+    if !response.status().is_success() {
+        return Err(RpcError::new(
+            "HTTPError",
+            format!("{} returned {}", url, response.status()),
+        ));
+    }
+    if let Some(length) = response.content_length() {
+        if length as usize > MAX {
+            return Err(RpcError::new(
+                "HTTPError",
+                format!("{url} is larger than {MAX} bytes"),
+            ));
+        }
+    }
+
+    let body = response
+        .bytes()
+        .await
+        .map_err(|err| RpcError::new("HTTPError", err.to_string()))?;
+    if body.len() > MAX {
+        return Err(RpcError::new(
+            "HTTPError",
+            format!("{url} is larger than {MAX} bytes"),
+        ));
+    }
+    Ok(body.to_vec())
+}
+
+fn filename_from_url(url: &str) -> String {
+    url.rsplit('/')
+        .next()
+        .map(|name| name.split(['?', '#']).next().unwrap_or(name).to_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "downloaded.torrent".to_owned())
+}
+
+/// Directory entries beginning with a path, for the path chooser.
+///
+/// Directories only: the chooser is picking somewhere to save, and offering
+/// files would be offering something that cannot be chosen.
+fn glob_directory(pattern: &str) -> Vec<Value> {
+    let path = std::path::Path::new(pattern);
+    let (dir, prefix) = if pattern.ends_with('/') {
+        (path.to_path_buf(), String::new())
+    } else {
+        (
+            path.parent()
+                .unwrap_or(std::path::Path::new("/"))
+                .to_path_buf(),
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        )
+    };
+
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+
+    let mut out: Vec<String> = entries
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // Hidden directories are not offered, matching the chooser's own
+            // default. Someone who wants one can type it.
+            if name.starts_with('.') || !name.starts_with(&prefix) {
+                return None;
+            }
+            Some(entry.path().display().to_string())
+        })
+        .collect();
+    out.sort();
+    out.into_iter().map(Value::Str).collect()
+}
+
+/// Bytes free on the filesystem holding a path.
+fn free_space(path: &str) -> i64 {
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
+        let Ok(c_path) = CString::new(path) else {
+            return -1;
+        };
+        // SAFETY: statvfs writes into a struct we own and reads a NUL-terminated
+        // path we own. Both outlive the call.
+        unsafe {
+            let mut stat: libc_statvfs = std::mem::zeroed();
+            if statvfs(c_path.as_ptr(), &mut stat) != 0 {
+                return -1;
+            }
+            (stat.f_bavail as i64).saturating_mul(stat.f_frsize as i64)
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        -1
+    }
+}
+
+/// Total size of a file, or of everything under a directory.
+fn path_size(path: &str) -> i64 {
+    let path = std::path::Path::new(path);
+    let Ok(meta) = std::fs::metadata(path) else {
+        return -1;
+    };
+    if meta.is_file() {
+        return meta.len() as i64;
+    }
+
+    let mut total = 0i64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else {
+                total += meta.len() as i64;
+            }
+        }
+    }
+    total
+}
+
+#[cfg(unix)]
+#[repr(C)]
+#[allow(non_camel_case_types)]
+struct libc_statvfs {
+    f_bsize: u64,
+    f_frsize: u64,
+    f_blocks: u64,
+    f_bfree: u64,
+    f_bavail: u64,
+    f_files: u64,
+    f_ffree: u64,
+    f_favail: u64,
+    f_fsid: u64,
+    f_flag: u64,
+    f_namemax: u64,
+    f_spare: [i32; 6],
+}
+
+#[cfg(unix)]
+extern "C" {
+    #[link_name = "statvfs64"]
+    fn statvfs(path: *const std::ffi::c_char, buf: *mut libc_statvfs) -> i32;
+}
+
+fn options_from(value: Option<&Value>) -> TorrentOptions {
+    let mut options = TorrentOptions::default();
+    let Some(Value::Dict(entries)) = value else {
+        return options;
+    };
+
+    for (key, value) in entries {
+        let Some(key) = key.as_str() else { continue };
+        match key {
+            "download_location" | "save_path" => {
+                options.save_path = value.as_str().map(str::to_owned)
+            }
+            "name" => options.name = value.as_str().map(str::to_owned),
+            "add_paused" => options.paused = value.as_bool().unwrap_or(false),
+            "auto_managed" => options.auto_managed = value.as_bool().unwrap_or(true),
+            "sequential_download" => options.sequential_download = value.as_bool().unwrap_or(false),
+            "pre_allocate_storage" => {
+                if value.as_bool().unwrap_or(false) {
+                    options.storage_mode = "allocate".to_owned();
+                }
+            }
+            "prioritize_first_last_pieces" => {
+                options.prioritize_first_last = value.as_bool().unwrap_or(false)
+            }
+            "max_connections" => options.max_connections = value.as_i64().unwrap_or(-1),
+            "max_upload_slots" => options.max_upload_slots = value.as_i64().unwrap_or(-1),
+            "move_completed" => options.move_completed = value.as_bool().unwrap_or(false),
+            "move_completed_path" => {
+                options.move_completed_path = value.as_str().map(str::to_owned)
+            }
+            "label" => options.label = normalise_label(value.as_str().unwrap_or_default()),
+            "owner" => options.owner = value.as_str().unwrap_or_default().to_owned(),
+            "shared" => options.shared = value.as_bool().unwrap_or(false),
+            "super_seeding" => options.super_seeding = value.as_bool().unwrap_or(false),
+            "stop_at_ratio" => options.stop_at_ratio = value.as_bool().unwrap_or(false),
+            "remove_at_ratio" => options.remove_at_ratio = value.as_bool().unwrap_or(false),
+            "file_priorities" => {
+                if let Value::List(items) = value {
+                    options.file_priorities = items
+                        .iter()
+                        .filter_map(|item| item.as_i64())
+                        .map(|priority| priority.clamp(0, 7) as u8)
+                        .collect();
+                }
+            }
+            _ => {}
+        }
+    }
+    options
+}
+
+fn json_to_value(json: &serde_json::Value) -> Value {
+    match json {
+        serde_json::Value::Null => Value::None,
+        serde_json::Value::Bool(value) => Value::Bool(*value),
+        serde_json::Value::Number(number) => match number.as_i64() {
+            Some(integer) => Value::Int(integer),
+            None => Value::Float64(number.as_f64().unwrap_or(0.0)),
+        },
+        serde_json::Value::String(text) => Value::Str(text.clone()),
+        serde_json::Value::Array(items) => Value::List(items.iter().map(json_to_value).collect()),
+        serde_json::Value::Object(map) => json_map_to_value(map),
+    }
+}
+
+fn json_map_to_value(map: &serde_json::Map<String, serde_json::Value>) -> Value {
+    Value::Dict(
+        map.iter()
+            .map(|(key, value)| (Value::Str(key.clone()), json_to_value(value)))
+            .collect(),
+    )
+}
+
+fn value_to_json(value: &Value) -> serde_json::Value {
+    match value {
+        Value::None => serde_json::Value::Null,
+        Value::Bool(value) => serde_json::Value::Bool(*value),
+        Value::Int(value) => serde_json::Value::Number((*value).into()),
+        Value::BigInt(text) => serde_json::Value::String(text.clone()),
+        Value::Float32(value) => serde_json::Number::from_f64(f64::from(*value))
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        Value::Float64(value) => serde_json::Number::from_f64(*value)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        Value::Str(text) => serde_json::Value::String(text.clone()),
+        Value::Bytes(raw) => serde_json::Value::String(String::from_utf8_lossy(raw).into_owned()),
+        Value::List(items) => serde_json::Value::Array(items.iter().map(value_to_json).collect()),
+        Value::Dict(entries) => serde_json::Value::Object(
+            entries
+                .iter()
+                .filter_map(|(key, value)| {
+                    key.as_str()
+                        .map(|key| (key.to_owned(), value_to_json(value)))
+                })
+                .collect(),
+        ),
+    }
+}
+
+impl Core {
+    /// Adds a magnet, waits for its metadata, then removes it again.
+    ///
+    /// What the add dialog uses to show the file list before the user commits.
+    /// The torrent is added paused so it never starts downloading content, and
+    /// it is always removed, including when the wait times out.
+    async fn prefetch_metadata(&self, uri: &str, seconds: u64) -> Result<Value, RpcError> {
+        let request = AddTorrent::from_magnet(uri.to_owned(), "/tmp".to_owned()).paused(true);
+        let id = self
+            .manager
+            .with(move |state| state.session.add_torrent(&request))
+            .await
+            .map_err(|err| RpcError::invalid_argument(err.to_string()))?
+            .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        let mut metadata = None;
+
+        while std::time::Instant::now() < deadline {
+            let wanted = id.clone();
+            let ready = self
+                .manager
+                .with(move |state| {
+                    let status = state.session.torrent_status(&wanted).ok()?;
+                    status
+                        .has_metadata
+                        .then(|| state.session.torrent_file(&wanted).ok())
+                        .flatten()
+                })
+                .await
+                .ok()
+                .flatten();
+
+            if let Some(bytes) = ready {
+                metadata = Some(bytes);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+
+        // Removed either way: leaving it behind would put a torrent nobody
+        // asked for in the session and in the saved state.
+        let cleanup = id.clone();
+        let _ = self
+            .manager
+            .with(move |state| {
+                let _ = state.session.remove_torrent(&cleanup, false);
+            })
+            .await;
+
+        Ok(Value::List(vec![
+            Value::Str(id),
+            metadata.map(Value::Bytes).unwrap_or(Value::None),
+        ]))
+    }
+
+    async fn status_of(&self, id: &str) -> Result<BTreeMap<String, Value>, RpcError> {
+        let wanted = id.to_owned();
+        let status = self
+            .manager
+            .with(move |state| {
+                let torrent = state.torrents.get(&wanted)?.clone();
+                let status = state.session.torrent_status(&wanted).ok()?;
+                let trackers = state.session.trackers(&wanted).unwrap_or_default();
+                Some(torrent.status(&status, state.session_paused, &trackers))
+            })
+            .await
+            .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+
+        status.ok_or_else(|| RpcError::new("InvalidTorrentError", format!("no such torrent: {id}")))
+    }
+
+    async fn all_status(
+        &self,
+        filter: Option<Value>,
+        keys: Option<Vec<String>>,
+    ) -> Result<Value, RpcError> {
+        let all = self
+            .manager
+            .with(move |state| {
+                let session_paused = state.session_paused;
+                let mut out: Vec<(String, BTreeMap<String, Value>)> = Vec::new();
+                for status in state.session.all_torrent_status() {
+                    let Some(torrent) = state.torrents.get(&status.info_hash) else {
+                        continue;
+                    };
+                    let trackers = state
+                        .session
+                        .trackers(&status.info_hash)
+                        .unwrap_or_default();
+                    out.push((
+                        status.info_hash.clone(),
+                        torrent.status(&status, session_paused, &trackers),
+                    ));
+                }
+                out
+            })
+            .await
+            .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+
+        let wanted = filter_pairs(filter.as_ref());
+        Ok(Value::Dict(
+            all.into_iter()
+                .filter(|(_, status)| matches_filter(status, &wanted))
+                .map(|(id, status)| (Value::Str(id), Value::Dict(filtered(status, &keys))))
+                .collect(),
+        ))
+    }
+
+    async fn session_status(&self, wanted: Vec<String>) -> Result<Value, RpcError> {
+        let (counters, rates) = self
+            .manager
+            .with(|state| {
+                state.session.post_session_stats();
+                let mut download = 0i64;
+                let mut upload = 0i64;
+                for status in state.session.all_torrent_status() {
+                    download += i64::from(status.download_payload_rate);
+                    upload += i64::from(status.upload_payload_rate);
+                }
+                (state.counters.clone(), (download, upload))
+            })
+            .await
+            .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+
+        let names = redeluge_libtorrent::Session::stat_names();
+        let mut out: BTreeMap<String, Value> = BTreeMap::new();
+        for (index, name) in names.iter().enumerate() {
+            let value = counters.get(index).copied().unwrap_or(0);
+            out.insert(name.clone(), Value::Int(value));
+        }
+
+        // These two are the sum over torrents rather than a counter, and every
+        // client reads them.
+        out.insert("payload_download_rate".into(), Value::Int(rates.0));
+        out.insert("payload_upload_rate".into(), Value::Int(rates.1));
+        out.entry("download_rate".into())
+            .or_insert(Value::Int(rates.0));
+        out.entry("upload_rate".into())
+            .or_insert(Value::Int(rates.1));
+
+        let entries: Vec<(Value, Value)> = if wanted.is_empty() {
+            out.into_iter()
+                .map(|(key, value)| (Value::Str(key), value))
+                .collect()
+        } else {
+            wanted
+                .into_iter()
+                .map(|key| {
+                    let value = out.get(&key).cloned().unwrap_or(Value::Int(0));
+                    (Value::Str(key), value)
+                })
+                .collect()
+        };
+        Ok(Value::Dict(entries))
+    }
+
+    /// The counts every client draws its sidebar from.
+    async fn filter_tree(&self) -> Result<Value, RpcError> {
+        let statuses = self
+            .manager
+            .with(|state| {
+                let session_paused = state.session_paused;
+                state
+                    .session
+                    .all_torrent_status()
+                    .into_iter()
+                    .filter_map(|status| {
+                        let torrent = state.torrents.get(&status.info_hash)?;
+                        Some((
+                            torrent.state(&status, session_paused),
+                            status.current_tracker.clone(),
+                            torrent.options.owner.clone(),
+                            torrent.options.label.clone(),
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+
+        let total = statuses.len() as i64;
+        let mut by_state: BTreeMap<TorrentState, i64> = BTreeMap::new();
+        let mut by_tracker: BTreeMap<String, i64> = BTreeMap::new();
+        let mut by_owner: BTreeMap<String, i64> = BTreeMap::new();
+        let mut by_label: BTreeMap<String, i64> = BTreeMap::new();
+        let mut active = 0i64;
+
+        for (state, tracker, owner, label) in statuses {
+            *by_state.entry(state).or_insert(0) += 1;
+            if matches!(state, TorrentState::Downloading | TorrentState::Seeding) {
+                active += 1;
+            }
+            let host = tracker_host_of(&tracker);
+            *by_tracker.entry(host).or_insert(0) += 1;
+            *by_owner.entry(owner).or_insert(0) += 1;
+            *by_label.entry(label).or_insert(0) += 1;
+        }
+
+        let pair = |label: &str, count: i64| {
+            Value::List(vec![Value::Str(label.to_owned()), Value::Int(count)])
+        };
+
+        let mut states = vec![pair("All", total), pair("Active", active)];
+        for state in TorrentState::ALL {
+            states.push(pair(
+                state.as_str(),
+                by_state.get(&state).copied().unwrap_or(0),
+            ));
+        }
+
+        let mut trackers = vec![pair("All", total)];
+        trackers.extend(
+            by_tracker
+                .into_iter()
+                .map(|(host, count)| pair(&host, count)),
+        );
+
+        let owners: Vec<Value> = by_owner
+            .into_iter()
+            .map(|(owner, count)| pair(&owner, count))
+            .collect();
+
+        // The Label plugin contributed this category in Deluge, which is why
+        // clients already know how to draw it. An unlabelled torrent counts
+        // under the empty string, the same key it filters on.
+        let mut labels = vec![pair("All", total)];
+        labels.extend(by_label.into_iter().map(|(name, count)| pair(&name, count)));
+
+        Ok(Value::Dict(vec![
+            (Value::Str("state".into()), Value::List(states)),
+            (Value::Str("tracker_host".into()), Value::List(trackers)),
+            (Value::Str("owner".into()), Value::List(owners)),
+            (Value::Str("label".into()), Value::List(labels)),
+        ]))
+    }
+
+    async fn apply_torrent_options(
+        &self,
+        ids: Vec<String>,
+        options: Value,
+    ) -> Result<Value, RpcError> {
+        let Value::Dict(entries) = options else {
+            return Err(RpcError::invalid_argument("a dictionary is required"));
+        };
+
+        self.manager
+            .with(move |state| {
+                for id in &ids {
+                    let Some(torrent) = state.torrents.get_mut(id) else {
+                        continue;
+                    };
+                    let mut change = FlagChange::new();
+
+                    for (key, value) in &entries {
+                        let Some(key) = key.as_str() else { continue };
+                        match key {
+                            "max_connections" => {
+                                let limit = value.as_i64().unwrap_or(-1);
+                                torrent.options.max_connections = limit;
+                                let _ = state.session.set_max_connections(id, limit as i32);
+                            }
+                            "max_upload_slots" => {
+                                let limit = value.as_i64().unwrap_or(-1);
+                                torrent.options.max_upload_slots = limit;
+                                let _ = state.session.set_max_uploads(id, limit as i32);
+                            }
+                            "max_download_speed" => {
+                                let limit = as_f64(value).unwrap_or(-1.0);
+                                torrent.options.max_download_speed = limit;
+                                let _ = state.session.set_download_limit(id, kib_to_bytes(limit));
+                            }
+                            "max_upload_speed" => {
+                                let limit = as_f64(value).unwrap_or(-1.0);
+                                torrent.options.max_upload_speed = limit;
+                                let _ = state.session.set_upload_limit(id, kib_to_bytes(limit));
+                            }
+                            "sequential_download" => {
+                                let on = value.as_bool().unwrap_or(false);
+                                torrent.options.sequential_download = on;
+                                change = change.set_to(flags::SEQUENTIAL_DOWNLOAD, on);
+                            }
+                            "super_seeding" => {
+                                let on = value.as_bool().unwrap_or(false);
+                                torrent.options.super_seeding = on;
+                                change = change.set_to(flags::SUPER_SEEDING, on);
+                            }
+                            "auto_managed" => {
+                                let on = value.as_bool().unwrap_or(true);
+                                torrent.options.auto_managed = on;
+                                change = change.set_to(flags::AUTO_MANAGED, on);
+                            }
+                            "file_priorities" => {
+                                if let Value::List(items) = value {
+                                    let priorities: Vec<u8> = items
+                                        .iter()
+                                        .filter_map(|item| item.as_i64())
+                                        .map(|p| p.clamp(0, 7) as u8)
+                                        .collect();
+                                    torrent.options.file_priorities = priorities.clone();
+                                    let _ = state.session.prioritize_files(id, &priorities);
+                                }
+                            }
+                            "stop_at_ratio" => {
+                                torrent.options.stop_at_ratio = value.as_bool().unwrap_or(false)
+                            }
+                            "stop_ratio" => {
+                                torrent.options.stop_ratio = as_f64(value).unwrap_or(2.0)
+                            }
+                            "remove_at_ratio" => {
+                                torrent.options.remove_at_ratio = value.as_bool().unwrap_or(false)
+                            }
+                            "move_completed" => {
+                                torrent.options.move_completed = value.as_bool().unwrap_or(false)
+                            }
+                            "move_completed_path" => {
+                                torrent.options.move_completed_path =
+                                    value.as_str().map(str::to_owned)
+                            }
+                            "label" => {
+                                torrent.options.label =
+                                    normalise_label(value.as_str().unwrap_or_default())
+                            }
+                            "owner" => {
+                                torrent.options.owner =
+                                    value.as_str().unwrap_or_default().to_owned()
+                            }
+                            "shared" => torrent.options.shared = value.as_bool().unwrap_or(false),
+                            "name" => torrent.options.name = value.as_str().map(str::to_owned),
+                            _ => {}
+                        }
+                    }
+
+                    if !change.is_empty() {
+                        let _ = state.session.set_flags(id, change);
+                    }
+                }
+                state.mark_dirty();
+            })
+            .await
+            .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+        Ok(Value::None)
+    }
+}
+
+/// A label as the Label plugin would have stored it.
+///
+/// Lower case, and only the characters its own validator allowed. Deluge
+/// refused anything else outright; refusing here would mean a torrent silently
+/// keeping its old label because one character was wrong, so the value is
+/// cleaned instead and what survives is what a client sees back.
+pub fn normalise_label(raw: &str) -> String {
+    raw.trim()
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        .collect()
+}
+
+fn as_f64(value: &Value) -> Option<f64> {
+    match value {
+        Value::Int(number) => Some(*number as f64),
+        Value::Float32(number) => Some(f64::from(*number)),
+        Value::Float64(number) => Some(*number),
+        _ => None,
+    }
+}
+
+/// Deluge's speed settings are in KiB/s and libtorrent's in bytes per second.
+fn kib_to_bytes(kib: f64) -> i32 {
+    if kib < 0.0 {
+        return -1;
+    }
+    (kib * 1024.0).min(f64::from(i32::MAX)) as i32
+}
+
+fn tracker_host_of(url: &str) -> String {
+    let host = url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(url)
+        .split(['/', ':'])
+        .next()
+        .unwrap_or("");
+    if host.is_empty() {
+        "Error".to_owned()
+    } else {
+        host.to_owned()
+    }
+}
+
+/// The filter a client sent, as key/value pairs.
+fn filter_pairs(filter: Option<&Value>) -> Vec<(String, Vec<String>)> {
+    let Some(Value::Dict(entries)) = filter else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|(key, value)| {
+            let key = key.as_str()?.to_owned();
+            let values = match value {
+                Value::List(items) => items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_owned))
+                    .collect(),
+                other => vec![other.as_str()?.to_owned()],
+            };
+            Some((key, values))
+        })
+        .collect()
+}
+
+fn matches_filter(status: &BTreeMap<String, Value>, filter: &[(String, Vec<String>)]) -> bool {
+    filter.iter().all(|(key, wanted)| {
+        // "All" is how every client spells "no filter on this field".
+        if wanted.iter().any(|value| value == "All") {
+            return true;
+        }
+        if key == "state" && wanted.iter().any(|value| value == "Active") {
+            return matches!(
+                status.get("state").and_then(Value::as_str),
+                Some("Downloading") | Some("Seeding")
+            );
+        }
+        match status.get(key).and_then(Value::as_str) {
+            Some(actual) => wanted.iter().any(|value| value == actual),
+            None => false,
+        }
+    })
+}

@@ -1,0 +1,34 @@
+# redeluge-web, the Web UI.
+#
+# Separate from the daemon on purpose: it can be restarted, or not run at all,
+# without touching what is downloading.
+
+[Unit]
+Description=redeluge Web UI
+Documentation=https://github.com/Sn0wAlice/redeluge
+After=redeluged.service
+Wants=redeluged.service
+
+[Service]
+Type=simple
+User=redeluge
+Group=redeluge
+UMask=0027
+
+Environment=DELUGE_CONFIG_DIR=/var/lib/redeluge
+# Loopback by default. The Web UI authenticates with a single password and has
+# no rate limiting, so put a reverse proxy with TLS in front of it before it is
+# reachable from anywhere else.
+Environment=DELUGE_WEB_INTERFACE=127.0.0.1
+ExecStart=/usr/local/bin/redeluge-web
+Restart=on-failure
+RestartSec=5
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ReadWritePaths=/var/lib/redeluge
+
+[Install]
+WantedBy=multi-user.target

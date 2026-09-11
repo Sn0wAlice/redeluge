@@ -1,0 +1,39 @@
+# redeluged, the torrent daemon.
+#
+#   sudo cp packaging/systemd/*.service /etc/systemd/system/
+#   sudo systemctl enable --now redeluged
+#
+# Runs as its own user with no shell and no home beyond its configuration, so a
+# compromise of the daemon is not a compromise of an account someone logs into.
+
+[Unit]
+Description=redeluge BitTorrent daemon
+Documentation=https://github.com/Sn0wAlice/redeluge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=redeluge
+Group=redeluge
+UMask=0027
+
+Environment=DELUGE_CONFIG_DIR=/var/lib/redeluge
+ExecStart=/usr/local/bin/redeluged
+Restart=on-failure
+RestartSec=5
+
+# The daemon writes its configuration, its torrent state and the files it
+# downloads. Nothing else on the system is its business.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ReadWritePaths=/var/lib/redeluge /srv/downloads
+
+# Stopping means writing resume data for every torrent, which takes a moment on
+# a large session. Killing it early costs a recheck on the next start.
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

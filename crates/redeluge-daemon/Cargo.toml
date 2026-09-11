@@ -1,0 +1,45 @@
+[package]
+name = "redeluge-daemon"
+description = "The redeluge daemon: torrents, state and the DelugeRPC listener"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "redeluged"
+path = "src/main.rs"
+
+[dependencies]
+redeluge-libtorrent = { path = "../redeluge-libtorrent" }
+redeluge-rencode = { path = "../redeluge-rencode" }
+redeluge-rpc = { path = "../redeluge-rpc" }
+redeluge-contract = { path = "../redeluge-contract" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "signal"] }
+tokio-rustls.workspace = true
+rustls.workspace = true
+rustls-pki-types = "1"
+rustls-pemfile = "2"
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ring.workspace = true
+hex = "0.4"
+async-trait = "0.1"
+scrypt = { version = "0.11", default-features = false }
+# Two RPC methods fetch over HTTP: add_torrent_url and test_listen_port. rustls
+# rather than OpenSSL, which is already in the tree for the RPC listener.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "http2"] }
+# The schedule is in local time, which needs the zone database rather than a
+# fixed offset: a rule written for 9am has to still mean 9am after a clock
+# change. Only the clock, none of the formatting or parsing.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# Block lists are distributed gzipped.
+flate2 = "1"
+
+[dev-dependencies]
+tempfile = "3"

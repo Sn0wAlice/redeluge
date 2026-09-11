@@ -1,0 +1,585 @@
+{
+  "description": "Configuration keys and their defaults, per config file.",
+  "core_count": 77,
+  "web_count": 19,
+  "core": [
+    {
+      "key": "add_paused",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "allow_remote",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "announce_to_all_tiers",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "auto_manage_prefer_seeds",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "auto_managed",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "cache_expiry",
+      "type": "int",
+      "default": "60",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "cache_size",
+      "type": "int",
+      "default": "512",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "copy_torrent_file",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "daemon_port",
+      "type": "int",
+      "default": "58846",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "del_copy_torrent_file",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "dht",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "dont_count_slow_torrents",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "download_location",
+      "type": "computed",
+      "default": "deluge.common.get_default_download_dir()",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "download_location_paths_list",
+      "type": "list",
+      "default": "[]",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "enabled_plugins",
+      "type": "list",
+      "default": "[]",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "enc_in_policy",
+      "type": "int",
+      "default": "1",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "enc_level",
+      "type": "int",
+      "default": "2",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "enc_out_policy",
+      "type": "int",
+      "default": "1",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "geoip_db_location",
+      "type": "str",
+      "default": "'/usr/share/GeoIP/GeoIP.dat'",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "ignore_limits_on_local_network",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "info_sent",
+      "type": "float",
+      "default": "0.0",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "listen_interface",
+      "type": "str",
+      "default": "''",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "listen_ports",
+      "type": "list",
+      "default": "[6881, 6891]",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "listen_random_port",
+      "type": "NoneType",
+      "default": "None",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "listen_reuse_port",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "listen_use_sys_port",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "lsd",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "max_active_downloading",
+      "type": "int",
+      "default": "3",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "max_active_limit",
+      "type": "int",
+      "default": "8",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "max_active_seeding",
+      "type": "int",
+      "default": "5",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "max_connections_global",
+      "type": "int",
+      "default": "200",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "max_connections_per_second",
+      "type": "int",
+      "default": "20",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "max_connections_per_torrent",
+      "type": "int",
+      "default": "-1",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "max_download_speed",
+      "type": "int",
+      "default": "-1.0",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "max_download_speed_per_torrent",
+      "type": "int",
+      "default": "-1",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "max_half_open_connections",
+      "type": "int",
+      "default": "50",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "max_upload_slots_global",
+      "type": "int",
+      "default": "4",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "max_upload_slots_per_torrent",
+      "type": "int",
+      "default": "-1",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "max_upload_speed",
+      "type": "int",
+      "default": "-1.0",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "max_upload_speed_per_torrent",
+      "type": "int",
+      "default": "-1",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "move_completed",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "move_completed_path",
+      "type": "computed",
+      "default": "deluge.common.get_default_download_dir()",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "move_completed_paths_list",
+      "type": "list",
+      "default": "[]",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "natpmp",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "new_release_check",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "outgoing_interface",
+      "type": "str",
+      "default": "''",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "outgoing_ports",
+      "type": "list",
+      "default": "[0, 0]",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "path_chooser_accelerator_string",
+      "type": "str",
+      "default": "'Tab'",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "path_chooser_auto_complete_enabled",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "path_chooser_max_popup_rows",
+      "type": "int",
+      "default": "20",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "path_chooser_show_chooser_button_on_localhost",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "path_chooser_show_hidden_files",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "peer_tos",
+      "type": "str",
+      "default": "'0x00'",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "plugins_location",
+      "type": "computed",
+      "default": "os.path.join(deluge.configmanager.get_config_dir(), 'plugins')",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "pre_allocate_storage",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "prioritize_first_last_pieces",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "proxy",
+      "type": "dict",
+      "default": "{'type': 0, 'hostname': '', 'username': '', 'password': '', 'port': 8080, 'proxy_hostnames': True, 'proxy_peer_connections': True, 'proxy_tracker_connections': True, 'force_proxy': False, 'anonymous_mode': False}",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "queue_new_to_top",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "random_outgoing_ports",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "random_port",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "rate_limit_ip_overhead",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "remove_seed_at_ratio",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "seed_time_limit",
+      "type": "int",
+      "default": "180",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "seed_time_ratio_limit",
+      "type": "float",
+      "default": "7.0",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "send_info",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "sequential_download",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "share_ratio_limit",
+      "type": "float",
+      "default": "2.0",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "shared",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "ssl_listen_ports",
+      "type": "list",
+      "default": "[6892, 6896]",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "ssl_torrents",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "ssl_torrents_certs",
+      "type": "computed",
+      "default": "os.path.join(deluge.configmanager.get_config_dir(), 'ssl_torrents_certs')",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "stop_seed_at_ratio",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "stop_seed_ratio",
+      "type": "float",
+      "default": "2.0",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "super_seeding",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "torrentfiles_location",
+      "type": "computed",
+      "default": "deluge.common.get_default_download_dir()",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "upnp",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/core/preferencesmanager.py"
+    },
+    {
+      "key": "utpex",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/core/preferencesmanager.py"
+    }
+  ],
+  "web": [
+    {
+      "key": "base",
+      "type": "str",
+      "default": "'/'",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "cert",
+      "type": "str",
+      "default": "'ssl/daemon.cert'",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "default_daemon",
+      "type": "str",
+      "default": "''",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "enabled_plugins",
+      "type": "list",
+      "default": "[]",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "first_login",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "https",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "interface",
+      "type": "str",
+      "default": "'0.0.0.0'",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "language",
+      "type": "str",
+      "default": "''",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "pkey",
+      "type": "str",
+      "default": "'ssl/daemon.pkey'",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "port",
+      "type": "int",
+      "default": "8112",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "pwd_salt",
+      "type": "str",
+      "default": "'c26ab3bbd8b137f99cd83c2c1c0963bcc1a35cad'",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "pwd_sha1",
+      "type": "str",
+      "default": "'2ce1a410bcdcc53064129b6d950f2e9fee4edc1e'",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "session_timeout",
+      "type": "int",
+      "default": "3600",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "sessions",
+      "type": "dict",
+      "default": "{}",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "show_session_speed",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "show_sidebar",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "sidebar_multiple_filters",
+      "type": "bool",
+      "default": "True",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "sidebar_show_zero",
+      "type": "bool",
+      "default": "False",
+      "source": "deluge/ui/web/server.py"
+    },
+    {
+      "key": "theme",
+      "type": "str",
+      "default": "'gray'",
+      "source": "deluge/ui/web/server.py"
+    }
+  ]
+}

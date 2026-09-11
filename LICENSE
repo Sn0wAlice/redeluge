@@ -1,5 +1,13 @@
-Deluge is licensed under the GNU General Public License version 3 with the
-addition of the following special exception:
+redeluge
+Copyright (C) 2026 Alice <snow.alice@pm.me> and the redeluge contributors
+
+Derived from Deluge
+Copyright (C) 2007-2025 the Deluge Team and contributors, see AUTHORS
+
+redeluge is licensed under the GNU General Public License version 3 or, at
+your option, any later version, with the addition of the following special
+exception. This is Deluge's licence, unchanged: the fork rewrote the
+implementation, and the terms it was given travel with it.
 
 In addition, as a special exception, the copyright holders give
 permission to link the code of portions of this program with the OpenSSL
@@ -10,6 +18,9 @@ exception, you may extend this exception to your version of the file(s),
 but you are not obligated to do so. If you do not wish to do so, delete
 this exception statement from your version. If you delete this exception
 statement from all source files in the program, then also delete it here.
+
+The full text of the licence follows. Third-party material bundled with
+redeluge, and the terms it carries, is listed in AUTHORS.
 
                     GNU GENERAL PUBLIC LICENSE
                        Version 3, 29 June 2007
