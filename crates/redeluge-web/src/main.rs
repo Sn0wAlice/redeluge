@@ -154,6 +154,7 @@ async fn main() -> std::io::Result<()> {
         events: Mutex::new(EventQueue::default()),
         events_ready: tokio::sync::Notify::new(),
         web_config: RwLock::new(web_config),
+        slow_stats: Mutex::new(Default::default()),
     });
 
     // Connect up front when the configuration names a daemon, so the first page

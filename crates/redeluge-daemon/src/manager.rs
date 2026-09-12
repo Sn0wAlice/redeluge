@@ -304,6 +304,25 @@ impl Manager {
     }
 }
 
+/// How long the session thread waits for a job before going round again.
+///
+/// This is what a caller waits for, and it used to be the alert timeout below:
+/// every call that touched the session queued behind a hundred-millisecond
+/// sleep, so `core.get_external_ip`, which reads one string out of memory,
+/// answered in about a tenth of a second. A poll from the Web UI is six such
+/// calls in a row on a connection that handles one at a time, which is where
+/// half a second of lag on every filter click came from.
+const JOB_WAIT: Duration = Duration::from_millis(10);
+
+/// How often every torrent's state is compared with the last pass.
+///
+/// On a timer rather than every time round the loop. The sweep asks libtorrent
+/// for the status of every torrent, which is the most expensive thing this
+/// thread does and grows with the library; doing it a hundred times a second
+/// now that the loop is quick would be absurd, and doing it before answering
+/// each call is what made the calls slow.
+const SWEEP_EVERY: Duration = Duration::from_millis(250);
+
 /// The session thread: run jobs, drain alerts, save on a timer.
 fn run(
     mut state: SessionState,
@@ -319,23 +338,41 @@ fn run(
         let _ = events.send(event);
     };
 
+    // Far enough in the past that the first pass sweeps rather than waiting a
+    // quarter of a second to notice what was restored.
+    let mut last_sweep = Instant::now() - SWEEP_EVERY;
+
     loop {
-        // Jobs first: a caller waiting on a reply should not wait behind a
-        // hundred-millisecond alert poll.
-        loop {
-            match inbox.try_recv() {
-                Ok(job) => job(&mut state),
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    tracing::info!("torrent manager stopping");
-                    let _ = state.save_state();
-                    let _ = state.save_resume_data();
-                    return;
+        // Jobs first, and waited for rather than polled: this is the whole of
+        // what a caller's latency is, so the thread sleeps here and nowhere
+        // else.
+        match inbox.recv_timeout(JOB_WAIT) {
+            Ok(job) => {
+                job(&mut state);
+                // Then whatever else is already waiting, before alerts or the
+                // sweep. A poll from the Web UI arrives as several calls in a
+                // row and they should cost one pass, not one each.
+                loop {
+                    match inbox.try_recv() {
+                        Ok(job) => job(&mut state),
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            stop(&mut state);
+                            return;
+                        }
+                    }
                 }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                stop(&mut state);
+                return;
             }
         }
 
-        state.session.wait_for_alert(Duration::from_millis(100));
+        // Never blocks, so it costs nothing on a pass with no alerts, and the
+        // loop now comes round often enough that alerts are handled sooner
+        // than they were with a hundred-millisecond wait.
         for alert in state.session.pop_alerts() {
             handle_alert(&mut state, &alert, &emit);
         }
@@ -343,21 +380,24 @@ fn run(
         // State changes are noticed here rather than pushed from each
         // operation, because libtorrent changes state on its own too: a torrent
         // finishes, the queue starts one, a tracker fails.
-        let session_paused = state.session_paused;
-        for status in state.session.all_torrent_status() {
-            let Some(torrent) = state.torrents.get(&status.info_hash) else {
-                continue;
-            };
-            let now = torrent.state(&status, session_paused);
-            let before = states.insert(status.info_hash.clone(), now);
-            if before != Some(now) {
-                emit(Event::TorrentStateChanged {
-                    torrent_id: status.info_hash.clone(),
-                    state: now.to_string(),
-                });
+        if last_sweep.elapsed() >= SWEEP_EVERY {
+            last_sweep = Instant::now();
+            let session_paused = state.session_paused;
+            for status in state.session.all_torrent_status() {
+                let Some(torrent) = state.torrents.get(&status.info_hash) else {
+                    continue;
+                };
+                let now = torrent.state(&status, session_paused);
+                let before = states.insert(status.info_hash.clone(), now);
+                if before != Some(now) {
+                    emit(Event::TorrentStateChanged {
+                        torrent_id: status.info_hash.clone(),
+                        state: now.to_string(),
+                    });
+                }
             }
+            states.retain(|id, _| state.torrents.contains_key(id));
         }
-        states.retain(|id, _| state.torrents.contains_key(id));
 
         // Seeding rules, checked on a timer rather than on an alert: a ratio
         // creeps past its limit while nothing happens, so there is no event to
@@ -385,6 +425,13 @@ fn run(
             }
         }
     }
+}
+
+/// Saves everything on the way out. Both ends of the job channel lead here.
+fn stop(state: &mut SessionState) {
+    tracing::info!("torrent manager stopping");
+    let _ = state.save_state();
+    let _ = state.save_resume_data();
 }
 
 /// Pauses or removes torrents that have reached their share ratio.

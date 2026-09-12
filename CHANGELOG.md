@@ -7,6 +7,35 @@ redeluge numbers its own releases from 1.0.0. The version the daemon reports
 to clients stays `2.2.1`, because that is the Deluge a client expects to be
 talking to.
 
+## [1.3.1] — 2026-09-12
+
+### Changed
+
+- **Changing a filter is about ten times quicker.** Switching the sidebar from
+  one state to another took between half a second and three seconds, measured
+  on a library of 400 torrents. Three things were wrong, and all three are
+  fixed.
+- **A refresh asked for while a poll was in flight was thrown away.** The
+  browser refuses to start a second poll, which is right, but it also forgot
+  that one had been asked for, so the new filter waited for the next scheduled
+  poll. Measured: a click 200 ms into a poll sent nothing at all, and the next
+  request went out 2.5 seconds later. The request is now remembered and sent
+  the moment the one in flight answers.
+- **The session thread answered a call only after its alert wait.** It slept up
+  to a hundred milliseconds waiting for libtorrent, then swept the status of
+  every torrent, and only then picked up the calls waiting for it, so
+  `core.get_external_ip`, which reads one string out of memory, took 115 ms. It
+  now waits on the calls themselves, drains all of them that are waiting at
+  once, and sweeps every torrent's state on a 250 ms timer rather than on every
+  pass. The sweep is the most expensive thing that thread does and it grows
+  with the library, so this is less processor as well as less waiting.
+- **The status bar's external address, free space and rate limits are no longer
+  asked for every two seconds.** Each was a round trip on a connection the
+  daemon serves one call at a time, and two of them went through the session
+  thread, for answers that are the same for minutes or days. They are held for
+  a minute, fifteen seconds and thirty seconds, and dropped the moment the
+  configuration is written or the daemon changes.
+
 ## [1.3.0] — 2026-09-12
 
 ### Added

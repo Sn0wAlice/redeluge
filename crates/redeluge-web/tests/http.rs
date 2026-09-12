@@ -47,6 +47,7 @@ fn state(config_dir: &std::path::Path) -> SharedState {
             version: serde_json::Map::new(),
             settings: serde_json::Map::new(),
         }),
+        slow_stats: Mutex::new(Default::default()),
     })
 }
 

@@ -145,10 +145,16 @@ deluge.ui = {
             this.running = undefined;
         }
         if (this.inFlight) {
-            // The previous poll has not answered yet. Asking again now would
-            // only queue work behind it.
+            // The previous poll has not answered yet, and asking again now
+            // would only queue work behind it. Forgetting the request is the
+            // part that was wrong: what asks for a refresh is usually a click
+            // on a filter, and dropping it left the new filter waiting for the
+            // next scheduled poll, so the list changed seconds after the
+            // click. Remembered here, sent the moment the current one answers.
+            this.wanted = true;
             return;
         }
+        this.wanted = false;
         this.inFlight = true;
 
         var filters = deluge.sidebar.getFilterStates();
@@ -199,6 +205,9 @@ deluge.ui = {
         // Without this the loop would never poll again after one failure,
         // because `update` refuses to start while a poll is in flight.
         this.inFlight = false;
+        // A refresh asked for while this poll was failing is not worth
+        // chasing: the reconnection below starts a fresh one.
+        this.wanted = false;
         if (this.errorCount == 2) {
             Ext.MessageBox.show({
                 title: _('Lost Connection'),
@@ -253,6 +262,13 @@ deluge.ui = {
         deluge.statusbar.update(data['stats']);
         deluge.sidebar.update(data['filters']);
         this.errorCount = 0;
+
+        // Somebody asked for a refresh while this one was in flight. It is
+        // answered now rather than at the next tick, which is what makes a
+        // filter click feel immediate whatever the poll was doing.
+        if (this.wanted) {
+            this.update();
+        }
     },
 
     /**

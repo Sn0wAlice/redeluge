@@ -15,7 +15,7 @@
 //! Methods in the `core.` and `daemon.` namespaces belong to the daemon and are
 //! forwarded. Everything else is about the web session and is answered here.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use actix_web::{cookie::Cookie, http::header, web, HttpRequest, HttpResponse};
 use redeluge_rencode::Value;
@@ -217,6 +217,12 @@ async fn dispatch(
                 || method.starts_with("daemon.")
                 || method.starts_with("label.") =>
         {
+            // Writing the configuration changes the rate limits the status bar
+            // shows, so what is held about them stops being true here rather
+            // than when it happens to expire.
+            if method == "core.set_config" {
+                state.slow_stats.lock().await.clear();
+            }
             forward(method, &call.params, state).await
         }
 
@@ -478,6 +484,8 @@ pub async fn connect_to(host_id: &str, state: &SharedState) -> Result<(), String
         host_id: host.id.clone(),
         client,
     });
+    // Another daemon has another address, another disk and other limits.
+    state.slow_stats.lock().await.clear();
     tracing::info!(host = %host.host, port = host.port, "connected to the daemon");
     Ok(())
 }
@@ -507,6 +515,7 @@ fn spawn_event_pump(client: redeluge_rpc::Client, state: SharedState) {
 
 async fn web_disconnect(state: &SharedState) -> ApiResult {
     *state.daemon.write().await = None;
+    state.slow_stats.lock().await.clear();
     Ok(Json::String("Connection was closed cleanly.".to_owned()))
 }
 
@@ -545,6 +554,24 @@ async fn web_get_host_status(call: &JsonRequest, state: &SharedState) -> ApiResu
     // Anything not currently connected is reported offline rather than probed:
     // probing every host on each poll makes the list slow and noisy.
     Ok(json!([host_id, "Offline", ""]))
+}
+
+/// How long each held answer stays good.
+///
+/// An external address is the same for days, and asking every two seconds cost
+/// a trip through the session thread. Free space moves, but not by anything a
+/// status bar has to show within two seconds. The limits are emptied the
+/// moment somebody writes the configuration, so their age only matters when
+/// another client changes them.
+const EXTERNAL_IP_FOR: Duration = Duration::from_secs(60);
+const FREE_SPACE_FOR: Duration = Duration::from_secs(15);
+const LIMITS_FOR: Duration = Duration::from_secs(30);
+
+/// The held value, if it is still young enough to send.
+fn fresh<T>(slot: &Option<(Instant, T)>, ttl: Duration) -> Option<&T> {
+    slot.as_ref()
+        .filter(|(at, _)| at.elapsed() < ttl)
+        .map(|(_, value)| value)
 }
 
 async fn web_update_ui(call: &JsonRequest, state: &SharedState) -> ApiResult {
@@ -618,26 +645,70 @@ async fn web_update_ui(call: &JsonRequest, state: &SharedState) -> ApiResult {
         );
     }
 
-    if let Some(free) = call_daemon("core.get_free_space", vec![], state).await {
-        stats.insert("free_space".to_owned(), rencode_to_json(&free));
-    }
-    if let Some(ip) = call_daemon("core.get_external_ip", vec![], state).await {
-        stats.insert("external_ip".to_owned(), rencode_to_json(&ip));
-    }
+    // The three below are asked for only when what is held has gone stale.
+    // Each is a round trip on a connection the daemon serves one call at a
+    // time, and none of them changes at the rate a poll runs: this is a third
+    // of what a poll used to cost, spent on answers that were already known.
+    let (mut cached_free, mut cached_ip, mut cached_limits) = {
+        let slow = state.slow_stats.lock().await;
+        (
+            fresh(&slow.free_space, FREE_SPACE_FOR).cloned(),
+            fresh(&slow.external_ip, EXTERNAL_IP_FOR).cloned(),
+            fresh(&slow.limits, LIMITS_FOR).cloned(),
+        )
+    };
 
+    if cached_free.is_none() {
+        if let Some(free) = call_daemon("core.get_free_space", vec![], state).await {
+            cached_free = Some(rencode_to_json(&free));
+        }
+    }
+    if cached_ip.is_none() {
+        if let Some(ip) = call_daemon("core.get_external_ip", vec![], state).await {
+            cached_ip = Some(rencode_to_json(&ip));
+        }
+    }
     // The front end reads these three from the core config, which it also
     // fetches separately; supplying them keeps the status bar populated on the
     // first poll rather than after the second.
-    if let Some(config) = call_daemon("core.get_config", vec![], state).await {
-        for (from, to) in [
-            ("max_download_speed", "max_download"),
-            ("max_upload_speed", "max_upload"),
-            ("max_connections_global", "max_num_connections"),
-        ] {
-            if let Some(value) = config.get(from) {
-                stats.insert(to.to_owned(), rencode_to_json(value));
+    if cached_limits.is_none() {
+        if let Some(config) = call_daemon("core.get_config", vec![], state).await {
+            let mut limits = Map::new();
+            for (from, to) in [
+                ("max_download_speed", "max_download"),
+                ("max_upload_speed", "max_upload"),
+                ("max_connections_global", "max_num_connections"),
+            ] {
+                if let Some(value) = config.get(from) {
+                    limits.insert(to.to_owned(), rencode_to_json(value));
+                }
             }
+            cached_limits = Some(limits);
         }
+    }
+
+    {
+        let now = Instant::now();
+        let mut slow = state.slow_stats.lock().await;
+        if let Some(free) = cached_free.clone() {
+            slow.free_space = Some((now, free));
+        }
+        if let Some(ip) = cached_ip.clone() {
+            slow.external_ip = Some((now, ip));
+        }
+        if let Some(limits) = cached_limits.clone() {
+            slow.limits = Some((now, limits));
+        }
+    }
+
+    if let Some(free) = cached_free {
+        stats.insert("free_space".to_owned(), free);
+    }
+    if let Some(ip) = cached_ip {
+        stats.insert("external_ip".to_owned(), ip);
+    }
+    for (key, value) in cached_limits.unwrap_or_default() {
+        stats.insert(key, value);
     }
 
     info.insert(

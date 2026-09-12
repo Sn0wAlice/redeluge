@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use redeluge_rpc::{Client, ClientSettings};
 use tokio::sync::{Mutex, RwLock};
@@ -60,6 +60,31 @@ pub struct AppState {
     pub events_ready: tokio::sync::Notify,
     /// Raw `web.conf`, so unknown keys survive a read/write cycle.
     pub web_config: RwLock<ConfigFile>,
+    /// Daemon answers the status bar shows and that hardly ever change.
+    pub slow_stats: Mutex<SlowStats>,
+}
+
+/// The parts of a poll that are not worth asking for every two seconds.
+///
+/// Each one is a round trip on a connection the daemon serves one call at a
+/// time, and two of them go through the session thread, so they were a third
+/// of what a poll cost. None of them changes at the rate they were asked for:
+/// an external address is the same for days, free space moves slowly, and the
+/// three rate limits only change when somebody changes them, which is when
+/// this is emptied.
+#[derive(Debug, Default)]
+pub struct SlowStats {
+    pub free_space: Option<(Instant, serde_json::Value)>,
+    pub external_ip: Option<(Instant, serde_json::Value)>,
+    pub limits: Option<(Instant, serde_json::Map<String, serde_json::Value>)>,
+}
+
+impl SlowStats {
+    /// Forgets everything, for when the answers may no longer be true: a
+    /// different daemon, or a configuration somebody has just written.
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
 }
 
 /// A live connection plus which host it is to.
