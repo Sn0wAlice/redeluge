@@ -518,3 +518,49 @@ fn a_range_that_ends_before_it_starts_is_refused() {
         .set_ip_filter(&[blocked("1.2.3.9", "1.2.3.1")])
         .is_err());
 }
+
+/// Every session statistic is named at the index its value sits at.
+///
+/// `session_stats_alert` carries one flat array and each metric says where in
+/// it to look. Reading the metric list in order and counting along it assumes
+/// the two agree; they do not, because the counters and the gauges are
+/// numbered in separate ranges. Everything past the point where they diverge
+/// then reported somebody else's value: the count of connected peers came out
+/// as six figures, and the DHT node count in the tens of thousands.
+#[test]
+fn a_statistic_is_named_where_its_value_lives() {
+    let names = redeluge_libtorrent::Session::stat_names();
+    assert!(!names.is_empty(), "libtorrent should publish some metrics");
+
+    // The gauges the interface shows, and two counters, checked against
+    // libtorrent's own answer for where each one is.
+    for name in [
+        "peer.num_peers_connected",
+        "dht.dht_nodes",
+        "net.recv_bytes",
+        "net.sent_bytes",
+        "peer.incoming_connections",
+        "disk.num_blocks_read",
+    ] {
+        let index = redeluge_libtorrent::Session::stat_index(name);
+        assert!(index >= 0, "libtorrent does not know {name}");
+        assert_eq!(
+            names.get(index as usize).map(String::as_str),
+            Some(name),
+            "{name} should be named at index {index}"
+        );
+    }
+
+    // And every name that is there is where libtorrent says it is, so this
+    // cannot drift for one metric while the six above stay right.
+    for (index, name) in names.iter().enumerate() {
+        if name.is_empty() {
+            continue;
+        }
+        assert_eq!(
+            redeluge_libtorrent::Session::stat_index(name),
+            index as i32,
+            "{name} is listed at {index} and libtorrent puts it elsewhere"
+        );
+    }
+}

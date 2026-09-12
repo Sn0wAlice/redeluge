@@ -148,6 +148,7 @@ class Session {
 std::unique_ptr<Session> new_session(SessionConfig const& config);
 rust::String libtorrent_version();
 rust::Vec<rust::String> session_stat_names();
+int32_t session_stat_index(rust::Str name);
 rust::String torrent_file_info_hash(rust::Slice<uint8_t const> torrent_file);
 rust::Vec<uint8_t> create_torrent(rust::Str path, int32_t piece_length, rust::Str comment,
                                   rust::Str creator, bool private_torrent,

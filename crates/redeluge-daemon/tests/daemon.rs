@@ -436,7 +436,14 @@ fn the_daemon_claims_exactly_the_contracts_methods() {
 /// Listing them here rather than leaving the check loose is what keeps the next
 /// invented key visible: a typo in `defaults()` shipped once already, and a test
 /// against the contract is how it was found.
-const ADDED_BY_REDELUGE: &[&str] = &["autoadd", "blocklist", "idle_pause", "label", "scheduler"];
+const ADDED_BY_REDELUGE: &[&str] = &[
+    "autoadd",
+    "blocklist",
+    "countrydb",
+    "idle_pause",
+    "label",
+    "scheduler",
+];
 
 #[test]
 fn no_configuration_key_was_invented_without_saying_so() {

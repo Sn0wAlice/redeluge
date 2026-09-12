@@ -112,6 +112,16 @@ pub mod ffi {
         seed: bool,
         /// Two-letter country code, empty when unknown.
         country: String,
+        /// True when the connection is over uTP rather than TCP.
+        utp: bool,
+        /// True when the connection is encrypted, either scheme.
+        encrypted: bool,
+        /// How many pieces this peer has that we do not.
+        ///
+        /// The one number that says whether a peer is worth having: a seed we
+        /// are already ahead of is nothing to us, and a peer at 3% can be the
+        /// only one with the piece we are waiting on.
+        useful_pieces: i32,
     }
 
     /// One tracker in a torrent's announce list.
@@ -256,6 +266,12 @@ pub mod ffi {
         /// Counters arrive on the alert rather than from a getter, which is why
         /// there is no function to read them here.
         fn session_stat_names() -> Vec<String>;
+
+        /// Where libtorrent says one metric's value sits.
+        ///
+        /// The authority for what `session_stat_names` has to line up with.
+        /// -1 when there is no such metric.
+        fn session_stat_index(name: &str) -> i32;
         /// Asks libtorrent to post a `session_stats_alert`.
         fn post_session_stats(self: Pin<&mut Session>);
 

@@ -245,6 +245,11 @@ impl Session {
         ffi::session_stat_names()
     }
 
+    /// Where libtorrent keeps one named metric's value.
+    pub fn stat_index(name: &str) -> i32 {
+        ffi::session_stat_index(name)
+    }
+
     pub fn is_listening(&self) -> bool {
         self.inner.is_listening()
     }

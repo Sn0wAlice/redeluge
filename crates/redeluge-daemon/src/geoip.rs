@@ -72,6 +72,25 @@ impl CountryLookup {
             .map(str::to_owned)
     }
 
+    /// The country's English name, for an address.
+    ///
+    /// Beside the code rather than instead of it: the code is what picks the
+    /// flag, and the name is what a person reads in the tooltip. A database
+    /// that has the code and no name is normal, so this can be absent on its
+    /// own.
+    pub fn name_of(&self, address: IpAddr) -> Option<String> {
+        let country: maxminddb::geoip2::Country = self.reader.lookup(address).ok()?;
+        country
+            .country
+            .and_then(|country| country.names)
+            .and_then(|names| names.get("en").map(|name| (*name).to_owned()))
+    }
+
+    /// The name for an address written as text.
+    pub fn name_of_text(&self, raw: &str) -> Option<String> {
+        parse_peer_address(raw).and_then(|address| self.name_of(address))
+    }
+
     /// The code for an address written as text, which is what a peer carries.
     ///
     /// The peer's address may arrive with a port, and an IPv6 one may be in

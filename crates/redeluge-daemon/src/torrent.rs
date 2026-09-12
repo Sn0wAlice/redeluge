@@ -213,7 +213,7 @@ impl Torrent {
         status: &LtStatus,
         session_paused: bool,
         trackers: &[redeluge_libtorrent::TrackerEntry],
-        peers: &[(redeluge_libtorrent::PeerInfo, Option<String>)],
+        peers: &[(redeluge_libtorrent::PeerInfo, PeerCountry)],
         idle_since: f64,
         idle_grace: u64,
     ) -> BTreeMap<String, Value> {
@@ -376,7 +376,13 @@ impl Torrent {
                             (Value::Str("client".into()), Value::Str(peer.client.clone())),
                             (
                                 Value::Str("country".into()),
-                                Value::Str(country.clone().unwrap_or_default()),
+                                Value::Str(country.code.clone().unwrap_or_default()),
+                            ),
+                            // The name beside the code: the code picks the
+                            // flag and is unreadable on its own.
+                            (
+                                Value::Str("country_name".into()),
+                                Value::Str(country.name.clone().unwrap_or_default()),
                             ),
                             (
                                 Value::Str("progress".into()),
@@ -391,6 +397,16 @@ impl Torrent {
                                 Value::Int(i64::from(peer.up_speed)),
                             ),
                             (Value::Str("seed".into()), Value::Int(i64::from(peer.seed))),
+                            // How the connection is made, which libtorrent
+                            // knows and nothing was carrying.
+                            (Value::Str("utp".into()), Value::Bool(peer.utp)),
+                            (Value::Str("encrypted".into()), Value::Bool(peer.encrypted)),
+                            // The number that says whether this peer is worth
+                            // having: pieces it has and we do not.
+                            (
+                                Value::Str("useful_pieces".into()),
+                                Value::Int(i64::from(peer.useful_pieces)),
+                            ),
                         ])
                     })
                     .collect(),
@@ -500,6 +516,17 @@ impl Torrent {
         }
         status.all_time_upload as f64 / status.all_time_download as f64
     }
+}
+
+/// Where a peer is, as far as the country database knows.
+///
+/// Two fields rather than one because they answer different questions: the
+/// code picks the flag, the name is what a person reads. A database may have
+/// the code and no name for a country, so the name is optional on its own.
+#[derive(Debug, Clone, Default)]
+pub struct PeerCountry {
+    pub code: Option<String>,
+    pub name: Option<String>,
 }
 
 /// Which tracker a torrent counts as being on.

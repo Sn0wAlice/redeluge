@@ -144,19 +144,37 @@ impl Core {
         }
     }
 
-    /// Loads the GeoIP database the configuration names, if there is one.
+    /// Loads the country database, if there is one to load.
     ///
-    /// Absent by default and absent in the container: the database cannot be
-    /// shipped, because its licence does not allow it. Without one the peer
-    /// country is simply empty, which is what it was before.
+    /// Two places it can come from, in this order. A path someone set in
+    /// `geoip_db_location`, which is Deluge's own key and means "I have
+    /// provided this file myself". Failing that, the copy the downloader keeps,
+    /// when that is turned on. Without either the peer country is simply
+    /// empty, which is what it has always been.
+    ///
+    /// The stock value of `geoip_db_location` is skipped rather than tried:
+    /// Deluge pointed it at a system path holding a format retired in 2019, so
+    /// a value nobody has changed is not a file anybody has.
     pub async fn load_country_database(&self) {
-        let path = {
+        const RETIRED_DEFAULT: &str = "/usr/share/GeoIP/GeoIP.dat";
+
+        let (mut path, config_dir) = {
             let config = self.config.lock().await;
-            config
+            let path = config
                 .string("geoip_db_location")
                 .unwrap_or_default()
-                .to_owned()
+                .to_owned();
+            (path, self.config_dir.clone())
         };
+        if path == RETIRED_DEFAULT {
+            path.clear();
+        }
+        if path.is_empty() {
+            let cached = crate::features::countrydb::Settings::cache_path(&config_dir);
+            if cached.is_file() {
+                path = cached.display().to_string();
+            }
+        }
         if path.is_empty() {
             return;
         }
@@ -2205,7 +2223,10 @@ impl Core {
                         .unwrap_or_default()
                         .into_iter()
                         .map(|peer| {
-                            let country = state.country_of(&peer.ip);
+                            let country = crate::torrent::PeerCountry {
+                                code: state.country_of(&peer.ip),
+                                name: state.country_name_of(&peer.ip),
+                            };
                             (peer, country)
                         })
                         .collect()
@@ -2298,9 +2319,15 @@ impl Core {
             .await
             .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
 
+        // The names arrive placed at the index their value sits at, so the
+        // position in this list is the position in the counters. A name can be
+        // empty where the numbering has a gap, and an empty key is not a stat.
         let names = redeluge_libtorrent::Session::stat_names();
         let mut out: BTreeMap<String, Value> = BTreeMap::new();
         for (index, name) in names.iter().enumerate() {
+            if name.is_empty() {
+                continue;
+            }
             let value = counters.get(index).copied().unwrap_or(0);
             out.insert(name.clone(), Value::Int(value));
         }

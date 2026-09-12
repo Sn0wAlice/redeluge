@@ -7,6 +7,7 @@
 
 #include "shim.h"
 
+#include <algorithm>
 #include <stdexcept>
 #include <vector>
 
@@ -385,8 +386,13 @@ void Session::add_tracker(rust::Str info_hash, rust::Str url, uint8_t tier) {
 }
 
 rust::Vec<PeerInfo> Session::peers(rust::Str info_hash) const {
+  lt::torrent_handle const& handle = require(to_string(info_hash));
   std::vector<lt::peer_info> peers;
-  require(to_string(info_hash)).get_peer_info(peers);
+  handle.get_peer_info(peers);
+
+  // What we already have, so each peer can be asked what it adds. Taken once
+  // rather than per peer: it is the same answer for all of them.
+  lt::bitfield const ours = handle.status(lt::torrent_handle::query_pieces).pieces;
 
   rust::Vec<PeerInfo> out;
   out.reserve(peers.size());
@@ -400,6 +406,21 @@ rust::Vec<PeerInfo> Session::peers(rust::Str info_hash) const {
     entry.up_speed = peer.up_speed;
     entry.progress = peer.progress;
     entry.seed = (peer.flags & lt::peer_info::seed) != decltype(peer.flags){};
+    entry.utp = (peer.flags & lt::peer_info::utp_socket) != decltype(peer.flags){};
+    entry.encrypted =
+        (peer.flags &
+         (lt::peer_info::rc4_encrypted | lt::peer_info::plaintext_encrypted)) !=
+        decltype(peer.flags){};
+
+    // Counted here rather than sending two bitfields across the bridge on
+    // every status poll, which is what this would cost in a hot path.
+    int useful = 0;
+    int const count = std::min(ours.size(), peer.pieces.size());
+    for (int i = 0; i < count; ++i) {
+      if (peer.pieces.get_bit(i) && !ours.get_bit(i)) ++useful;
+    }
+    entry.useful_pieces = useful;
+
     out.push_back(std::move(entry));
   }
   return out;

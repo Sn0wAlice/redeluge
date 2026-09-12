@@ -18,10 +18,35 @@
             return '';
         }
         return String.format(
-            '<img alt="{1}" title="{1}" src="{0}flag/{1}" />',
+            '<img alt="{1}" title="{2}" src="{0}flag/{1}" />',
             deluge.config.base,
-            value
+            value,
+            // The country's name where the database gave one, the code
+            // otherwise. A two-letter code is not something to read.
+            Ext.util.Format.htmlEncode(p && p.countryName ? p.countryName : value)
         );
+    }
+
+    /**
+     * How the connection is made: the transport, and whether it is encrypted.
+     */
+    function connectionRenderer(value, p, record) {
+        var parts = [record.get('utp') ? 'uTP' : 'TCP'];
+        if (record.get('encrypted')) parts.push(_('encrypted'));
+        return parts.join(', ');
+    }
+
+    /**
+     * What this peer has that we do not, which is the number that says whether
+     * it is worth having. A seed we are already ahead of is nothing to us; a
+     * peer at three percent can hold the one piece everything is waiting on.
+     */
+    function usefulRenderer(value, p, record) {
+        var useful = Number(value) || 0;
+        if (useful <= 0) {
+            return record.get('seed') ? _('nothing new') : '0';
+        }
+        return String(useful);
     }
     function peerAddressRenderer(value, p, record) {
         var seed =
@@ -64,7 +89,13 @@
                             header: '&nbsp;',
                             width: 30,
                             sortable: true,
-                            renderer: flagRenderer,
+                            renderer: function (value, meta, record) {
+                                // The name travels on the metadata so the
+                                // renderer above can stay a plain function of
+                                // its value, which is how it is tested.
+                                meta.countryName = record.get('country_name');
+                                return flagRenderer(value, meta, record);
+                            },
                             dataIndex: 'country',
                         },
                         {
@@ -101,6 +132,20 @@
                             sortable: true,
                             renderer: fspeed,
                             dataIndex: 'up_speed',
+                        },
+                        {
+                            header: _('Has'),
+                            width: 70,
+                            sortable: true,
+                            renderer: usefulRenderer,
+                            dataIndex: 'useful_pieces',
+                        },
+                        {
+                            header: _('Connection'),
+                            width: 110,
+                            sortable: true,
+                            renderer: connectionRenderer,
+                            dataIndex: 'utp',
                         },
                     ],
                     stripeRows: true,

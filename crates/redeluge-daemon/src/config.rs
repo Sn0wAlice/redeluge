@@ -412,6 +412,10 @@ pub fn defaults(config_dir: &Path) -> Vec<(String, Json)> {
             crate::features::autoadd::Settings::default_json(),
         ),
         (
+            "countrydb".into(),
+            crate::features::countrydb::Settings::default_json(),
+        ),
+        (
             "idle_pause".into(),
             crate::features::idlepause::Settings::default_json(),
         ),

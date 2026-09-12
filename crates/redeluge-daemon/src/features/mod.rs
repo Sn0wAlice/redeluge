@@ -20,6 +20,7 @@
 
 pub mod autoadd;
 pub mod blocklist;
+pub mod countrydb;
 pub mod idlepause;
 pub mod label;
 pub mod scheduler;
@@ -38,6 +39,7 @@ pub fn spawn(core: Arc<Core>) {
     tokio::spawn(watch_directories(Arc::clone(&core)));
     tokio::spawn(follow_schedule(Arc::clone(&core)));
     tokio::spawn(rotate_idle_downloads(Arc::clone(&core)));
+    tokio::spawn(maintain_country_database(Arc::clone(&core)));
     tokio::spawn(maintain_blocklist(core));
 }
 
@@ -100,6 +102,137 @@ fn now() -> f64 {
 
 async fn setting(core: &Core, key: &str) -> Option<Json> {
     core.config.lock().await.get(key).cloned()
+}
+
+// --------------------------------------------------------- country database
+
+/// Keeps a country database on disk, so peers can have flags.
+///
+/// The same shape as the block list above and for the same reasons: fetch,
+/// cache, check on a timer, and never replace a working file with something
+/// that is not one.
+async fn maintain_country_database(core: Arc<Core>) {
+    // A minute after start rather than at once, so a daemon that is still
+    // opening its session is not also opening a connection to a web server.
+    tokio::time::sleep(Duration::from_secs(60)).await;
+
+    loop {
+        let settings = countrydb::Settings::from_config(setting(&core, "countrydb").await.as_ref());
+
+        if settings.enabled && !settings.url.is_empty() {
+            let cache = countrydb::Settings::cache_path(&core.config_dir);
+            // A file that is there and not stale is the whole job done.
+            if !cache.is_file() || settings.is_stale(now()) {
+                fetch_country_database(&core, &settings, &cache).await;
+            }
+        }
+
+        // Hourly. The published file is monthly, so this is only ever asking
+        // whether the week is up.
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+    }
+}
+
+async fn fetch_country_database(core: &Core, settings: &countrydb::Settings, cache: &Path) {
+    let (year, month) = current_year_and_month();
+    let url = settings.resolved_url(year, month);
+
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(settings.timeout))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            tracing::warn!(error = %err, "could not build the http client");
+            return;
+        }
+    };
+
+    for attempt in 1..=settings.try_times.max(1) {
+        let last = match client.get(&url).send().await {
+            Ok(response) if response.status().is_success() => match response.bytes().await {
+                Ok(body) => {
+                    install_country_database(core, cache, &body, &url).await;
+                    return;
+                }
+                Err(err) => err.to_string(),
+            },
+            Ok(response) => format!("the server answered {}", response.status()),
+            Err(err) => err.to_string(),
+        };
+        tracing::warn!(attempt, url = %url, error = %last,
+            "could not download the country database");
+    }
+}
+
+/// Unpacks, checks and installs a downloaded database.
+async fn install_country_database(core: &Core, cache: &Path, body: &[u8], url: &str) {
+    let Some(unpacked) = countrydb::gunzip(body) else {
+        tracing::warn!(url, "the country database could not be unpacked");
+        return;
+    };
+
+    // Checked before it is written. Something that answers 200 with an error
+    // page would otherwise replace a working database with nothing, and the
+    // only symptom would be flags quietly disappearing.
+    if !countrydb::looks_like_a_database(&unpacked) {
+        tracing::warn!(
+            url,
+            bytes = unpacked.len(),
+            "what was downloaded is not a MaxMind DB file, keeping the old one"
+        );
+        return;
+    }
+
+    // Written beside the target and renamed, so a failure halfway through
+    // leaves the previous database intact rather than a truncated one.
+    let temporary = cache.with_extension("mmdb.part");
+    if let Err(err) = std::fs::write(&temporary, &unpacked) {
+        tracing::warn!(error = %err, "could not write the country database");
+        return;
+    }
+    if let Err(err) = std::fs::rename(&temporary, cache) {
+        tracing::warn!(error = %err, "could not install the country database");
+        let _ = std::fs::remove_file(&temporary);
+        return;
+    }
+
+    tracing::info!(
+        url,
+        bytes = unpacked.len(),
+        "installed the country database"
+    );
+    record_country_fetch(core).await;
+    core.load_country_database().await;
+}
+
+/// Writes back when the database was fetched, so staleness survives a restart.
+async fn record_country_fetch(core: &Core) {
+    let mut config = core.config.lock().await;
+    let Some(Json::Object(mut stored)) = config.get("countrydb").cloned() else {
+        return;
+    };
+    stored.insert("last_update".to_owned(), Json::from(now()));
+    if let Err(err) = config.set("countrydb", Json::Object(stored)) {
+        tracing::warn!(error = %err, "could not record the country database fetch");
+    }
+}
+
+/// The year and month, for a URL that names one.
+fn current_year_and_month() -> (i32, u32) {
+    // Days since the epoch to a civil date, by Howard Hinnant's algorithm. The
+    // alternative is a date library for two numbers used once an hour.
+    let days = (now() / 86_400.0) as i64;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    (year as i32, m as u32)
 }
 
 // ------------------------------------------------------------- idle pause

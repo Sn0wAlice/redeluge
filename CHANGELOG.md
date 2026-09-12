@@ -29,8 +29,34 @@ talking to.
   about which torrents are slow. Two mechanisms for the same job, disagreeing
   about the facts, would be impossible to reason about.
 
+- **Peer countries can actually be filled in.** The flags were shipped earlier
+  in this version; what was missing was the data. Deluge pointed
+  `geoip_db_location` at `/usr/share/GeoIP/GeoIP.dat`, a file in the GeoLite
+  Legacy format MaxMind retired in January 2019, so that path has held nothing
+  for years and Deluge's own flags have been blank just as long. There is now
+  an optional downloader, off by default, defaulting to DB-IP's free country
+  database: CC BY 4.0, monthly, in the MaxMind DB format the reader already
+  takes, and needing no account. It checks weekly, keeps one cached copy, and
+  refuses to replace a working database with anything that is not one. A path
+  you set yourself still wins.
+- **More about each peer.** The country's name in the flag's tooltip, because
+  two letters are not something to read. Whether the connection is uTP or TCP
+  and whether it is encrypted, both of which libtorrent knew and nothing was
+  carrying. And a *Has* column: how many pieces that peer has and we do not,
+  which is the one number that says whether a peer is worth having. A seed you
+  are already ahead of reads "nothing new"; a peer at three percent may hold
+  the piece everything is waiting on.
+
 ### Fixed
 
+- **Every session statistic past a certain point was somebody else's.**
+  `session_stats_alert` carries one flat array of values and each metric says
+  where in it to look; the names were read in list order and counted along it
+  instead. The counters and the gauges are numbered in separate ranges, so from
+  the point where those diverge every name reported the wrong value: the count
+  of connected peers came out as six figures and the DHT node count in the tens
+  of thousands. Names are placed at their own index now, and a test asserts
+  that for every metric libtorrent publishes rather than for a chosen few.
 - **No pause survived a restart.** Resuming the session resumed every torrent
   it could see rather than the ones that session pause had stopped, and the
   scheduler performs a session resume when the daemon starts. So a torrent

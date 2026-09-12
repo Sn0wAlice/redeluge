@@ -76,6 +76,13 @@ impl SessionState {
             .and_then(|lookup| lookup.country_of_text(address))
     }
 
+    /// The country's name, for the tooltip beside the flag.
+    pub fn country_name_of(&self, address: &str) -> Option<String> {
+        self.countries
+            .as_ref()
+            .and_then(|lookup| lookup.name_of_text(address))
+    }
+
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
     }

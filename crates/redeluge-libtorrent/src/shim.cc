@@ -5,6 +5,7 @@
 
 #include <stdexcept>
 #include <tuple>
+#include <algorithm>
 #include <vector>
 
 #include <libtorrent/alert_types.hpp>
@@ -321,10 +322,35 @@ std::unique_ptr<Session> new_session(SessionConfig const& config) {
 
 rust::String libtorrent_version() { return rust::String(LIBTORRENT_VERSION); }
 
+int32_t session_stat_index(rust::Str name) {
+  return lt::find_metric_idx(to_string(name));
+}
+
 rust::Vec<rust::String> session_stat_names() {
+  // Placed at their own index, not in the order libtorrent lists them.
+  //
+  // `session_stats_alert` carries one flat array of values, and each metric
+  // says where in it to look through `value_index`. Reading the list in order
+  // and counting along it assumes those two agree, and they do not: the
+  // counters and the gauges are numbered in separate ranges. Every name from
+  // the point where they diverge then read somebody else's value, which is why
+  // the number of connected peers came out in the hundreds of thousands.
+  auto const metrics = lt::session_stats_metrics();
+  int highest = -1;
+  for (auto const& metric : metrics) {
+    highest = std::max(highest, metric.value_index);
+  }
+
+  std::vector<std::string> placed(static_cast<std::size_t>(highest + 1));
+  for (auto const& metric : metrics) {
+    placed[static_cast<std::size_t>(metric.value_index)] = metric.name;
+  }
+
   rust::Vec<rust::String> out;
-  for (auto const& metric : lt::session_stats_metrics()) {
-    out.push_back(rust::String(metric.name));
+  out.reserve(placed.size());
+  for (auto const& name : placed) {
+    // A gap is possible in principle; an empty name is skipped by the caller.
+    out.push_back(rust::String(name));
   }
   return out;
 }

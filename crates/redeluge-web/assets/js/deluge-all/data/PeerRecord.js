@@ -50,4 +50,22 @@ Deluge.data.Peer = Ext.data.Record.create([
         name: 'seed',
         type: 'int',
     },
+    {
+        // The country's name, beside the code that picks the flag.
+        name: 'country_name',
+        type: 'string',
+    },
+    {
+        // How many pieces this peer has that we do not.
+        name: 'useful_pieces',
+        type: 'int',
+    },
+    {
+        name: 'utp',
+        type: 'bool',
+    },
+    {
+        name: 'encrypted',
+        type: 'bool',
+    },
 ]);

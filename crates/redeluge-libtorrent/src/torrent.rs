@@ -315,6 +315,12 @@ pub struct PeerInfo {
     pub seed: bool,
     /// Two-letter country code, when a GeoIP database said so.
     pub country: Option<String>,
+    /// True when the connection is over uTP rather than TCP.
+    pub utp: bool,
+    /// True when the connection is encrypted, either scheme.
+    pub encrypted: bool,
+    /// How many pieces this peer has that we do not.
+    pub useful_pieces: i32,
 }
 
 impl From<ffi::PeerInfo> for PeerInfo {
@@ -329,6 +335,9 @@ impl From<ffi::PeerInfo> for PeerInfo {
             progress: raw.progress,
             seed: raw.seed,
             country: (!raw.country.is_empty()).then_some(raw.country),
+            utp: raw.utp,
+            encrypted: raw.encrypted,
+            useful_pieces: raw.useful_pieces,
         }
     }
 }
