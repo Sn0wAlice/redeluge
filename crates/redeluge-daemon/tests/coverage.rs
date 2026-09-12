@@ -451,3 +451,33 @@ async fn every_filter_row_matches_the_torrents_it_counts() {
         }
     }
 }
+
+/// Resuming the session starts what the session pause stopped, and nothing
+/// else.
+///
+/// It used to resume every torrent it could see. That undid every deliberate
+/// pause: one made by hand, one made by the share-ratio rule, one made by the
+/// idle rule. And the scheduler performs a session resume when the daemon
+/// starts, so in practice no pause of any kind survived a restart.
+#[tokio::test(flavor = "multi_thread")]
+async fn resuming_the_session_leaves_a_deliberate_pause_alone() {
+    let (core, _dir) = daemon().await;
+
+    // With no torrents there is nothing to pause, so what is asserted is the
+    // bookkeeping: a resume must not have a list of everything to start.
+    core.set_session_paused(true).await.expect("paused");
+    core.set_session_paused(false).await.expect("resumed");
+
+    let left = core
+        .manager
+        .with(|state| state.paused_by_session.len())
+        .await
+        .expect("the manager answers");
+    assert_eq!(left, 0, "the resume should have emptied its own list");
+
+    let answer = core
+        .call(&admin(), "core.is_session_paused", Vec::new(), Vec::new())
+        .await
+        .expect("answered");
+    assert_eq!(answer, Value::Bool(false));
+}

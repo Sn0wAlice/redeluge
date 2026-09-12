@@ -18,7 +18,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use redeluge_libtorrent::{
-    AddTorrent, Alert, AlertKind, Session, SessionSettings, TorrentStatus as LtStatus,
+    flags, AddTorrent, Alert, AlertKind, FlagChange, Session, SessionSettings,
+    TorrentStatus as LtStatus,
 };
 use tokio::sync::oneshot;
 
@@ -38,6 +39,18 @@ pub struct SessionState {
     pub counters: Vec<i64>,
     /// Resume data waiting to be written, by infohash.
     pub resume_data: BTreeMap<String, Vec<u8>>,
+    /// When each download was first seen transferring below the idle rule's
+    /// rate. Here rather than in the task that maintains it, because the
+    /// torrent status reports the countdown and has to read the same numbers
+    /// the rule is acting on.
+    pub idle_since: BTreeMap<String, f64>,
+    /// Which torrents the session-wide pause actually stopped.
+    ///
+    /// Resuming the session must start those and only those. It used to resume
+    /// everything, so a torrent paused by hand, by the share-ratio rule or by
+    /// the idle rule was started again by the next session resume, and the
+    /// scheduler performs one at startup: every pause was lost on restart.
+    pub paused_by_session: std::collections::BTreeSet<String>,
     /// Where peer countries come from, when the operator provided a database.
     countries: Option<crate::geoip::CountryLookup>,
     config_dir: PathBuf,
@@ -227,6 +240,8 @@ impl Manager {
             external_ip: None,
             counters: Vec::new(),
             resume_data: BTreeMap::new(),
+            idle_since: BTreeMap::new(),
+            paused_by_session: std::collections::BTreeSet::new(),
             countries: None,
             config_dir,
             dirty: false,
@@ -395,8 +410,26 @@ fn enforce_seeding_rules<F: Fn(Event)>(state: &mut SessionState, emit: &F) {
     }
 
     for id in pause {
-        match state.session.pause_torrent(&id) {
-            Ok(()) => tracing::info!(torrent = %id, "stopped at its share ratio"),
+        // Clearing auto-manage, not just pausing. libtorrent's queue resumes
+        // an auto-managed torrent it finds paused, within about half a minute,
+        // so a bare `pause()` here did nothing at all on the torrents that had
+        // reached their ratio: they stopped and started again. Auto-management
+        // is on by default, so that was most of them.
+        let change = FlagChange::new()
+            .set_to(flags::PAUSED, true)
+            .set_to(flags::AUTO_MANAGED, false);
+        match state.session.set_flags(&id, change) {
+            Ok(()) => {
+                // Recorded on the torrent as well, because a restart re-adds
+                // every torrent from its stored options: a stop kept only in
+                // the session came back running.
+                if let Some(torrent) = state.torrents.get_mut(&id) {
+                    torrent.options.paused = true;
+                    torrent.options.auto_managed = false;
+                }
+                state.dirty = true;
+                tracing::info!(torrent = %id, "stopped at its share ratio");
+            }
             Err(err) => tracing::warn!(torrent = %id, error = %err,
                 "could not stop a torrent at its share ratio"),
         }

@@ -104,6 +104,8 @@ pub mod names {
         "connections_limit",
         "download_rate_limit",
         "half_open_limit",
+        "inactive_down_rate",
+        "inactive_up_rate",
         "peer_tos",
         "proxy_port",
         "proxy_type",

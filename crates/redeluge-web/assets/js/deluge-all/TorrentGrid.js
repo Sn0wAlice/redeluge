@@ -69,6 +69,36 @@
         return Ext.util.Format.htmlEncode(value || '');
     }
 
+    /**
+     * What the idle rule is about to do to this torrent.
+     *
+     * Counted from the two timestamps rather than from a sentence the server
+     * wrote, so it ticks between polls instead of being two seconds stale.
+     */
+    function idleRenderer(value, p, r) {
+        var now = new Date().getTime() / 1000;
+        var resumeAt = Number(r.data['idle_resume_at']) || 0;
+        if (resumeAt > now) {
+            return String.format(
+                _('resumes in {0}'),
+                ftime(Math.round(resumeAt - now))
+            );
+        }
+        var pauseAt = Number(r.data['idle_pause_at']) || 0;
+        if (pauseAt > now) {
+            return String.format(
+                _('pauses in {0}'),
+                ftime(Math.round(pauseAt - now))
+            );
+        }
+        // Idle, past its grace, and waiting only for something to queue up
+        // behind it. Saying "now" would be wrong: it may never happen.
+        if (pauseAt > 0) {
+            return _('idle');
+        }
+        return '';
+    }
+
     function etaSorter(eta) {
         if (eta === 0) return Number.MAX_VALUE;
         if (eta <= -1) return Number.MAX_SAFE_INTEGER;
@@ -225,6 +255,15 @@
                 dataIndex: 'download_location',
             },
             {
+                // The idle rule's countdown, beside ETA because it is the
+                // other thing on this row that is a time you are waiting for.
+                header: _('Idle'),
+                width: 110,
+                sortable: true,
+                renderer: idleRenderer,
+                dataIndex: 'idle_pause_at',
+            },
+            {
                 // Beside Owner, the other thing that puts torrents in groups.
                 // Shown by default: a label you cannot see is one you cannot
                 // tell apart from no label at all, and the sidebar's Labels
@@ -351,6 +390,9 @@
                 { name: 'time_since_transfer', type: 'int' },
                 { name: 'label' },
                 { name: 'owner' },
+                { name: 'idle_since', type: 'float' },
+                { name: 'idle_pause_at', type: 'float' },
+                { name: 'idle_resume_at', type: 'float' },
             ],
         },
 

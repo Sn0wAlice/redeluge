@@ -38,7 +38,6 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
             fieldset.add({
                 fieldLabel: '',
                 labelSeparator: '',
-                height: 22,
                 boxLabel: _('Queue to top'),
                 name: 'queue_new_to_top',
             })
@@ -97,7 +96,6 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
             fieldset.add({
                 xtype: 'checkbox',
                 name: 'dont_count_slow_torrents',
-                height: 22,
                 hideLabel: true,
                 boxLabel: _('Ignore slow torrents'),
             })
@@ -234,6 +232,144 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
             ],
         });
         om.bind('remove_seed_at_ratio', this.removeAtRatio);
+
+        // The idle rule. Its own fieldset with its own Apply, because it is
+        // one dictionary under `idle_pause` rather than flat keys, and the
+        // options manager above only binds flat ones.
+        fieldset = this.add({
+            xtype: 'fieldset',
+            border: false,
+            title: _('Pause Idle Downloads'),
+            autoHeight: true,
+            labelWidth: 210,
+            style: 'padding-top: 5px; margin-bottom: 0px',
+        });
+        fieldset.add({
+            xtype: 'label',
+            text: _(
+                'A download that is transferring nothing still holds a place in the queue. This gives that place to a torrent that is waiting, and gives it back later.'
+            ),
+            style: 'display: block; margin-bottom: 6px; color: #666;',
+        });
+
+        this.idle = {};
+        this.idle.enabled = fieldset.add({
+            xtype: 'checkbox',
+            hideLabel: true,
+            boxLabel: _('Pause a download that gets nowhere'),
+            handler: this.onIdleToggled,
+            scope: this,
+        });
+        this.idle.inactive_rate = fieldset.add(
+            this.idleSpinner(_('Idle below (KiB/s):'), 1, 0.1)
+        );
+        this.idle.grace = fieldset.add(
+            this.idleSpinner(_('Idle for (minutes):'), 0)
+        );
+        this.idle.pause_for = fieldset.add(
+            this.idleSpinner(_('Paused for (minutes):'), 0)
+        );
+        this.idle.min_active = fieldset.add(
+            this.idleSpinner(_('Never leave fewer running than:'), 0)
+        );
+        this.idle.only_when_queued = fieldset.add({
+            xtype: 'checkbox',
+            hideLabel: true,
+            boxLabel: _('Only when a torrent is waiting for the place'),
+            ctCls: 'x-deluge-indent-checkbox',
+        });
+
+        this.on('show', this.onPageShow, this);
+    },
+
+    /**
+     * The rule needs four numbers, and they are all shaped the same.
+     */
+    idleSpinner: function (caption, precision, increment) {
+        return {
+            xtype: 'spinnerfield',
+            fieldLabel: caption,
+            labelSeparator: '',
+            width: 80,
+            decimalPrecision: precision,
+            minValue: 0,
+            maxValue: 99999,
+            incrementValue: increment || 1,
+        };
+    },
+
+    onPageShow: function () {
+        if (this.idleLoaded) return;
+        this.idleLoaded = true;
+        deluge.client.core.get_config_value('idle_pause', {
+            success: function (settings) {
+                settings = settings || {};
+                this.idle.enabled.setValue(settings['enabled'] === true);
+                // Stored in bytes per second and in seconds, shown in the
+                // units the rest of this window uses.
+                this.idle.inactive_rate.setValue(
+                    Ext.value(settings['inactive_rate'], 2048) / 1024
+                );
+                this.idle.grace.setValue(
+                    Math.round(Ext.value(settings['grace'], 300) / 60)
+                );
+                this.idle.pause_for.setValue(
+                    Math.round(Ext.value(settings['pause_for'], 3600) / 60)
+                );
+                this.idle.min_active.setValue(
+                    Ext.value(settings['min_active'], 1)
+                );
+                this.idle.only_when_queued.setValue(
+                    settings['only_when_queued'] !== false
+                );
+                this.onIdleToggled();
+            },
+            failure: function () {
+                this.onIdleToggled();
+            },
+            scope: this,
+        });
+    },
+
+    /**
+     * The rule's numbers mean nothing while it is off, so they follow it.
+     */
+    onIdleToggled: function () {
+        var on = this.idle.enabled.getValue() === true;
+        Ext.each(
+            [
+                'inactive_rate',
+                'grace',
+                'pause_for',
+                'min_active',
+                'only_when_queued',
+            ],
+            function (name) {
+                this.idle[name].setDisabled(!on);
+            },
+            this
+        );
+    },
+
+    onApply: function () {
+        // Nothing read yet means nothing of this page's to write. The other
+        // feature pages learned this the hard way: Preferences applies every
+        // page on OK, and an unread page holds defaults.
+        if (!this.idleLoaded) return;
+
+        deluge.client.core.set_config({
+            idle_pause: {
+                enabled: this.idle.enabled.getValue() === true,
+                inactive_rate: Math.round(
+                    Deluge.number(this.idle.inactive_rate.getValue(), 2) * 1024
+                ),
+                grace: Deluge.number(this.idle.grace.getValue(), 5) * 60,
+                pause_for: Deluge.number(this.idle.pause_for.getValue(), 60) * 60,
+                min_active: Deluge.number(this.idle.min_active.getValue(), 1),
+                only_when_queued:
+                    this.idle.only_when_queued.getValue() === true,
+            },
+        });
     },
 
     onStopRatioCheck: function (e, checked) {

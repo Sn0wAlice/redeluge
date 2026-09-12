@@ -100,7 +100,6 @@ Deluge.preferences.Interface = Ext.extend(Ext.form.FormPanel, {
                 width: 100,
                 inputType: 'password',
                 labelStyle: 'padding-left: 5px',
-                height: 20,
                 labelSeparator: '',
             },
         });
@@ -129,7 +128,6 @@ Deluge.preferences.Interface = Ext.extend(Ext.form.FormPanel, {
             defaults: {
                 labelSeparator: '',
                 labelStyle: 'padding-left: 5px',
-                height: 20,
                 width: 80,
             },
         });

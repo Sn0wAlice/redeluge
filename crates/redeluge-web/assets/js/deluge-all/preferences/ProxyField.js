@@ -131,7 +131,6 @@ Deluge.preferences.ProxyField = Ext.extend(Ext.form.FieldSet, {
         this.anonymous_mode = fieldset.add({
             fieldLabel: '',
             labelSeparator: '',
-            height: 20,
             name: 'anonymous_mode',
             boxLabel: _('Hide Client Identity'),
         });

@@ -79,6 +79,14 @@ pub struct TorrentOptions {
     pub shared: bool,
     #[serde(default)]
     pub super_seeding: bool,
+    /// When the idle rule should let this torrent go again, in Unix seconds.
+    ///
+    /// Zero means it is not paused by that rule. Saved with the torrent on
+    /// purpose: a daemon that restarted while a torrent was put away would
+    /// otherwise leave it paused for good, with nothing to say why.
+    #[serde(default)]
+    pub idle_resume_at: f64,
+
     /// Trackers the user added or reordered, kept because libtorrent forgets
     /// them when a torrent is removed and re-added from resume data.
     #[serde(default)]
@@ -136,6 +144,7 @@ impl Default for TorrentOptions {
             owner: String::new(),
             shared: false,
             super_seeding: false,
+            idle_resume_at: 0.0,
             trackers: Vec::new(),
         }
     }
@@ -191,19 +200,22 @@ impl Torrent {
         session_paused: bool,
         trackers: &[redeluge_libtorrent::TrackerEntry],
     ) -> BTreeMap<String, Value> {
-        self.status_with_peers(status, session_paused, trackers, &[])
+        self.status_with_peers(status, session_paused, trackers, &[], 0.0, 0)
     }
 
     /// The status, with the peer list filled in.
     ///
     /// Peers are a separate call into libtorrent and only one tab of the
     /// interface shows them, so the caller decides whether to pay for them.
+    #[allow(clippy::too_many_arguments)]
     pub fn status_with_peers(
         &self,
         status: &LtStatus,
         session_paused: bool,
         trackers: &[redeluge_libtorrent::TrackerEntry],
         peers: &[(redeluge_libtorrent::PeerInfo, Option<String>)],
+        idle_since: f64,
+        idle_grace: u64,
     ) -> BTreeMap<String, Value> {
         let state = self.state(status, session_paused);
         let mut out: BTreeMap<String, Value> = BTreeMap::new();
@@ -395,6 +407,20 @@ impl Torrent {
         put("tracker", Value::Str(current.clone()));
         put("tracker_host", Value::Str(tracker_host(&current)));
         put("tracker_status", Value::Str(self.tracker_status.clone()));
+
+        // The idle rule's countdown. Three numbers rather than a sentence,
+        // because the interface counts down between polls and a sentence
+        // computed here would be two seconds stale the moment it arrived.
+        // Zero means "not counting", as it does for every other time here.
+        put("idle_since", Value::Float64(idle_since));
+        put(
+            "idle_pause_at",
+            Value::Float64(crate::features::idlepause::pause_at(idle_since, idle_grace)),
+        );
+        put(
+            "idle_resume_at",
+            Value::Float64(self.options.idle_resume_at),
+        );
         put(
             "trackers",
             Value::List(

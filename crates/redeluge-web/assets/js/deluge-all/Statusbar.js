@@ -234,6 +234,23 @@ Deluge.Statusbar = Ext.extend(Ext.ux.StatusBar, {
                 tooltip: _('DHT Nodes'),
             },
             '-',
+            '-',
+            {
+                // Only shown when the idle rule has actually put something
+                // away. A counter that reads zero all day is noise on a bar
+                // that is already full.
+                id: 'statusbar-idle',
+                text: ' ',
+                cls: 'x-btn-text-icon',
+                iconCls: 'icon-pause',
+                hidden: true,
+                tooltip: _('Paused by the idle rule'),
+                handler: function () {
+                    deluge.preferences.show();
+                    deluge.preferences.selectPage('Queue');
+                },
+            },
+            '-',
             {
                 id: 'statusbar-freespace',
                 text: ' ',
@@ -247,6 +264,34 @@ Deluge.Statusbar = Ext.extend(Ext.ux.StatusBar, {
             }
         );
         this.created = true;
+    },
+
+    /**
+     * How many torrents the idle rule is currently holding.
+     *
+     * Counted from the list the interface already has rather than asked for:
+     * the torrents arrive in the same poll that brings the session stats, so
+     * this costs nothing.
+     */
+    updateIdleCount: function () {
+        var item = this.items.get('statusbar-idle');
+        if (!item) return;
+
+        var now = new Date().getTime() / 1000;
+        var held = 0;
+        var store = deluge.torrents && deluge.torrents.getStore();
+        if (store) {
+            store.each(function (record) {
+                if ((Number(record.get('idle_resume_at')) || 0) > now) held++;
+            });
+        }
+
+        if (held > 0) {
+            item.setText(String(held));
+            item.show();
+        } else {
+            item.hide();
+        }
     },
 
     onConnect: function () {
@@ -275,6 +320,7 @@ Deluge.Statusbar = Ext.extend(Ext.ux.StatusBar, {
     },
 
     update: function (stats) {
+        this.updateIdleCount();
         if (!stats) return;
 
         function addSpeed(val) {

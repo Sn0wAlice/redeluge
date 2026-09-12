@@ -20,6 +20,7 @@
 
 pub mod autoadd;
 pub mod blocklist;
+pub mod idlepause;
 pub mod label;
 pub mod scheduler;
 
@@ -36,6 +37,7 @@ use crate::core::Core;
 pub fn spawn(core: Arc<Core>) {
     tokio::spawn(watch_directories(Arc::clone(&core)));
     tokio::spawn(follow_schedule(Arc::clone(&core)));
+    tokio::spawn(rotate_idle_downloads(Arc::clone(&core)));
     tokio::spawn(maintain_blocklist(core));
 }
 
@@ -98,6 +100,206 @@ fn now() -> f64 {
 
 async fn setting(core: &Core, key: &str) -> Option<Json> {
     core.config.lock().await.get(key).cloned()
+}
+
+// ------------------------------------------------------------- idle pause
+
+/// Pauses downloads that are getting nowhere, so the queue can move.
+///
+/// Runs every five seconds because the interface shows a countdown off the
+/// times this writes, and a coarser tick makes that countdown jump.
+///
+/// Everything it does is undone when the rule is turned off: a torrent this
+/// paused is released on the next pass. A feature that leaves things paused
+/// after being switched off is one nobody dares switch on.
+async fn rotate_idle_downloads(core: Arc<Core>) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        let settings =
+            idlepause::Settings::from_config(setting(&core, "idle_pause").await.as_ref()).sane();
+        let now = now();
+
+        let outcome = core
+            .manager
+            .with(move |state| sweep_idle(state, &settings, now))
+            .await;
+
+        match outcome {
+            Ok((released, paused)) => {
+                for id in released {
+                    tracing::info!(torrent = %id, "released by the idle rule");
+                }
+                for id in paused {
+                    tracing::info!(torrent = %id, "paused: idle while something was queued");
+                }
+            }
+            Err(err) => tracing::warn!(error = %err, "the torrent manager is not answering"),
+        }
+    }
+}
+
+/// One pass of the idle rule.
+///
+/// Pure enough to reason about: it is handed the session, the settings, the
+/// time and the timers, and answers what it released and what it paused.
+fn sweep_idle(
+    state: &mut crate::manager::SessionState,
+    settings: &idlepause::Settings,
+    now: f64,
+) -> (Vec<String>, Vec<String>) {
+    use redeluge_libtorrent::{flags, FlagChange};
+
+    let mut released = Vec::new();
+    let mut paused = Vec::new();
+
+    // One snapshot for the whole pass: deciding needs to know what is running,
+    // what is waiting and what is actually paused, all as of the same moment.
+    let statuses = state.session.all_torrent_status();
+    let session_paused = state.session_paused;
+
+    // Torrents this rule is holding, whose time is up or whose rule has been
+    // turned off. A hold is only ever ended here or by somebody pressing
+    // Resume, which `core.resume_torrent` handles: inferring it from whether
+    // the torrent looks paused raced with startup, where a torrent being
+    // checked is not yet reported as paused and lost its hold.
+    let due_back: Vec<String> = state
+        .torrents
+        .iter()
+        .filter(|(_, torrent)| torrent.options.idle_resume_at > 0.0)
+        .filter(|(_, torrent)| !settings.enabled || torrent.options.idle_resume_at <= now)
+        .map(|(id, _)| id.clone())
+        .collect();
+
+    for id in due_back {
+        // Auto-management goes back on because the rule only ever takes
+        // torrents that had it: one that is managed by hand is not the queue's
+        // business and is never a candidate below.
+        let change = FlagChange::new()
+            .set_to(flags::PAUSED, false)
+            .set_to(flags::AUTO_MANAGED, true);
+        if state.session.set_flags(&id, change).is_ok() {
+            if let Some(torrent) = state.torrents.get_mut(&id) {
+                torrent.options.idle_resume_at = 0.0;
+                // The options, not just the session flags: a restart re-adds
+                // every torrent from these.
+                torrent.options.paused = false;
+                torrent.options.auto_managed = true;
+            }
+            state.mark_dirty();
+            state.idle_since.remove(&id);
+            released.push(id);
+        }
+    }
+
+    if !settings.enabled || session_paused {
+        state.idle_since.clear();
+        return (released, paused);
+    }
+
+    let mut running = 0i64;
+    let mut queued = 0i64;
+    let mut candidates: Vec<(String, bool)> = Vec::new();
+
+    for status in &statuses {
+        let Some(torrent) = state.torrents.get(&status.info_hash) else {
+            continue;
+        };
+        // Already put away by this rule.
+        if torrent.options.idle_resume_at > 0.0 {
+            continue;
+        }
+        match torrent.state(status, session_paused) {
+            crate::state::TorrentState::Downloading => {
+                running += 1;
+                // Only torrents the queue is managing. One taken out of
+                // auto-management is being run by hand, and a rule that
+                // paused it would be overruling a decision somebody made.
+                if !torrent.options.auto_managed {
+                    continue;
+                }
+                let idle = i64::from(status.download_payload_rate) < settings.inactive_rate;
+                candidates.push((status.info_hash.clone(), idle));
+            }
+            crate::state::TorrentState::Queued => queued += 1,
+            _ => {}
+        }
+    }
+
+    // Forget torrents that have gone away or stopped downloading.
+    let known: std::collections::HashSet<&String> = candidates.iter().map(|(id, _)| id).collect();
+    state.idle_since.retain(|id, _| known.contains(id));
+
+    for (id, idle) in &candidates {
+        if *idle {
+            state.idle_since.entry(id.clone()).or_insert(now);
+        } else {
+            state.idle_since.remove(id);
+        }
+    }
+
+    // Nothing waiting means nothing to gain, and a torrent paused for no
+    // reason is one that cannot find the peer that was about to turn up. The
+    // timers are kept either way: a torrent that has been idle for four
+    // minutes is still four minutes idle when something queues up behind it.
+    if settings.only_when_queued && queued == 0 {
+        return (released, paused);
+    }
+
+    // Longest idle first, so the one with the least to lose goes first.
+    let mut due: Vec<(&String, f64)> = candidates
+        .iter()
+        .filter(|(_, idle)| *idle)
+        .filter_map(|(id, _)| state.idle_since.get(id).map(|since| (id, *since)))
+        .filter(|(_, since)| idlepause::due(*since, now, settings.grace))
+        .collect();
+    due.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+    for (id, _) in due {
+        if running <= settings.min_active {
+            break;
+        }
+        if settings.only_when_queued && queued == 0 {
+            break;
+        }
+
+        // The flag matters as much as the pause. libtorrent's queue resumes an
+        // auto-managed torrent it finds paused, within about half a minute, so
+        // pausing without clearing it does nothing at all.
+        let change = FlagChange::new()
+            .set_to(flags::PAUSED, true)
+            .set_to(flags::AUTO_MANAGED, false);
+        if state.session.set_flags(id, change).is_ok() {
+            if let Some(torrent) = state.torrents.get_mut(id) {
+                torrent.options.idle_resume_at = now + settings.pause_for as f64;
+                torrent.options.paused = true;
+                torrent.options.auto_managed = false;
+            }
+            state.mark_dirty();
+            paused.push(id.clone());
+            running -= 1;
+            queued -= 1;
+        }
+    }
+
+    for id in &paused {
+        state.idle_since.remove(id);
+    }
+
+    (released, paused)
+}
+
+/// What the interface shows for one torrent.
+pub fn countdown_for(
+    torrent: &crate::torrent::Torrent,
+    idle_since: f64,
+    grace: u64,
+) -> idlepause::Countdown {
+    idlepause::Countdown {
+        idle_since,
+        pause_at: idlepause::pause_at(idle_since, grace),
+        resume_at: torrent.options.idle_resume_at,
+    }
 }
 
 // ---------------------------------------------------------------- auto add

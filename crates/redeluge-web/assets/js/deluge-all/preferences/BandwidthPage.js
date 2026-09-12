@@ -127,7 +127,6 @@ Deluge.preferences.Bandwidth = Ext.extend(Ext.form.FormPanel, {
             'ignore_limits_on_local_network',
             fieldset.add({
                 name: 'ignore_limits_on_local_network',
-                height: 22,
                 fieldLabel: '',
                 labelSeparator: '',
                 boxLabel: _('Ignore limits on local network'),
@@ -137,7 +136,6 @@ Deluge.preferences.Bandwidth = Ext.extend(Ext.form.FormPanel, {
             'rate_limit_ip_overhead',
             fieldset.add({
                 name: 'rate_limit_ip_overhead',
-                height: 22,
                 fieldLabel: '',
                 labelSeparator: '',
                 boxLabel: _('Rate limit IP overhead'),

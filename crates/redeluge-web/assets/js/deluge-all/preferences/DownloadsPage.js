@@ -89,7 +89,6 @@ Deluge.preferences.Downloads = Ext.extend(Ext.FormPanel, {
             fieldset.add({
                 name: 'prioritize_first_last_pieces',
                 labelSeparator: '',
-                height: 22,
                 boxLabel: _('Prioritize first and last pieces of torrent'),
             })
         );
@@ -98,7 +97,6 @@ Deluge.preferences.Downloads = Ext.extend(Ext.FormPanel, {
             fieldset.add({
                 name: 'sequential_download',
                 labelSeparator: '',
-                height: 22,
                 boxLabel: _('Sequential download'),
             })
         );
@@ -107,7 +105,6 @@ Deluge.preferences.Downloads = Ext.extend(Ext.FormPanel, {
             fieldset.add({
                 name: 'add_paused',
                 labelSeparator: '',
-                height: 22,
                 boxLabel: _('Add torrents in Paused state'),
             })
         );
@@ -116,7 +113,6 @@ Deluge.preferences.Downloads = Ext.extend(Ext.FormPanel, {
             fieldset.add({
                 name: 'pre_allocate_storage',
                 labelSeparator: '',
-                height: 22,
                 boxLabel: _('Pre-allocate disk space'),
             })
         );

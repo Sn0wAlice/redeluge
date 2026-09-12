@@ -53,6 +53,9 @@ Deluge.Keys = {
         'time_since_transfer',
         'label',
         'owner',
+        'idle_since',
+        'idle_pause_at',
+        'idle_resume_at',
     ],
 
     /**
@@ -131,6 +134,9 @@ Deluge.Keys = {
         'move_completed_path',
         'super_seeding',
         'label',
+        'idle_since',
+        'idle_pause_at',
+        'idle_resume_at',
     ],
 };
 

@@ -112,6 +112,40 @@ swallow the error anyway. And `label.set_torrent` with a label nobody created
 been skipped or lost, and refusing means a download silently lands with no
 category.
 
+## Pausing idle downloads
+
+Off by default, under Preferences, Queue. A download that holds a place in the
+active queue and transfers nothing is costing another torrent its turn; this
+gives that place away and gives it back later.
+
+The rule is deliberately dull, because a rule that pauses downloads has to be
+predictable:
+
+| | |
+|---|---|
+| Idle below | Bytes per second under which a download counts as idle. Also what libtorrent's own "ignore slow torrents" judges by, so the two agree |
+| Idle for | How long it has to stay under that rate. A torrent between pieces dips for a few seconds all the time |
+| Paused for | How long it is then left alone |
+| Never leave fewer running than | Without this, a queue of torrents that are all idle pauses every one of them |
+| Only when a torrent is waiting | Pausing when nothing wants the place gains nothing and costs the peer that was about to turn up |
+
+Three things it will not touch. A torrent that is seeding, because being
+reachable is what seeding is. A torrent taken out of automatic management,
+because that is someone running it by hand. And the last download still going,
+whatever the queue looks like.
+
+Pressing Resume on a held torrent ends the hold: the person wins. Turning the
+rule off releases everything it is holding, on the next pass.
+
+**Where you see it.** The *Idle* column of the torrent list counts down, first
+to the pause and then to the release. The Status tab of a torrent says the same
+thing in a sentence. The status bar shows how many torrents are being held, and
+only when there are any.
+
+The countdown is computed in the browser from two timestamps rather than being
+a sentence the server wrote, so it ticks between polls instead of being as old
+as the last one.
+
 ## Watched directories
 
 Torrent files dropped into a directory are added and then moved out of the way.

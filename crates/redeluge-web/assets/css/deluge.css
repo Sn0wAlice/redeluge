@@ -68,6 +68,47 @@ button::-moz-focus-inner {
     text-align: center;
 }
 
+/* A checkbox row is as tall as its own label.
+ *
+ * Ext JS pins this wrapper to whatever height the component config asked for,
+ * as an inline style, and the label inside it is not clipped: a caption long
+ * enough to wrap onto a second line spilled out of its row and was drawn over
+ * the checkbox below it. The next row is positioned from the pinned height, so
+ * the two genuinely overlapped rather than merely touching.
+ *
+ * `!important` because the height being overridden is inline, which is the one
+ * case it is for. The minimum keeps a single-line row the size it has always
+ * been, so nothing moves on the pages where the caption already fitted. */
+.x-form-check-wrap {
+    height: auto !important;
+    min-height: 18px;
+
+    /* A row, so its height is exactly its tallest child and a caption cannot
+       be two pixels proud of it however it wraps. Tuning margins to line the
+       box up with the first line of text is what leaves that kind of gap; a
+       row that measures itself does not have one to leave. */
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+}
+
+/* The caption wraps inside the row rather than running past the panel. */
+.x-form-check-wrap label {
+    white-space: normal;
+    line-height: 15px;
+    /* Takes the space the box does not, so the wrap point follows the panel
+       rather than a width written here. */
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.x-form-check-wrap input.x-form-checkbox,
+.x-form-check-wrap input.x-form-radio {
+    /* Against the first line of the caption, not the middle of all of them. */
+    flex: 0 0 auto;
+    margin: 1px 0 0 0;
+}
+
 /* Icon classes */
 .x-deluge-all {
     background-image: url('../icons/all.png');

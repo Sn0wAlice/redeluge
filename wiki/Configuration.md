@@ -104,6 +104,7 @@ in one place, so you never have to.
 |---|---|
 | `autoadd` | Watched directories |
 | `blocklist` | The peer block list |
+| `idle_pause` | Pausing downloads that get nowhere, so the queue can move |
 | `label` | The labels that exist, and what each applies |
 | `scheduler` | The weekly schedule |
 

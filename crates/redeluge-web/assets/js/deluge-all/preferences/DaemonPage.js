@@ -56,7 +56,6 @@ Deluge.preferences.Daemon = Ext.extend(Ext.form.FormPanel, {
             'allow_remote',
             fieldset.add({
                 fieldLabel: '',
-                height: 22,
                 labelSeparator: '',
                 boxLabel: _('Allow Remote Connections'),
                 name: 'allow_remote',

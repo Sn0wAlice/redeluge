@@ -275,6 +275,42 @@ Three things reported from a real install, all measured rather than guessed.
       daemon's API out of step with Deluge's.
 - [x] **A Label column** in the torrent list.
 
+## Pausing idle downloads
+
+Asked for as "download intelligent": see what is active, pause what is not so
+the queue can move, and say a minute beforehand that it is about to happen.
+
+- [x] **The rule**, off by default, in the daemon's own five-second sweep.
+      Downloads only, never the last one running, never a torrent under manual
+      management, and nothing at all unless something is waiting for the place.
+- [x] **The countdown in three places**: a column, the Status tab and the
+      status bar. Computed in the browser from two timestamps, so it ticks
+      rather than arriving stale.
+- [x] **libtorrent's own rotation agrees with it.** `inactive_down_rate` and
+      `inactive_up_rate` come from the same threshold the rule uses. They were
+      never set at all, so the "ignore slow torrents" checkbox judged by a
+      default nobody could see.
+
+Three bugs it uncovered, none of them new:
+
+- [x] **No pause survived a restart.** Resuming the session resumed everything
+      rather than what it had stopped, and the scheduler resumes the session at
+      startup. A torrent paused by hand came back running.
+- [x] **Stopping at a share ratio stopped nothing** on an auto-managed torrent,
+      which is the default: libtorrent's queue resumed it within the minute
+      because the pause did not clear the auto-managed flag.
+- [x] **A rule's pause was recorded only in the session**, not on the torrent,
+      and a restart re-adds every torrent from what was recorded.
+
+## Checkbox captions that wrapped over the next control
+
+- [x] Ext JS pins a checkbox row to the height its config asked for and does
+      not clip the label inside it, so a caption long enough to wrap was drawn
+      over the control below, which had already been positioned. The row is a
+      flex line now: its height is its tallest child, so there is nothing to
+      spill. The thirteen fixed heights that caused it are gone. Checked at
+      three window widths across every preferences page.
+
 ## Loose ends, whenever
 
 - [x] **The Alpine image: dropped, with a reason.** Alpine does ship

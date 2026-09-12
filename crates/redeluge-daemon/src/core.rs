@@ -196,9 +196,30 @@ impl Core {
         self.manager
             .with(move |state| {
                 state.session_paused = paused;
-                let hashes = state.session.torrent_hashes();
-                for id in hashes {
-                    let change = FlagChange::new().set_to(flags::PAUSED, paused);
+
+                if paused {
+                    // Only what is running, and remember which those were. A
+                    // torrent that was already paused is not this pause's to
+                    // undo later.
+                    state.paused_by_session.clear();
+                    for status in state.session.all_torrent_status() {
+                        if status.is_paused {
+                            continue;
+                        }
+                        let change = FlagChange::new().set_to(flags::PAUSED, true);
+                        if state.session.set_flags(&status.info_hash, change).is_ok() {
+                            state.paused_by_session.insert(status.info_hash);
+                        }
+                    }
+                    return;
+                }
+
+                // Resuming starts what this pause stopped, and nothing else.
+                // Resuming everything undid every deliberate pause in the
+                // session, and the scheduler performs a resume at startup, so
+                // no pause of any kind survived a restart.
+                for id in std::mem::take(&mut state.paused_by_session) {
+                    let change = FlagChange::new().set_to(flags::PAUSED, false);
                     let _ = state.session.set_flags(&id, change);
                 }
             })
@@ -211,6 +232,17 @@ impl Core {
             Event::SessionResumed
         });
         Ok(())
+    }
+
+    /// How long the idle rule waits before pausing, for the countdown.
+    ///
+    /// Read from the same settings the rule acts on, and bounded the same way,
+    /// so what the interface counts down to is when it will actually happen.
+    async fn idle_grace(&self) -> u64 {
+        let config = self.config.lock().await;
+        crate::features::idlepause::Settings::from_config(config.get("idle_pause"))
+            .sane()
+            .grace
     }
 
     // ------------------------------------------------------------- labels
@@ -749,6 +781,15 @@ impl Rpc for Core {
                         for id in ids {
                             // Pausing by hand also turns off auto-management,
                             // or the queue would start it again immediately.
+                            // Resuming by hand ends any hold the idle rule
+                            // had on this torrent. The person asked for it to
+                            // run; a rule that put it back a moment later
+                            // would be arguing with them.
+                            if !pause {
+                                if let Some(torrent) = state.torrents.get_mut(&id) {
+                                    torrent.options.idle_resume_at = 0.0;
+                                }
+                            }
                             let change = FlagChange::new()
                                 .set_to(flags::PAUSED, pause)
                                 .set_to(flags::AUTO_MANAGED, !pause);
@@ -2140,6 +2181,7 @@ impl Core {
         peers: bool,
         files: bool,
     ) -> Result<BTreeMap<String, Value>, RpcError> {
+        let grace = self.idle_grace().await;
         let wanted = id.to_owned();
         let status = self
             .manager
@@ -2170,8 +2212,15 @@ impl Core {
                 } else {
                     Vec::new()
                 };
-                let mut out =
-                    torrent.status_with_peers(&status, state.session_paused, &trackers, &peers);
+                let idle_since = state.idle_since.get(&wanted).copied().unwrap_or_default();
+                let mut out = torrent.status_with_peers(
+                    &status,
+                    state.session_paused,
+                    &trackers,
+                    &peers,
+                    idle_since,
+                    grace,
+                );
                 if let Some((entries, progress, priorities)) = file_list {
                     crate::torrent::put_files(&mut out, &entries, &progress, &priorities);
                 }
@@ -2188,6 +2237,7 @@ impl Core {
         filter: Option<Value>,
         keys: Option<Vec<String>>,
     ) -> Result<Value, RpcError> {
+        let grace = self.idle_grace().await;
         let all = self
             .manager
             .with(move |state| {
@@ -2201,9 +2251,21 @@ impl Core {
                         .session
                         .trackers(&status.info_hash)
                         .unwrap_or_default();
+                    let idle_since = state
+                        .idle_since
+                        .get(&status.info_hash)
+                        .copied()
+                        .unwrap_or_default();
                     out.push((
                         status.info_hash.clone(),
-                        torrent.status(&status, session_paused, &trackers),
+                        torrent.status_with_peers(
+                            &status,
+                            session_paused,
+                            &trackers,
+                            &[],
+                            idle_since,
+                            grace,
+                        ),
                     ));
                 }
                 out

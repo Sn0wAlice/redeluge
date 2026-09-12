@@ -9,8 +9,48 @@ talking to.
 
 ## [1.0.2] — 2026-09-12
 
+### Added
+
+- **A rule that pauses downloads which are getting nowhere**, so the queue can
+  move. Off by default. A download under a rate for long enough, with a torrent
+  actually waiting for its place, is paused and let go again later. Never the
+  last one running, never a torrent taken out of auto-management by hand, and
+  downloads only: a torrent that is seeding and transferring nothing is doing
+  its job by being reachable.
+- The countdown is shown in three places, because the point is to know what is
+  about to happen rather than to find out afterwards. An *Idle* column in the
+  torrent list, reading "pauses in 4m" and then "resumes in 58m"; a line in the
+  torrent's Status tab that says which clock is running and what ends it; and a
+  count in the status bar of how many torrents are being held, shown only when
+  there are any. All three tick between polls rather than being a sentence the
+  server wrote two seconds ago.
+- `inactive_down_rate` and `inactive_up_rate` are set from the same threshold
+  the rule uses, so libtorrent's own "ignore slow torrents" and this rule agree
+  about which torrents are slow. Two mechanisms for the same job, disagreeing
+  about the facts, would be impossible to reason about.
+
 ### Fixed
 
+- **No pause survived a restart.** Resuming the session resumed every torrent
+  it could see rather than the ones that session pause had stopped, and the
+  scheduler performs a session resume when the daemon starts. So a torrent
+  paused by hand, or stopped at its share ratio, came back running on the next
+  restart. It now starts what it stopped and nothing else.
+- **Stopping at a share ratio did not stop anything** on a torrent under
+  automatic management, which is the default. libtorrent's queue resumes an
+  auto-managed torrent it finds paused, within about half a minute, so the
+  pause had to clear that flag as well and did not. The same trap is why the
+  new idle rule clears it.
+- A torrent paused by a rule is now recorded as paused on the torrent itself,
+  not only in the session, because a restart re-adds every torrent from what
+  was recorded.
+- **A caption that wrapped onto a second line was drawn over the control
+  below it.** Ext JS pins a checkbox row to the height its config asked for and
+  does not clip the label inside it, so a long caption spilled into the next
+  row, which had already been positioned. The row is laid out as a flex line
+  now, so its height is its tallest child and there is nothing to spill; the
+  fixed heights that caused it are gone from thirteen places. Checked at three
+  window widths across every preferences page: nothing overlaps.
 - **Filtering by tracker matched nothing.** The sidebar and the torrent status
   each worked out the tracker host with their own function, and the two
   disagreed: the list showed `tracker.example.com` while every torrent was

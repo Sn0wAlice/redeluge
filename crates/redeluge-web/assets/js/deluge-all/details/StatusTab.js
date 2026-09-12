@@ -74,6 +74,35 @@ Deluge.details.StatusTab = Ext.extend(Ext.Panel, {
         );
     },
 
+    /**
+     * What the idle rule is doing to this torrent, in a sentence.
+     *
+     * The grid's column has to stay short; here there is room to say why, so
+     * it says which of the two clocks is running and what happens at the end
+     * of it.
+     */
+    idleState: function (status) {
+        var now = new Date().getTime() / 1000;
+        var resumeAt = Number(status.idle_resume_at) || 0;
+        if (resumeAt > now) {
+            return String.format(
+                _('Paused, resumes in {0}'),
+                ftime(Math.round(resumeAt - now))
+            );
+        }
+        var pauseAt = Number(status.idle_pause_at) || 0;
+        if (pauseAt > now) {
+            return String.format(
+                _('Idle, pauses in {0} if a torrent is waiting'),
+                ftime(Math.round(pauseAt - now))
+            );
+        }
+        if (pauseAt > 0) {
+            return _('Idle, pauses as soon as a torrent is waiting');
+        }
+        return _('Not idle');
+    },
+
     onRequestComplete: function (status) {
         seeds =
             status.total_seeds > -1
@@ -116,6 +145,7 @@ Deluge.details.StatusTab = Ext.extend(Ext.Panel, {
             time_since_transfer: ftime(status.time_since_transfer),
         };
         data.auto_managed = _(status.is_auto_managed ? 'True' : 'False');
+        data.idle_state = this.idleState(status);
 
         var translate_tracker_status = {
             Error: _('Error'),

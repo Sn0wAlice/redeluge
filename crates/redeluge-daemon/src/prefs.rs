@@ -68,6 +68,14 @@ pub fn to_settings(config: &Config) -> Vec<Setting> {
         "dont_count_slow_torrents",
         boolean("dont_count_slow_torrents", false),
     ));
+
+    // What "slow" means, for the checkbox above and for the idle rule, which
+    // is one number on purpose. Two mechanisms that stop a stalled torrent
+    // holding up the queue, disagreeing about which torrents are stalled,
+    // would be impossible to reason about.
+    let idle = crate::features::idlepause::Settings::from_config(config.get("idle_pause")).sane();
+    settings.push(Setting::int("inactive_down_rate", idle.inactive_rate));
+    settings.push(Setting::int("inactive_up_rate", idle.inactive_rate));
     settings.push(Setting::boolean(
         "auto_manage_prefer_seeds",
         boolean("auto_manage_prefer_seeds", false),
