@@ -25,6 +25,7 @@ pub mod diskspace;
 pub mod idlepause;
 pub mod label;
 pub mod scheduler;
+pub mod webhook;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -41,6 +42,8 @@ pub fn spawn(core: Arc<Core>) {
     tokio::spawn(follow_schedule(Arc::clone(&core)));
     tokio::spawn(rotate_idle_downloads(Arc::clone(&core)));
     tokio::spawn(guard_disk_space(Arc::clone(&core)));
+    tokio::spawn(announce_torrents(Arc::clone(&core)));
+    tokio::spawn(watch_for_a_test_message(Arc::clone(&core)));
     tokio::spawn(maintain_country_database(Arc::clone(&core)));
     tokio::spawn(maintain_blocklist(core));
 }
@@ -627,6 +630,287 @@ fn sweep_space(
     }
 
     (released, paused)
+}
+
+// ----------------------------------------------------------- notifications
+
+/// Posts a message somewhere when a torrent finishes, arrives or breaks.
+///
+/// Driven by the same event stream every client subscribes to, so there is one
+/// idea of what "finished" means rather than a second one written for this.
+async fn announce_torrents(core: Arc<Core>) {
+    use crate::events::Event;
+    use tokio::sync::broadcast::error::RecvError;
+
+    let mut events = core.manager.subscribe();
+    loop {
+        let event = match events.recv().await {
+            Ok(event) => event,
+            // The stream is bounded and this task is slow by nature, so
+            // falling behind is possible. Missing a message is not worth
+            // stopping for; not knowing it happened would be.
+            Err(RecvError::Lagged(missed)) => {
+                tracing::warn!(missed, "notifications fell behind the event stream");
+                continue;
+            }
+            Err(RecvError::Closed) => return,
+        };
+
+        let (trigger, id) = match &event {
+            Event::TorrentFinished { torrent_id } => {
+                (webhook::Trigger::Finished, torrent_id.clone())
+            }
+            // Only torrents that arrived while running. `from_state` is the
+            // restore at startup, which would otherwise announce the whole
+            // session every time the daemon restarts.
+            Event::TorrentAdded {
+                torrent_id,
+                from_state,
+            } if !from_state => (webhook::Trigger::Added, torrent_id.clone()),
+            Event::TorrentStateChanged { torrent_id, state } if state == "Error" => {
+                (webhook::Trigger::Error, torrent_id.clone())
+            }
+            // A torrent that is downloading again is one whose next completion
+            // is news again, whatever was announced about the last one.
+            Event::TorrentStateChanged { torrent_id, state } if state == "Downloading" => {
+                let id = torrent_id.clone();
+                let _ = core.manager.spawn(move |state| {
+                    if let Some(torrent) = state.torrents.get_mut(&id) {
+                        if torrent.options.announced_finished {
+                            torrent.options.announced_finished = false;
+                            state.mark_dirty();
+                        }
+                    }
+                });
+                continue;
+            }
+            _ => continue,
+        };
+
+        let settings =
+            webhook::Settings::from_config(setting(&core, "webhook").await.as_ref()).sane();
+        if !settings.enabled || !settings.wants(trigger) || settings.usable().next().is_none() {
+            continue;
+        }
+
+        let Some(notice) = describe(&core, &id, trigger).await else {
+            continue;
+        };
+        // Sending is a network round trip per destination, with retries. On
+        // this task it would hold up every event behind it.
+        tokio::spawn(deliver(settings, trigger, notice));
+    }
+}
+
+/// Gathers what a message is written from, or nothing if there is no message.
+///
+/// Also where a completion that is not one gets dropped. libtorrent posts
+/// `torrent_finished` after re-checking a torrent that was already complete,
+/// which happens to every finished torrent at startup: without this, restarting
+/// the daemon would announce the entire library.
+///
+/// Two guards rather than one, because each covers the other's hole. The flag
+/// on the torrent is exact but starts false, so it says nothing about torrents
+/// that finished before this feature existed. The age of the completion covers
+/// those, and is the weaker rule: a restart moments after a torrent finished
+/// would pass it. Together they leave nothing.
+async fn describe(core: &Core, id: &str, trigger: webhook::Trigger) -> Option<webhook::Notice> {
+    /// How recently a torrent must have completed for the completion to be
+    /// news. Minutes rather than seconds because a re-check of a large torrent
+    /// takes a while to reach the alert, and the times being compared are the
+    /// completion's, not the check's.
+    const FRESH: f64 = 300.0;
+
+    let id = id.to_owned();
+    let now = now();
+
+    core.manager
+        .with(move |state| {
+            let status = state.session.torrent_status(&id).ok()?;
+            let torrent = state.torrents.get(&id)?;
+
+            if trigger == webhook::Trigger::Finished {
+                let stale = status.completed_time > 0 && now - status.completed_time as f64 > FRESH;
+                if stale || torrent.options.announced_finished {
+                    return None;
+                }
+            }
+
+            let trackers = state.session.trackers(&id).unwrap_or_default();
+            let current = crate::torrent::current_tracker(&status.current_tracker, &trackers);
+
+            let notice = webhook::Notice {
+                torrent_id: id.clone(),
+                name: torrent.display_name(&status),
+                size: status.total_wanted,
+                save_path: status.save_path.clone(),
+                label: torrent.options.label.clone(),
+                tracker: crate::torrent::tracker_host(&current),
+                ratio: torrent.ratio(&status),
+                message: match trigger {
+                    webhook::Trigger::Error => torrent.message(),
+                    _ => String::new(),
+                },
+            };
+
+            // Marked as announced here rather than after the POST: the flag
+            // means the message was written, not that it arrived. A send that
+            // fails is reported in the log and not repeated, which is better
+            // than a destination that comes back and gets the backlog.
+            if trigger == webhook::Trigger::Finished {
+                if let Some(torrent) = state.torrents.get_mut(&id) {
+                    torrent.options.announced_finished = true;
+                }
+                state.mark_dirty();
+            }
+
+            Some(notice)
+        })
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Sends one notice to every destination, and says how it went.
+///
+/// Returns what to show in the interface after a test: the first thing that
+/// went wrong, or how many destinations took it.
+async fn deliver(
+    settings: webhook::Settings,
+    trigger: webhook::Trigger,
+    notice: webhook::Notice,
+) -> String {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(settings.timeout))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            tracing::warn!(error = %err, "could not build the http client");
+            return format!("could not build the http client: {err}");
+        }
+    };
+
+    let mut sent = 0usize;
+    let mut total = 0usize;
+    let mut first_failure = None;
+
+    for endpoint in settings.usable() {
+        total += 1;
+        let Some(delivery) = webhook::delivery(endpoint, trigger, &notice) else {
+            continue;
+        };
+
+        match post(&client, &delivery, settings.try_times).await {
+            Ok(()) => {
+                sent += 1;
+                tracing::info!(
+                    kind = %endpoint.kind,
+                    event = trigger.as_str(),
+                    torrent = %notice.name,
+                    "sent a notification"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(kind = %endpoint.kind, url = %endpoint.url, error = %err,
+                    "could not send a notification");
+                first_failure.get_or_insert(format!("{}: {err}", endpoint.kind));
+            }
+        }
+    }
+
+    match first_failure {
+        Some(err) => err,
+        None if total == 0 => "no destination is set up".to_owned(),
+        None => format!("sent to {sent} of {total}"),
+    }
+}
+
+/// One POST, retried, with the body a service actually rejects reported.
+async fn post(
+    client: &reqwest::Client,
+    delivery: &webhook::Delivery,
+    tries: u32,
+) -> Result<(), String> {
+    let mut last = String::new();
+    // Serialised here rather than through reqwest's `json`, which this build
+    // does not carry: the client is compiled without its default features so
+    // the daemon pulls in one TLS stack and nothing else.
+    let body = match serde_json::to_vec(&delivery.body) {
+        Ok(body) => body,
+        Err(err) => return Err(err.to_string()),
+    };
+
+    for attempt in 1..=tries.max(1) {
+        let mut request = client.post(&delivery.url);
+        for (name, value) in &delivery.headers {
+            request = request.header(name, value);
+        }
+
+        match request.body(body.clone()).send().await {
+            Ok(response) if response.status().is_success() => return Ok(()),
+            Ok(response) => {
+                let status = response.status();
+                // The status alone is rarely enough: Discord answers 400 with
+                // a body saying which field it did not like.
+                let body = response.text().await.unwrap_or_default();
+                let body: String = body.chars().take(200).collect();
+                last = if body.trim().is_empty() {
+                    format!("the server answered {status}")
+                } else {
+                    format!("the server answered {status}: {}", body.trim())
+                };
+                // A refusal is not going to become an acceptance.
+                if status.is_client_error() {
+                    return Err(last);
+                }
+            }
+            Err(err) => last = err.to_string(),
+        }
+
+        if attempt < tries.max(1) {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    Err(last)
+}
+
+/// Sends the sample message when somebody presses Send Test.
+///
+/// The button writes `test: true` into the settings and this clears it, rather
+/// than an RPC method of its own: the method list is the frozen contract, and
+/// a button is not worth breaking it for.
+async fn watch_for_a_test_message(core: Arc<Core>) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
+        let settings =
+            webhook::Settings::from_config(setting(&core, "webhook").await.as_ref()).sane();
+        if !settings.test {
+            continue;
+        }
+
+        // Cleared first, so a destination that takes thirty seconds to fail
+        // cannot send a second copy in the meantime.
+        record_test(&core, false, "sending...").await;
+        let outcome = deliver(settings, webhook::Trigger::Test, webhook::Notice::sample()).await;
+        tracing::info!(outcome, "sent the test notification");
+        record_test(&core, false, &outcome).await;
+    }
+}
+
+/// Writes the test flag and its result back into the settings.
+async fn record_test(core: &Core, test: bool, outcome: &str) {
+    let mut config = core.config.lock().await;
+    let Some(Json::Object(mut stored)) = config.get("webhook").cloned() else {
+        return;
+    };
+    stored.insert("test".to_owned(), Json::Bool(test));
+    stored.insert("last_test".to_owned(), Json::String(outcome.to_owned()));
+    if let Err(err) = config.set("webhook", Json::Object(stored)) {
+        tracing::warn!(error = %err, "could not record the test notification");
+    }
 }
 
 // ---------------------------------------------------------------- auto add

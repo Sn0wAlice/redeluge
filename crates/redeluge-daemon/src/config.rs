@@ -435,6 +435,10 @@ pub fn defaults(config_dir: &Path) -> Vec<(String, Json)> {
             "scheduler".into(),
             crate::features::scheduler::Settings::default_json(),
         ),
+        (
+            "webhook".into(),
+            crate::features::webhook::Settings::default_json(),
+        ),
     ]
 }
 

@@ -146,6 +146,41 @@ The countdown is computed in the browser from two timestamps rather than being
 a sentence the server wrote, so it ticks between polls instead of being as old
 as the last one.
 
+## Telling you when a torrent finishes
+
+Off by default, under Preferences, Notifications. A POST goes out when a
+download finishes, when a torrent goes into error, and optionally when one is
+added.
+
+This is what most people installed the Execute plugin for. Execute did it by
+running a shell script as the daemon user with the torrent's name as an
+argument, which is a remote code execution primitive wearing a convenience hat.
+A POST is the same result and runs nothing.
+
+Four kinds of destination, as many of each as you like:
+
+| | |
+|---|---|
+| Discord | The incoming-webhook URL from the channel's settings. The message arrives as an embed, green when a download finished and red when something broke |
+| ntfy | The topic URL you would open in the app. The token field takes an access token for a protected topic |
+| Gotify | The server URL, plus an application token. `/message` is added for you, and a token already in the URL is left alone |
+| Webhook | One JSON object posted to anything else: the event, the torrent's name, size, path, label, tracker, ratio and error. The token, if you set one, is sent as a bearer token |
+
+Every one of them is a POST with a JSON body. That is not only tidiness: ntfy's
+header form cannot carry anything outside ASCII, and a good half of the torrent
+names that matter are not ASCII.
+
+**Send test** posts a sample message to every destination on the page and
+writes back what happened, under the grid. A wrong URL says so there rather
+than in a log nobody is watching. A destination that answers with a refusal is
+not retried; one that times out or fails is, three times.
+
+Two things it will not do. It does not announce your whole library when the
+daemon restarts: libtorrent reports a torrent as finished again after it
+re-checks one that was already complete, so a completion older than five
+minutes is not news. And it does not announce the torrents restored at startup,
+only the ones that arrive while it is running.
+
 ## Running out of disk space
 
 On by default, under Preferences, Downloads. Every other feature here waits to

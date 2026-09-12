@@ -119,6 +119,7 @@ Deluge.preferences.PreferencesWindow = Ext.extend(Ext.Window, {
         this.addPage(new Deluge.preferences.AutoAdd());
         this.addPage(new Deluge.preferences.Blocklist());
         this.addPage(new Deluge.preferences.Scheduler());
+        this.addPage(new Deluge.preferences.Notifications());
     },
 
     onApply: function (e) {

@@ -109,6 +109,7 @@ in one place, so you never have to.
 | `idle_pause` | Pausing downloads that get nowhere, so the queue can move |
 | `label` | The labels that exist, and what each applies |
 | `scheduler` | The weekly schedule |
+| `webhook` | Where to post when a torrent finishes, arrives or breaks |
 
 Each has a preferences page in the Web UI as well.
 

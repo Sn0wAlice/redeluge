@@ -7,6 +7,30 @@ redeluge numbers its own releases from 1.0.0. The version the daemon reports
 to clients stays `2.2.1`, because that is the Deluge a client expects to be
 talking to.
 
+## [1.2.0] — 2026-09-12
+
+### Added
+
+- **Notifications by webhook**, under Preferences, Notifications, off by
+  default. A POST when a download finishes, when a torrent goes into error and,
+  if you want it, when one is added. Discord, ntfy, Gotify and a plain JSON
+  webhook, as many destinations as you like.
+- This is what the Execute plugin was really installed for. Execute ran a shell
+  script as the daemon user with the torrent's name as an argument, which is a
+  remote code execution primitive wearing a convenience hat; this runs nothing.
+- Every kind posts JSON rather than using ntfy's header form, because those
+  headers cannot carry anything outside ASCII and half the torrent names that
+  matter are not ASCII. Gotify's `/message` is appended for you, a token
+  already in the URL is left alone, and an ntfy instance living under a path of
+  its own keeps that path.
+- **Send test** posts a sample to every destination and writes back what
+  happened, under the grid: a wrong URL says so on the page rather than in a
+  log nobody is watching. A refusal is not retried, a timeout is.
+- It does not announce your library on restart. libtorrent reports a torrent as
+  finished again after re-checking one that was already complete, which happens
+  to every finished torrent at startup, so a completion older than five minutes
+  is not treated as news; nor are the torrents restored at startup.
+
 ## [1.1.0] — 2026-09-12
 
 ### Added

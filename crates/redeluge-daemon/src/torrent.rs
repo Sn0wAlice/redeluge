@@ -87,6 +87,15 @@ pub struct TorrentOptions {
     #[serde(default)]
     pub idle_resume_at: f64,
 
+    /// Whether a finished notification has already gone out for this torrent.
+    ///
+    /// Saved with the torrent because the thing it prevents happens at
+    /// startup: libtorrent reports a torrent as finished again once it has
+    /// re-checked one that was already complete, so without this a restart
+    /// would announce the whole library.
+    #[serde(default)]
+    pub announced_finished: bool,
+
     /// Whether the disk-space rule is the reason this torrent is paused.
     ///
     /// Saved with the torrent, like the idle rule's clock above and for the
@@ -162,6 +171,7 @@ impl Default for TorrentOptions {
             shared: false,
             super_seeding: false,
             idle_resume_at: 0.0,
+            announced_finished: false,
             space_paused: false,
             space_was_managed: true,
             trackers: Vec::new(),
@@ -493,7 +503,11 @@ impl Torrent {
         self.id.clone()
     }
 
-    fn message(&self) -> String {
+    /// The error or status line shown for this torrent.
+    ///
+    /// Public because a notification carries it: what went wrong is the whole
+    /// content of the message an error sends.
+    pub fn message(&self) -> String {
         if let Some(error) = &self.forced_error {
             return error.clone();
         }

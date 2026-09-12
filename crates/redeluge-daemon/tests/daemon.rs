@@ -444,6 +444,7 @@ const ADDED_BY_REDELUGE: &[&str] = &[
     "idle_pause",
     "label",
     "scheduler",
+    "webhook",
 ];
 
 #[test]
