@@ -11,6 +11,10 @@ set -euo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 image=redeluge-rust:dev
 
+# Before anything is built: on the host, because it asks git what the
+# repository holds and the container has only a mounted working tree.
+"${repo}/docker/check-assets.sh"
+
 docker build -f "${repo}/docker/Dockerfile.rust" --target base -t "${image}" "${repo}"
 
 if [[ ${1:-} == shell ]]; then

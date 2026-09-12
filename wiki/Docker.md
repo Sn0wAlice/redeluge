@@ -106,7 +106,8 @@ standard library only, and is in the image at
 | `DELUGE_WEB_INTERFACE` | `0.0.0.0` | Web UI bind address inside the container |
 | `DELUGE_WEB_BASE` | `/` | Path prefix, for serving under a reverse proxy subpath |
 | `DELUGE_DAEMON_PORT` | `58846` | Daemon RPC port |
-| `DELUGE_LOGLEVEL` | `info` | Passed to both processes |
+| `DELUGE_LOGLEVEL` | `info` | `none`, `critical`, `error`, `warning`, `info` or `debug`, translated to `RUST_LOG` |
+| `RUST_LOG` | unset | What the binaries actually read. Wins over `DELUGE_LOGLEVEL`, and can name a module: `redeluge_daemon::features=debug` |
 | `PUID` / `PGID` | `1000` | Ownership of `/config` and `/downloads` |
 | `UMASK` | `022` | Umask for both processes |
 

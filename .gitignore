@@ -18,3 +18,17 @@ __pycache__/
 # Editor leftovers
 *~
 .DS_Store
+
+# The Web UI's icons, which are not optional.
+#
+# Many macOS global ignore files carry `Icon?`, meant for the `Icon\r` resource
+# file the Finder writes. That pattern has no slash, so git applies it at every
+# level, and on a case-insensitive filesystem git matches ignore patterns
+# case-insensitively too: it matches the directory `icons`. All fifty-six icons
+# were silently absent from the repository because of it, so a clone had an
+# interface with no icons at all and only a fresh checkout could show it.
+#
+# The directory has to be re-included before its contents: git will not look
+# inside an excluded directory.
+!crates/redeluge-web/assets/icons/
+!crates/redeluge-web/assets/icons/**

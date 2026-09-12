@@ -10,6 +10,27 @@ umask "${UMASK:-022}"
 CONFIG_DIR=${DELUGE_CONFIG_DIR:-/config}
 DAEMON_PORT=${DELUGE_DAEMON_PORT:-58846}
 
+# Both binaries take their log level from RUST_LOG, which is the only one they
+# read and the only one that can name a module. `DELUGE_LOGLEVEL` is what the
+# Deluge container images use, and someone moving a compose file across should
+# not have to find that out by getting no logs, so it is honoured when RUST_LOG
+# says nothing. The image sets neither, so an explicit RUST_LOG always wins.
+# Deluge's levels and Rust's are not quite the same set.
+if [[ -z ${RUST_LOG:-} ]]; then
+    case "${DELUGE_LOGLEVEL:-info}" in
+        none | None | NONE) RUST_LOG=off ;;
+        critical | CRITICAL | error | ERROR) RUST_LOG=error ;;
+        warning | WARNING | warn | WARN) RUST_LOG=warn ;;
+        info | INFO) RUST_LOG=info ;;
+        debug | DEBUG | trace | TRACE) RUST_LOG=debug ;;
+        *)
+            echo "[run] DELUGE_LOGLEVEL=${DELUGE_LOGLEVEL} is not a level I know; using info" >&2
+            RUST_LOG=info
+            ;;
+    esac
+    export RUST_LOG
+fi
+
 # A configuration from the Python daemon holds its torrent list as a pickle,
 # which this daemon cannot read. Converting it needs Python, and this image
 # deliberately has none, so the conversion is a one-time thing the operator runs

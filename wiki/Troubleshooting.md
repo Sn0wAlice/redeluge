@@ -8,8 +8,10 @@ RUST_LOG=debug redeluged
 RUST_LOG=redeluge_daemon::features=debug redeluged
 ```
 
-In the container, `DELUGE_LOGLEVEL` sets it for both processes and
-`docker compose logs -f` shows them.
+In the container, `RUST_LOG` does the same for both processes, and
+`DELUGE_LOGLEVEL` is accepted as well, with Deluge's own level names, so a
+compose file written for a Deluge image keeps working. `docker compose logs -f`
+shows them.
 
 ## The daemon will not start
 

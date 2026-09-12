@@ -14,7 +14,11 @@ services:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       UMASK: "022"
-      RUST_LOG: ${RUST_LOG:-info}
+      # Either of these sets the log level. RUST_LOG is the one the binaries
+      # read and the only one that can name a module; DELUGE_LOGLEVEL is what
+      # the Deluge images use and is translated for you.
+      RUST_LOG: ${RUST_LOG:-}
+      DELUGE_LOGLEVEL: ${DELUGE_LOGLEVEL:-info}
       # Applied on first boot only, unless DELUGE_WEB_PASSWORD_RESET=1.
       DELUGE_WEB_PASSWORD: ${DELUGE_WEB_PASSWORD:?copy .env.example to .env and set a web password}
       DELUGE_WEB_PASSWORD_RESET: ${DELUGE_WEB_PASSWORD_RESET:-0}
