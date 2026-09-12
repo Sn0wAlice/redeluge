@@ -391,11 +391,9 @@ impl Torrent {
         put("comment", Value::Str(String::new()));
         put("creator", Value::Str(String::new()));
 
-        put("tracker", Value::Str(status.current_tracker.clone()));
-        put(
-            "tracker_host",
-            Value::Str(tracker_host(&status.current_tracker)),
-        );
+        let current = current_tracker(&status.current_tracker, trackers);
+        put("tracker", Value::Str(current.clone()));
+        put("tracker_host", Value::Str(tracker_host(&current)));
         put("tracker_status", Value::Str(self.tracker_status.clone()));
         put(
             "trackers",
@@ -478,30 +476,76 @@ impl Torrent {
     }
 }
 
-/// The host part of a tracker URL, which clients group by.
-fn tracker_host(url: &str) -> String {
-    let without_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-    let host = without_scheme
-        .split(['/', ':'])
-        .next()
-        .unwrap_or("")
-        .to_owned();
-
-    // Deluge drops the leading label of a three-part name so that
-    // tracker.example.org and announce.example.org group together.
-    let labels: Vec<&str> = host.split('.').collect();
-    if labels.len() > 2 {
-        let tail = &labels[labels.len() - 2..];
-        // Not for two-part public suffixes like co.uk, where the result would
-        // be the suffix itself.
-        if tail[0].len() > 3 || tail[1].len() > 3 {
-            return tail.join(".");
-        }
-        if labels.len() > 3 {
-            return labels[labels.len() - 3..].join(".");
-        }
+/// Which tracker a torrent counts as being on.
+///
+/// The one it last announced to, or the first it knows about when it has not
+/// announced yet. The fallback is Deluge's, and without it a torrent shows no
+/// tracker at all until its first announce succeeds, which puts it in the
+/// sidebar's group for torrents that have none.
+///
+/// Shared, because the filter tree and the torrent status both need the
+/// answer, and the last time each worked it out for itself they disagreed.
+pub fn current_tracker(announced: &str, trackers: &[redeluge_libtorrent::TrackerEntry]) -> String {
+    if !announced.is_empty() {
+        return announced.to_owned();
     }
-    host
+    trackers
+        .first()
+        .map(|entry| entry.url.clone())
+        .unwrap_or_default()
+}
+
+/// What clients group a torrent's tracker by.
+///
+/// Deluge's rule, label for label, because this string is a filter value as
+/// well as something to display: a client sends back exactly what it was shown
+/// and expects it to match. Subdomains are dropped so that
+/// `tracker.example.org` and `announce.example.org` are one group.
+///
+/// The rule was a length heuristic here once, which got `x.abc.com` wrong
+/// (three-letter second level) and turned the IP address `192.168.1.1` into
+/// `168.1.1`. This is the list Deluge actually uses.
+pub fn tracker_host(url: &str) -> String {
+    // udp:// parses like any other scheme once it is one this understands.
+    let without_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    // Strip any credentials, then take the host up to the port or path.
+    let authority = without_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, rest)| rest);
+
+    // An IPv6 literal is bracketed, and its colons are not a port separator.
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or("").to_owned();
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+
+    if host.is_empty() {
+        return String::new();
+    }
+    // An address is not a name and has no subdomain to drop.
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return host.to_owned();
+    }
+
+    let labels: Vec<&str> = host.split('.').collect();
+    if labels.len() <= 2 {
+        return host.to_owned();
+    }
+
+    // Two-part public suffixes: keep three labels so the answer is a domain
+    // rather than the suffix itself.
+    let second_level = labels[labels.len() - 2];
+    let top_level = labels[labels.len() - 1];
+    let keep = if matches!(second_level, "co" | "com" | "net" | "org")
+        || matches!(top_level, "uk" | "au")
+    {
+        3
+    } else {
+        2
+    };
+    labels[labels.len().saturating_sub(keep)..].join(".")
 }
 
 /// Adds the three file keys to a status dictionary.
@@ -644,5 +688,82 @@ mod file_tests {
         assert_eq!(progress[1], Value::Float64(0.0));
         assert_eq!(priorities.len(), 2);
         assert_eq!(priorities[0], Value::Int(4));
+    }
+}
+
+#[cfg(test)]
+mod tracker_host_tests {
+    use super::tracker_host;
+
+    #[test]
+    fn a_subdomain_is_dropped_so_one_tracker_is_one_group() {
+        // announce and tracker on the same site are the same tracker.
+        assert_eq!(
+            tracker_host("http://tracker.example.com/announce"),
+            "example.com"
+        );
+        assert_eq!(
+            tracker_host("udp://announce.example.com:6969"),
+            "example.com"
+        );
+        assert_eq!(tracker_host("https://example.com/announce"), "example.com");
+    }
+
+    #[test]
+    fn a_three_letter_second_level_is_still_dropped() {
+        // The rule used to be a length heuristic, and this is the case it got
+        // wrong: it kept the whole host, so the sidebar listed a name no
+        // torrent was recorded under.
+        assert_eq!(tracker_host("http://x.abc.com/announce"), "abc.com");
+        assert_eq!(tracker_host("http://a.b.cd.info/announce"), "cd.info");
+    }
+
+    #[test]
+    fn a_two_part_suffix_keeps_three_labels() {
+        // Otherwise the answer is the suffix itself, and every British tracker
+        // lands in one group called co.uk.
+        assert_eq!(
+            tracker_host("http://tracker.example.co.uk/announce"),
+            "example.co.uk"
+        );
+        assert_eq!(tracker_host("http://a.b.net.au/announce"), "b.net.au");
+        assert_eq!(
+            tracker_host("http://tracker.example.org.uk/a"),
+            "example.org.uk"
+        );
+    }
+
+    #[test]
+    fn an_address_is_not_a_name_and_keeps_every_part() {
+        // The heuristic turned this into 168.1.1, which is not a host at all.
+        assert_eq!(
+            tracker_host("http://192.168.1.1:8080/announce"),
+            "192.168.1.1"
+        );
+        assert_eq!(tracker_host("udp://10.0.0.1:6969"), "10.0.0.1");
+        assert_eq!(
+            tracker_host("http://[2001:db8::1]:8080/announce"),
+            "2001:db8::1"
+        );
+    }
+
+    #[test]
+    fn credentials_and_ports_are_not_part_of_the_host() {
+        assert_eq!(
+            tracker_host("http://user:pass@tracker.example.com/a"),
+            "example.com"
+        );
+        assert_eq!(
+            tracker_host("http://example.com:1337/announce"),
+            "example.com"
+        );
+    }
+
+    #[test]
+    fn no_tracker_is_an_empty_host_rather_than_a_word() {
+        // It has to be empty, because this same string is the filter value the
+        // sidebar sends back: a word here would filter to nothing.
+        assert_eq!(tracker_host(""), "");
+        assert_eq!(tracker_host("not a url"), "not a url");
     }
 }

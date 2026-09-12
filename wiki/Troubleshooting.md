@@ -210,6 +210,18 @@ them, because each is a separate call into libtorrent.
 A torrent added from a magnet still shows nothing until its metadata arrives:
 until then it has no file list to report.
 
+## Filtering by tracker shows nothing
+
+Fixed. The sidebar and the torrents used to work the tracker host out
+separately, and the two disagreed: the list offered `tracker.example.com` while
+every torrent was recorded under `example.com`. One function answers both now.
+
+Subdomains are dropped on purpose, so `tracker.example.org` and
+`announce.example.org` are one group. An address is left whole, and a two-part
+suffix like `co.uk` keeps three labels so the group is a domain rather than the
+suffix. A torrent that has not announced yet is grouped under the first tracker
+it knows about rather than under *No Tracker*.
+
 ## The tracker column has no icons
 
 By design. Deluge fetched each tracker's favicon through its web server and

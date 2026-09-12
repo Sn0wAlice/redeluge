@@ -7,6 +7,29 @@ redeluge numbers its own releases from 1.0.0. The version the daemon reports
 to clients stays `2.2.1`, because that is the Deluge a client expects to be
 talking to.
 
+## [1.0.2] — 2026-09-12
+
+### Fixed
+
+- **Filtering by tracker matched nothing.** The sidebar and the torrent status
+  each worked out the tracker host with their own function, and the two
+  disagreed: the list showed `tracker.example.com` while every torrent was
+  recorded under `example.com`, so clicking the row returned an empty list. The
+  empty case was worse, the list saying `Error` where the status said nothing
+  at all. There is one function now, and a test walks every row of the sidebar
+  and asserts that filtering on it returns the number of torrents the row
+  claims.
+- The rule that drops a subdomain was a guess about label lengths, and it got
+  `x.abc.com` wrong, leaving it ungrouped, and turned the tracker address
+  `192.168.1.1` into `168.1.1`, which is not a host. It is Deluge's own rule
+  now: an address is left alone, a two-part public suffix like `co.uk` keeps
+  three labels, everything else keeps two.
+- A torrent showed no tracker until its first announce succeeded, and sat in
+  the sidebar under the torrents that have none. It falls back to the first
+  tracker it knows about, which is what Deluge does.
+- The sidebar's row for torrents with no tracker was blank, like the label and
+  owner rows before it. It reads *No Tracker*.
+
 ## [1.0.1] — 2026-09-12
 
 ### Added

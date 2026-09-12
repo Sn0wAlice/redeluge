@@ -380,3 +380,74 @@ async fn the_defaults_are_the_documented_ones_when_nothing_is_set() {
     assert_eq!(options.max_upload_speed, -1.0);
     assert!(!options.stop_at_ratio);
 }
+
+/// Every value the sidebar can show is a value the filter can match.
+///
+/// This is the shape of a bug that shipped: the filter tree and the torrent
+/// status each computed the tracker host with their own function, and the two
+/// disagreed. The sidebar listed `tracker.example.com` while every torrent was
+/// recorded under `example.com`, so clicking the row filtered to nothing, and
+/// the empty case was worse: the tree said `Error` and the status said "".
+///
+/// A row in that list is a filter value the client sends straight back, so the
+/// two have to be the same string.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_filter_row_matches_the_torrents_it_counts() {
+    let (core, _dir) = daemon().await;
+    let context = admin();
+
+    let tree = core
+        .call(&context, "core.get_filter_tree", Vec::new(), Vec::new())
+        .await
+        .expect("a filter tree");
+
+    let Value::Dict(categories) = tree else {
+        panic!("the filter tree is a dictionary");
+    };
+
+    for (category, rows) in &categories {
+        let Some(category) = category.as_str() else {
+            continue;
+        };
+        let Value::List(rows) = rows else { continue };
+
+        for row in rows {
+            let Value::List(pair) = row else { continue };
+            let Some(value) = pair.first().and_then(Value::as_str) else {
+                continue;
+            };
+            let count = pair.get(1).and_then(Value::as_i64).unwrap_or(0);
+
+            // "All" and "Active" are the two pseudo-values every category may
+            // carry; everything else is a real value off a torrent.
+            if value == "All" || (category == "state" && value == "Active") {
+                continue;
+            }
+
+            let filter = Value::Dict(vec![(
+                Value::Str(category.to_owned()),
+                Value::Str(value.to_owned()),
+            )]);
+            let matched = core
+                .call(
+                    &context,
+                    "core.get_torrents_status",
+                    vec![filter, Value::List(vec![Value::Str("name".to_owned())])],
+                    Vec::new(),
+                )
+                .await
+                .expect("a status answer");
+
+            let Value::Dict(torrents) = matched else {
+                panic!("a status answer is a dictionary");
+            };
+            assert_eq!(
+                torrents.len() as i64,
+                count,
+                "the sidebar says {category} {value:?} has {count}, \
+                 and filtering on it returns {}",
+                torrents.len()
+            );
+        }
+    }
+}

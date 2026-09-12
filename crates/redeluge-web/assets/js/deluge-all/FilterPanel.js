@@ -92,6 +92,7 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
     emptyLabel: function () {
         if (this.filterType == 'label') return _('No Label');
         if (this.filterType == 'owner') return _('No Owner');
+        if (this.filterType == 'tracker_host') return _('No Tracker');
         return _('None');
     },
 

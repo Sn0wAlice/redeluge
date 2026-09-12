@@ -2280,9 +2280,17 @@ impl Core {
                     .into_iter()
                     .filter_map(|status| {
                         let torrent = state.torrents.get(&status.info_hash)?;
+                        // The trackers as well as the announced one, because
+                        // the rule falls back to the first when nothing has
+                        // been announced to yet, and the status applies the
+                        // same rule.
+                        let trackers = state
+                            .session
+                            .trackers(&status.info_hash)
+                            .unwrap_or_default();
                         Some((
                             torrent.state(&status, session_paused),
-                            status.current_tracker.clone(),
+                            crate::torrent::current_tracker(&status.current_tracker, &trackers),
                             torrent.options.owner.clone(),
                             torrent.options.label.clone(),
                             status.download_payload_rate > 0 || status.upload_payload_rate > 0,
@@ -2310,7 +2318,13 @@ impl Core {
             if transferring {
                 active += 1;
             }
-            let host = tracker_host_of(&tracker);
+            // The same function the status uses, and that is the whole point.
+            // There were two, and they disagreed: this one kept the subdomain
+            // and the status dropped it, so the sidebar listed
+            // `tracker.example.com` while every torrent was recorded under
+            // `example.com`, and clicking the row filtered to nothing. A
+            // filter value has to be the value it is compared against.
+            let host = crate::torrent::tracker_host(&tracker);
             *by_tracker.entry(host).or_insert(0) += 1;
             *by_owner.entry(owner).or_insert(0) += 1;
             *by_label.entry(label).or_insert(0) += 1;
@@ -2502,21 +2516,6 @@ fn kib_to_bytes(kib: f64) -> i32 {
         return -1;
     }
     (kib * 1024.0).min(f64::from(i32::MAX)) as i32
-}
-
-fn tracker_host_of(url: &str) -> String {
-    let host = url
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(url)
-        .split(['/', ':'])
-        .next()
-        .unwrap_or("");
-    if host.is_empty() {
-        "Error".to_owned()
-    } else {
-        host.to_owned()
-    }
 }
 
 /// The filter a client sent, as key/value pairs.
