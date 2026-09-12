@@ -99,6 +99,31 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
                         scope: this,
                     },
                     '->',
+                    '->',
+                    {
+                        // The daemon's `keyword` filter searches the name, the
+                        // state, the tracker and its last message, the label
+                        // and the infohash, and every term has to match. All
+                        // of that existed and nothing ever sent it.
+                        id: 'search',
+                        xtype: 'textfield',
+                        width: 170,
+                        emptyText: _('Search'),
+                        enableKeyEvents: true,
+                        listeners: {
+                            keyup: {
+                                fn: this.onSearchKey,
+                                scope: this,
+                                // Buffered: a poll per keystroke would be one
+                                // request per letter typed.
+                                buffer: 400,
+                            },
+                            specialkey: {
+                                fn: this.onSearchSpecialKey,
+                                scope: this,
+                            },
+                        },
+                    },
                     {
                         id: 'help',
                         iconCls: 'icon-help',
@@ -160,6 +185,27 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
 
     onConnectionManagerClick: function () {
         deluge.connectionManager.show();
+    },
+
+    /**
+     * What is typed in the search box, trimmed, or nothing.
+     */
+    getSearch: function () {
+        var field = this.items.get('search');
+        if (!field) return '';
+        return (field.getValue() || '').trim();
+    },
+
+    onSearchKey: function () {
+        // The poll carries the term, so asking for one now is the whole of it.
+        deluge.ui.update();
+    },
+
+    onSearchSpecialKey: function (field, e) {
+        if (e.getKey() === e.ESC) {
+            field.setValue('');
+            deluge.ui.update();
+        }
     },
 
     onHelpClick: function () {

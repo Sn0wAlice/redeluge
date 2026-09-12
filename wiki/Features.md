@@ -146,6 +146,21 @@ The countdown is computed in the browser from two timestamps rather than being
 a sentence the server wrote, so it ticks between polls instead of being as old
 as the last one.
 
+## Finding a torrent
+
+The search box in the toolbar sends the daemon's `keyword` filter, which looks
+at the name, the state, the tracker and its last message, the label and the
+infohash. Every term has to match, so two words narrow rather than widen. It
+applies on top of whatever the sidebar has selected, so you can search inside a
+label. Escape clears it.
+
+Separately, right-clicking the **Label** column header offers *Show labels*: a
+tick per label, plus *No Label*, and unticking one takes those torrents out of
+the view. That is a view filter, done in the browser, so it is instant and
+survives the next poll. It answers a different question from the sidebar's
+Labels list, which picks one label to look at; this one hides the ones you do
+not want to see.
+
 ## Watched directories
 
 Torrent files dropped into a directory are added and then moved out of the way.

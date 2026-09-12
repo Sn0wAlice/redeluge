@@ -311,6 +311,18 @@ Three bugs it uncovered, none of them new:
       spill. The thirteen fixed heights that caused it are gone. Checked at
       three window widths across every preferences page.
 
+## Finding things in a long list
+
+- [x] **A search box.** The `keyword` filter existed in the daemon and no
+      control sent it, which is the cheapest kind of missing feature. It
+      narrows the sidebar's selection rather than replacing it.
+- [x] **Untick labels on the Label column header** to take them out of the
+      current view, *No Label* included. Done in the browser rather than as a
+      query: it is the view, it is instant, and it leaves the sidebar's
+      single-label filter to mean what it means. Identifying the column needed
+      its `dataIndex`, not its id: only columns that declare an id have one and
+      the rest carry their position, so the first version matched nothing.
+
 ## Loose ends, whenever
 
 - [x] **The Alpine image: dropped, with a reason.** Alpine does ship

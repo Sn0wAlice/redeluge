@@ -152,6 +152,16 @@ deluge.ui = {
         this.inFlight = true;
 
         var filters = deluge.sidebar.getFilterStates();
+
+        // The search box narrows whatever the sidebar selected, rather than
+        // replacing it: searching inside a label is the useful thing to do.
+        var search = deluge.toolbar && deluge.toolbar.getSearch
+            ? deluge.toolbar.getSearch()
+            : '';
+        if (search) {
+            filters['keyword'] = search;
+        }
+
         this.oldFilters = this.filters;
         this.filters = filters;
 

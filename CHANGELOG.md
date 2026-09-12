@@ -29,6 +29,18 @@ talking to.
   about which torrents are slow. Two mechanisms for the same job, disagreeing
   about the facts, would be impossible to reason about.
 
+- **A search box**, in the toolbar. The daemon has always been able to search:
+  its `keyword` filter covers the name, the state, the tracker and its last
+  message, the label and the infohash, with every term having to match. Nothing
+  in the interface ever sent it. It narrows whatever the sidebar has selected
+  rather than replacing it, so searching inside a label works, and Escape
+  clears it.
+- **Show or hide labels from the Label column's header menu.** Right-click the
+  header and untick a label to take it out of the view, including *No Label*
+  for the torrents that have none. It is a view filter applied in the browser,
+  not a query: the torrents are already here, it is instant, it survives the
+  next poll, and it does not argue with the sidebar's own label filter, which
+  answers the different question of which single label to look at.
 - **Peer countries can actually be filled in.** The flags were shipped earlier
   in this version; what was missing was the data. Deluge pointed
   `geoip_db_location` at `/usr/share/GeoIP/GeoIP.dat`, a file in the GeoLite

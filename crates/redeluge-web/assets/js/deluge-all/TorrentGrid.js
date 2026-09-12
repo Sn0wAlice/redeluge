@@ -445,6 +445,9 @@
             deluge.events.on('torrentsRemoved', this.onTorrentsRemoved, this);
             deluge.events.on('disconnect', this.onDisconnect, this);
 
+            // The header menu exists only once the view has rendered.
+            this.on('render', this.installLabelHeaderMenu, this, { single: true });
+
             this.on('rowcontextmenu', function (grid, rowIndex, e) {
                 e.stopEvent();
                 var selection = grid.getSelectionModel();
@@ -507,6 +510,10 @@
         update: function (torrents, wipe) {
             var store = this.getStore();
 
+            // Kept so unticking a label can redraw without another poll.
+            this.lastTorrents = torrents;
+            torrents = this.withoutHiddenLabels(torrents);
+
             // Need to perform a complete reload of the torrent grid.
             if (wipe) {
                 store.removeAll();
@@ -549,6 +556,128 @@
             var sortState = store.getSortState();
             if (!sortState) return;
             store.sort(sortState.field, sortState.direction);
+        },
+
+        /**
+         * Which labels are hidden from the current view, by name.
+         *
+         * A view filter, not a query: the torrents are already here, and the
+         * sidebar's own label filter picks one label to look at. This is the
+         * other question, "everything except these", and answering it in the
+         * browser means it is instant and does not argue with the sidebar.
+         */
+        hiddenLabels: {},
+
+        /**
+         * The same torrents, without the ones whose label is unticked.
+         *
+         * Filtering the data on the way in rather than filtering the store:
+         * the update below adds, edits and removes records by comparing them
+         * with what arrived, and a filtered store hides records from that
+         * comparison, which would leave rows behind.
+         */
+        withoutHiddenLabels: function (torrents) {
+            var hidden = this.hiddenLabels;
+            var any = false;
+            for (var name in hidden) {
+                if (hidden[name]) {
+                    any = true;
+                    break;
+                }
+            }
+            if (!any || !torrents) return torrents;
+
+            var kept = {};
+            for (var id in torrents) {
+                var label = torrents[id]['label'] || '';
+                if (!hidden[label]) kept[id] = torrents[id];
+            }
+            return kept;
+        },
+
+        /**
+         * Shows or hides one label, and redraws from what was last received.
+         */
+        setLabelHidden: function (name, hidden) {
+            if (hidden) {
+                this.hiddenLabels[name] = true;
+            } else {
+                delete this.hiddenLabels[name];
+            }
+            if (this.lastTorrents) {
+                // Wiped, because a label coming back means records that are
+                // not in the store at all have to be added again.
+                this.update(this.lastTorrents, true);
+            }
+        },
+
+        showEveryLabel: function () {
+            this.hiddenLabels = {};
+            if (this.lastTorrents) this.update(this.lastTorrents, true);
+        },
+
+        /**
+         * Adds the label list to the Label column's header menu.
+         *
+         * Ext JS gives every column the same header menu, so what it offers
+         * has to be decided when it opens: `hdCtxIndex` is the column that was
+         * right-clicked.
+         */
+        installLabelHeaderMenu: function () {
+            var grid = this;
+            var view = this.getView();
+            if (!view || !view.hmenu || view.hmenu.__labelMenu) return;
+            view.hmenu.__labelMenu = true;
+
+            view.hmenu.on('beforeshow', function (menu) {
+                var existing = menu.items.get('label-filter');
+                if (existing) menu.remove(existing);
+
+                // By dataIndex, not by id: only the columns that declare one
+                // have a string id, and the rest carry their position, so an
+                // id comparison here matched nothing at all.
+                var column = grid.getColumnModel().getDataIndex(view.hdCtxIndex);
+                if (column !== 'label') return;
+
+                var items = [];
+                var states = null;
+                var panel = deluge.sidebar && deluge.sidebar.getFilter('label');
+                if (panel && panel.getStates) states = panel.getStates();
+
+                for (var name in states || {}) {
+                    if (name === 'All') continue;
+                    items.push({
+                        text: name === '' ? _('No Label') : name,
+                        checked: !grid.hiddenLabels[name],
+                        labelName: name,
+                        hideOnClick: false,
+                        checkHandler: function (item, checked) {
+                            grid.setLabelHidden(
+                                item.initialConfig.labelName,
+                                !checked
+                            );
+                        },
+                    });
+                }
+
+                if (!items.length) {
+                    items.push({ text: _('No labels yet'), disabled: true });
+                } else {
+                    items.push('-');
+                    items.push({
+                        text: _('Show all'),
+                        handler: function () {
+                            grid.showEveryLabel();
+                        },
+                    });
+                }
+
+                menu.add({
+                    itemId: 'label-filter',
+                    text: _('Show labels'),
+                    menu: { items: items },
+                });
+            });
         },
 
         // private
