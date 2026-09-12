@@ -104,67 +104,10 @@ Deluge.preferences.Network = Ext.extend(Ext.form.FormPanel, {
             })
         );
 
-        fieldset = this.add({
-            xtype: 'fieldset',
-            border: false,
-            title: _('Outgoing Ports'),
-            style: 'margin-bottom: 5px; padding-bottom: 0px;',
-            autoHeight: true,
-            labelWidth: 1,
-            defaultType: 'checkbox',
-        });
-        optMan.bind(
-            'random_outgoing_ports',
-            fieldset.add({
-                fieldLabel: '',
-                labelSeparator: '',
-                boxLabel: _('Use Random Ports'),
-                name: 'random_outgoing_ports',
-                height: 22,
-                listeners: {
-                    check: {
-                        fn: function (e, checked) {
-                            this.outgoingPorts.setDisabled(checked);
-                        },
-                        scope: this,
-                    },
-                },
-            })
-        );
-        this.outgoingPorts = fieldset.add({
-            xtype: 'spinnergroup',
-            name: 'outgoing_ports',
-            fieldLabel: '',
-            labelSeparator: '',
-            colCfg: {
-                labelWidth: 40,
-                style: 'margin-right: 10px;',
-            },
-            items: [
-                {
-                    fieldLabel: _('From:'),
-                    labelSeparator: '',
-                    strategy: {
-                        xtype: 'number',
-                        decimalPrecision: 0,
-                        minValue: 0,
-                        maxValue: 65535,
-                    },
-                },
-                {
-                    fieldLabel: _('To:'),
-                    labelSeparator: '',
-                    strategy: {
-                        xtype: 'number',
-                        decimalPrecision: 0,
-                        minValue: 0,
-                        maxValue: 65535,
-                    },
-                },
-            ],
-        });
-        optMan.bind('outgoing_ports', this.outgoingPorts);
-
+        // The Outgoing Ports group was here. libtorrent 2.0 has no setting
+        // for the source port of an outgoing connection, so `outgoing_ports`
+        // and `random_outgoing_ports` were stored and never applied. The
+        // outgoing *interface* above is real and stays.
         fieldset = this.add({
             xtype: 'fieldset',
             border: false,
@@ -172,7 +115,11 @@ Deluge.preferences.Network = Ext.extend(Ext.form.FormPanel, {
             autoHeight: true,
             layout: 'table',
             layoutConfig: {
-                columns: 3,
+                // Two, not three: Peer Exchange used to fill the third cell of
+                // the first row. With four boxes left, two columns keep the
+                // indented ones in the second column where the class expects
+                // them.
+                columns: 2,
             },
             defaultType: 'checkbox',
         });
@@ -193,16 +140,6 @@ Deluge.preferences.Network = Ext.extend(Ext.form.FormPanel, {
                 boxLabel: _('NAT-PMP'),
                 ctCls: 'x-deluge-indent-checkbox',
                 name: 'natpmp',
-            })
-        );
-        optMan.bind(
-            'utpex',
-            fieldset.add({
-                fieldLabel: '',
-                labelSeparator: '',
-                boxLabel: _('Peer Exchange'),
-                ctCls: 'x-deluge-indent-checkbox',
-                name: 'utpex',
             })
         );
         optMan.bind(

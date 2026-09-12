@@ -77,6 +77,86 @@ def schema_name(method):
     return ''.join(part[:1].upper() + part[1:] for part in parts if part)
 
 
+# Python annotations to JSON Schema. The contract records what the Python
+# source declared, which is half the methods; the rest stay untyped and the
+# specification says so rather than guessing.
+SCALARS = {
+    'str': {'type': 'string'},
+    'bool': {'type': 'boolean'},
+    'int': {'type': 'integer'},
+    'float': {'type': 'number'},
+    'bytes': {'type': 'string', 'format': 'byte'},
+    'dict': {'type': 'object'},
+    'list': {'type': 'array'},
+    'None': {'type': 'null'},
+    'Any': {},
+    'object': {},
+}
+
+
+def result_schema(annotation):
+    """A JSON Schema for a return annotation, or None if it says nothing."""
+    if not annotation:
+        return None
+
+    text = annotation.strip().strip('\'"')
+    # Twisted returns a Deferred over the wire value; the wire sees the value.
+    for wrapper in ('defer.Deferred', 'Deferred'):
+        if text.startswith(wrapper + '['):
+            text = text[len(wrapper) + 1 : -1].strip()
+
+    if text in SCALARS:
+        return SCALARS[text]
+
+    if text.startswith('Optional[') and text.endswith(']'):
+        inner = result_schema(text[9:-1])
+        if inner is None:
+            return None
+        return {'oneOf': [inner, {'type': 'null'}]}
+
+    for name in ('List', 'list', 'Sequence', 'Iterable'):
+        if text.startswith(name + '[') and text.endswith(']'):
+            items = result_schema(text[len(name) + 1 : -1])
+            return {'type': 'array', 'items': items} if items else {'type': 'array'}
+
+    for name in ('Dict', 'dict', 'Mapping'):
+        if text.startswith(name + '[') and text.endswith(']'):
+            parts = split_arguments(text[len(name) + 1 : -1])
+            values = result_schema(parts[1]) if len(parts) == 2 else None
+            out = {'type': 'object'}
+            if values:
+                out['additionalProperties'] = values
+            return out
+
+    for name in ('Tuple', 'tuple'):
+        if text.startswith(name + '[') and text.endswith(']'):
+            return {'type': 'array'}
+
+    # A class name, such as AddTorrentError. The wire carries it as an object
+    # and the contract does not record its fields.
+    return None
+
+
+def split_arguments(text):
+    """Splits `a, b` at the top level, ignoring commas inside brackets."""
+    parts = []
+    depth = 0
+    current = ''
+    for character in text:
+        if character == '[':
+            depth += 1
+        elif character == ']':
+            depth -= 1
+        if character == ',' and depth == 0:
+            parts.append(current.strip())
+            current = ''
+        else:
+            current += character
+    if current.strip():
+        parts.append(current.strip())
+    return parts
+
+
 def describe(method):
     """The prose for one method."""
     lines = []
@@ -284,6 +364,51 @@ HTTP 200 whatever happens; read `error` to find out whether the call worked.
         "400":
           description: The body was not a JSON-RPC call.
 
+  /upload:
+    post:
+      summary: Stage one or more torrent files.
+      description: |-
+        The add-by-file dialog posts a multipart form here. The answer carries
+        the paths the files were staged at, which then go to
+        `web.get_torrent_info` and `web.add_torrents`.
+
+        Always HTTP 200 with a `success` field: ExtJS's form submit treats any
+        other status as a transport failure and shows its own message instead
+        of this one. A file that does not parse as a torrent is refused, and
+        one file may not exceed 10 MB.
+      operationId: upload
+      tags: [web]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        "200":
+          description: Whether the files were staged, and where.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success]
+                properties:
+                  success:
+                    type: boolean
+                  files:
+                    type: array
+                    description: Paths to pass to `web.get_torrent_info`.
+                    items:
+                      type: string
+                  error:
+                    type: string
+
   /:
     get:
       summary: The Web UI itself.
@@ -333,6 +458,44 @@ JavaScript. Served from the templates compiled into the binary.
                 type: string
         "404":
           description: No such fragment.
+
+  /flag/{code}:
+    get:
+      summary: The flag for a peer's country.
+      description:
+"""
+        + block(
+            """
+The peers tab draws one of these per row. The code is ISO 3166-1 alpha-2 and
+is validated: anything else is a 404 rather than a path. Countries are only
+filled in when the daemon has a GeoIP database configured, so on a default
+install this is never asked for.
+""",
+            8,
+        )
+        + """
+      operationId: flag
+      tags: [web]
+      security:
+        - {}
+      parameters:
+        - name: code
+          in: path
+          required: true
+          description: A two-letter country code, such as `fr`.
+          schema:
+            type: string
+            pattern: "^[A-Za-z]{2}$"
+      responses:
+        "200":
+          description: The flag.
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: No flag for that code.
 
   /{asset}:
     get:
@@ -437,6 +600,24 @@ daemon reported.
         for m in methods
     )
     schemas = '\n\n'.join(method_schema(m) for m in methods)
+
+    # One schema per method that declared a return type, so a generated client
+    # has something to cast `result` to. They are not referenced from the
+    # response: one endpoint carries every method, and OpenAPI cannot select a
+    # response schema by request body.
+    results = []
+    for method in methods:
+        schema = result_schema(method.get('returns'))
+        if schema is None:
+            continue
+        schema = dict(schema)
+        schema['description'] = f'What {method["name"]} puts in `result`.'
+        lines = json.dumps(schema, indent=2).split('\n')
+        rendered = '\n'.join('      ' + line for line in lines)
+        results.append(f'    {schema_name(method["name"])}Result:\n{rendered}')
+
+    if results:
+        schemas = schemas + '\n\n' + '\n\n'.join(results)
 
     removed = contract.get('removed', [])
     footer = ''

@@ -152,6 +152,7 @@ rust::String torrent_file_info_hash(rust::Slice<uint8_t const> torrent_file);
 rust::Vec<uint8_t> create_torrent(rust::Str path, int32_t piece_length, rust::Str comment,
                                   rust::Str creator, bool private_torrent,
                                   rust::Slice<rust::String const> trackers,
-                                  rust::Slice<rust::String const> web_seeds);
+                                  rust::Slice<rust::String const> web_seeds,
+                                  HashProgress& progress);
 
 }  // namespace redeluge

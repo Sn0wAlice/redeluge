@@ -16,5 +16,8 @@ cxx-build.workspace = true
 pkg-config.workspace = true
 
 [dev-dependencies]
+# The SSL torrent test generates its own certificate authority: a certificate
+# in a fixture expires.
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
 anyhow.workspace = true
 serde_json.workspace = true

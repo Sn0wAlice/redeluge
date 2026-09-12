@@ -45,6 +45,43 @@ which is the version Deluge is tested against.
 cargo update --dry-run   # what has moved
 ```
 
+## Publishing an image
+
+`.github/workflows/docker.yml` builds the image and publishes it to this
+repository's package registry. It runs only when someone starts it, from the
+Actions tab, because publishing follows a version bump rather than a push.
+
+The tag is the version in `[workspace.package]` of `Cargo.toml` and nothing
+else; the workflow reads it and refuses a version that does not look like one.
+So the release procedure is one edit:
+
+```toml
+[workspace.package]
+version = "1.0.1"
+```
+
+Then run the workflow. It stops rather than replacing a version already in the
+registry, so a tag someone has pulled cannot change under them; re-run with
+*overwrite* if replacing it is what you mean.
+
+| Input | |
+|---|---|
+| `push` | Off builds without publishing, which is how to check that a change still compiles |
+| `latest` | Whether `latest` moves to this build |
+| `checks` | Runs the same gate as `docker/rust.sh` first; roughly doubles the run |
+| `overwrite` | Replace a version already published |
+| `platforms` | `linux/amd64`, or both architectures through emulation, which is slow |
+
+The published image carries the usual OCI labels, so the version and the commit
+it was built from are readable without pulling it:
+
+```bash
+docker buildx imagetools inspect ghcr.io/sn0walice/redeluge:1.0.0
+```
+
+`REDELUGE_VERSION` in `.env` tags a locally built image and is the same number.
+It is not the version the daemon reports to clients, which is fixed at `2.2.1`.
+
 ## Coming from the Python daemon
 
 The torrent list was a Python pickle, which this daemon cannot read. Convert it

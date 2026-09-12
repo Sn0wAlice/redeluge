@@ -4,7 +4,9 @@ Everything known to be outstanding, from the phases done so far. The roadmap
 says what the phases are; this says what is actually left.
 
 Items are grouped by when they have to be done, not by size. Anything marked
-**blocking** stops a later phase from being correct.
+**blocking** stops a later phase from being correct. Ticked items are done and
+stay here until the section is emptied, so the record of what was outstanding
+survives the fixing of it.
 
 ---
 
@@ -12,88 +14,254 @@ Items are grouped by when they have to be done, not by size. Anything marked
 
 These make the Rust Web UI a complete replacement rather than a working one.
 
-- [ ] **Torrent upload.** `POST /upload`, which the add-by-file dialog posts to.
-      Adding by magnet and by URL already work, because those are daemon calls,
-      so this is the only way the interface is still short of the Python one.
-      The shape it needs: accept a multipart upload, write each file to a
-      temporary path, and return those paths, which the front end then passes
-      to `web.add_torrents`. The Python implementation that did this is gone,
-      so the reference now is the front end in
-      `crates/redeluge-web/assets/js/deluge-all/add/`.
-- [ ] **Minified script bundles.** `build.rs` concatenates but does not minify,
-      so the browser downloads roughly twice what it needs. `ScriptSet` already
-      picks by what is present, so producing the minified files is the whole
-      change. Check a minifier against ExtJS-era JavaScript before trusting it.
-- [ ] **An integration test that boots the server.** The web crate's tests cover
-      the pure logic. Nothing exercises the HTTP surface, so the JSON dispatch,
-      the session cookie and the asset routes are checked by hand today.
+- [x] **Torrent upload, and nine other methods that were missing with it.**
+      This item said the upload endpoint was the only gap. It was not: ten
+      methods the shipped front end calls were not answered at all, so adding a
+      torrent by *any* route was impossible from the interface, as was the
+      whole connection manager. `POST /upload` now stages files under the
+      configuration directory, and `web.get_torrent_info`, `web.get_magnet_info`,
+      `web.download_torrent_from_url`, `web.add_torrents`,
+      `web.get_torrent_status`, `web.get_torrent_files`, `web.add_host`,
+      `web.edit_host`, `web.remove_host` and `web.stop_daemon` all answer.
+      Reading a torrent needed bencode, which the daemon had deliberately
+      avoided; it is in the web crate, where the add dialog needs a file's name
+      and tree before anything is added.
+- [x] **Minified script bundles, and the compression that was never on.**
+      `build.rs` now emits a minified bundle beside the debug one, which is
+      what `ScriptSet::Normal` was already looking for: 294 KB to 159 KB, and
+      91 KB to 47 KB. The minifier is deliberately conservative, stripping
+      comments and indentation but keeping line breaks so automatic semicolon
+      insertion behaves; it is in the library so its tests run, and the ones
+      that matter are the regular expression and string cases that eat a file
+      when they are wrong. Separately, the `compress-gzip` feature was enabled
+      and the middleware was never added, so nothing had ever been compressed.
+- [x] **An integration test that boots the server.** `tests/http.rs` boots the
+      same application the binary serves, through the same
+      `routes::configure`, and drives it: the page, the assets, the fragments,
+      the session cookie, the throttle, the upload path and the host list. One
+      test asserts every method the front end calls is answered, which is the
+      test that would have caught the ten missing ones.
 
 ## Phase 3 leftovers
 
 All are behaviour the Python daemon has and this one does not yet.
 
-- [ ] **The Web UI does not reconnect to a restarted daemon.** It connects once
-      at startup and reports "connection lost" until it is restarted itself.
-- [ ] **Move on completion.** The option is stored and reported; nothing moves a
-      torrent when it finishes.
-- [ ] **Stop and remove at ratio.** Stored, reported, and used for the seeding
-      countdown, but no rule enforces them.
-- [ ] **Progress while creating a torrent.** `core.create_torrent` works but
-      sends no `CreateTorrentProgressEvent`, so a client shows a frozen dialog.
-- [ ] **Filtering is exact-match only.** Enough for the state, tracker and owner
-      filters every client sends; anything else returns nothing.
+- [x] **The Web UI does not reconnect to a restarted daemon.** A supervisor
+      task notices the closed connection and reconnects, backing off from five
+      seconds to a minute so a daemon that is down for an hour does not mean an
+      hour of attempts every five seconds. There is no heartbeat in DelugeRPC,
+      so a dead connection is only visible as a closed channel; `Client` now
+      exposes that.
+- [x] **Move on completion.** A torrent that finishes is moved, if it has a
+      destination. Only on the transition: libtorrent posts the same alert
+      after a recheck of something already complete, and moving every time
+      would move the files out from under themselves on each restart.
+- [x] **Stop and remove at ratio.** Enforced on a five-second sweep rather than
+      on an alert, because a ratio creeps past its limit while nothing happens
+      and there is no event to hang it on. Removing is checked before pausing,
+      which is Deluge's order, and the data is never deleted.
+- [x] **Progress while creating a torrent.** The hashing loop in C++ now calls
+      back into Rust, which is the only thing that crosses the boundary in that
+      direction. Throttled to a hundred events for the whole run: a torrent can
+      have hundreds of thousands of pieces.
+- [x] **Filtering is exact-match only.** `keyword` now searches the name,
+      state, tracker, tracker message, label and infohash, with every term
+      having to match, and `name` is a substring rather than an exact match.
+      The one field upstream searched that this does not is the file list:
+      fetching every torrent's files to answer a keystroke is a great deal of
+      work for a search box.
 
 ## Phase 2 leftovers
 
 Small, and all of them belong to the daemon rather than to the bridge.
 
-- [ ] **Peer country.** `PeerInfo::country` is always empty. It is a GeoIP
-      lookup Deluge does itself, not something libtorrent reports, so it
-      belongs in the daemon.
-- [ ] **An SSL torrent, end to end.** The certificate call is wired and refuses
-      an unknown torrent correctly, but exercising it needs an SSL torrent and a
-      certificate authority.
+- [x] **Peer country, and the peer list it belongs to.** This said the country
+      was empty. It was worse: the status carried no `peers` key at all, so the
+      peers tab of the interface showed nothing. The list is there now, fetched
+      only when a client asks for that key, and the country is filled in from a
+      MaxMind DB database if `geoip_db_location` names one. The legacy
+      `GeoIP.dat` Deluge defaulted to is retired and is reported as such rather
+      than failing to parse. No database is shipped: its licence forbids it.
+- [x] **An SSL torrent, end to end.** `tests/ssl.rs` generates a certificate
+      authority, writes a torrent carrying it, adds it, and waits for
+      `torrent_need_cert_alert`, which is the observable proof the torrent was
+      recognised as an SSL one rather than added with its extra field ignored.
+      Then it sets a certificate the authority signed and asserts it is
+      accepted. Everything is generated in the test, because a certificate in
+      a fixture expires.
 
 ## Phase 5 leftovers
 
 The four features landed. These are the edges of them.
 
-- [ ] **No Web UI for any of the three settings.** Labels appear in the sidebar
-      and on the torrent, because the filter tree and the status carry them and
-      the front end draws those generically. Watched directories, the block
-      list and the schedule are configured through `core.set_config` and have
-      no preferences page. Each needs one, and the schedule needs a grid
-      widget, which is most of the work.
-- [ ] **Magnet files in a watched directory.** The plugin also read `.magnet`
-      files, one link per line. Only `.torrent` is read here.
-- [ ] **Zip and bzip2 block lists.** Gzip and plain text are read; the other
-      two are detected and refused by name. Both would be another dependency,
-      and the lists people actually use are gzipped.
-- [ ] **The block list is not re-read when its URL changes.** It is fetched
-      when the cached copy is stale, so changing the URL takes effect on the
-      next check rather than at once. Setting `check_after_days` to 1 and
-      waiting an hour is the workaround.
-- [ ] **A schedule change applies on the hour.** Turning the schedule on does
-      not take effect until the next hour boundary, because that is when the
-      state is next computed.
+- [x] **A Web UI for the three settings.** Three preferences pages: watched
+      folders as an editable grid, the block list with its URL and whitelist,
+      and the schedule as a clickable 24 by 7 grid that cycles each hour
+      through full speed, slow and stopped. Each page reads and writes its one
+      dictionary through `core.get_config` and `core.set_config` rather than
+      binding flat keys, because that is the shape the settings have. Labels
+      still need no page: they are a torrent option and the sidebar draws them
+      on its own.
+- [x] **Magnet files in a watched directory.** Read, one link per line, blank
+      lines and comments skipped. The file is one unit for disposal, so a bad
+      link among several does not leave the good ones to be re-added on every
+      scan.
+- [x] **Zip block lists.** Read, taking the largest member because these
+      archives often carry a readme beside the list, and refusing one that
+      declares an absurd uncompressed size. bzip2 is still refused by name: it
+      would mean a C dependency for a format no list actually uses.
+- [x] **The block list is not re-read when its URL changes.** Checked every
+      minute now rather than hourly, and a changed URL forces a fetch. A
+      changed whitelist reinstalls from the cached list without downloading
+      anything, because the list is still the right list.
+- [x] **A schedule change applies on the hour.** It now wakes every minute as
+      well as on the hour. Nothing happens unless the state actually differs,
+      so the extra wake-ups cost nothing and someone who just edited the grid
+      sees it mean something.
+
+## The front-end display audit
+
+Everything a read of the interface's stylesheets and renderers turned up, after
+the report that rows at the bottom of a long torrent list went blank.
+
+- [x] **Blank rows at the bottom of a long list.** The buffered grid view
+      computed its render window from a constant row height, and any deviation
+      from it, a browser zoom, a larger font, a theme with more padding, shifted
+      the window until it no longer covered the viewport, and at a large enough
+      offset inverted it and blanked every visible row. It now measures the real
+      pitch across the rendered rows, keeps four rows of slack, and cannot
+      produce an inverted window.
+- [x] **Renderers that could throw and empty the rows after them.** A grid
+      renderer that raises stops the render loop, which looks exactly like the
+      bug above. The torrent name indexed `state` without checking it, the
+      torrent progress indexed a regular expression match without checking it,
+      and the peer flag called a string method on a field the daemon need not
+      send. All three are guarded.
+- [x] **The peers progress bar was drawn `NaN` pixels wide.** It read
+      `this.width`, but a grid renderer is called unbound unless the column
+      sets a scope, so the width was `undefined`. Both progress renderers now
+      read the width the grid actually used, from the metadata it passes.
+- [x] **Peer country flags were broken images.** The peers tab asks for
+      `flag/<code>` per row, which is Deluge's own URL, and nothing served it.
+      The 247 flags are shipped and the route answers them, with the code
+      validated rather than pasted into a path.
+- [x] **Tracker icons were a 404 per row per refresh.** Deluge's web server
+      fetched each tracker's favicon and cached it. There is no such fetcher
+      here and there should not be one, so the grid column and the sidebar
+      filter no longer ask for an image that will never exist.
+- [x] **Two stylesheet references that had never resolved.** The About window's
+      masthead pointed into a directory the web root never had, and the add
+      dialog's spinner was a root-absolute path missing a segment, which would
+      also have broken under a base path. A test now walks every `url()` in our
+      own stylesheets.
+- [x] **Two torrent states had no icon.** `Allocating` and `Moving` reached
+      both the name cell and the sidebar, and neither had a rule, so they drew
+      twenty pixels of empty indent.
+- [x] **A label could break the sidebar row it was in.** The filter template
+      put the value into a class attribute and into the text unescaped. Both
+      are escaped now, the class through a formatter that keeps only what is
+      valid in one.
+
+## The settings audit
+
+Every preference in the interface, checked against what the daemon and
+libtorrent actually do with it. Two lists came out of it and both are done.
+
+- [x] **Nine groups of controls that could not mean anything, removed.** The
+      Encryption page and the Cache page whole, the language selector, the
+      release check in both places it appeared, the statistics upload, Peer
+      Exchange, the outgoing port range, Force Use of Proxy, the four
+      server-binding fields the server has always refused to change, and Start
+      Daemon. The configuration keys stay: the daemon answers Deluge's API and
+      a client that reads them must keep working. A test walks the shipped
+      bundle and fails if any of them comes back.
+- [x] **Seventeen settings that were stored and never read, wired up.** A
+      torrent was added with a constant set of options rather than the
+      configured ones, so the whole "Add Torrent Options" group, the four
+      per-torrent limits and the seeding rules did nothing. They are read on
+      every route a torrent arrives by, including watched directories, and what
+      the client sends still wins. `queue_new_to_top`, `copy_torrent_file` and
+      `torrentfiles_location` work now, and prioritising first and last pieces
+      actually changes piece priorities rather than only being remembered.
+- [x] **Labels had no interface.** The daemon has had them since the plugins
+      became features and the sidebar could always filter on one, but nothing
+      could set one, so that filter was permanently empty. There is a field in
+      the Add dialog and in a torrent's Options tab.
+- [x] **The two settings redeluge added had no control.** The poll interval is
+      on the Interface page and a daemon's certificate fingerprint is in the
+      Connection Manager's Edit window. Both were file-only.
+- [x] **A block list that would not refresh.** A *Fetch Now* button, which
+      clears the stored timestamp rather than calling a method that does not
+      exist. Inventing one would put the daemon's API out of step with Deluge's,
+      which is the thing this whole project is arranged not to do.
+- [x] **Preferences erased what it had not read.** The three feature pages
+      wrote their settings back on OK whether or not anyone had opened them,
+      and an unopened page holds defaults and an empty grid. That erased the
+      watched-folder list and reset the weekly schedule. It also wrote `null`
+      for every blank number field, which made the daemon discard the whole
+      feature configuration and complain about it every few seconds.
+
+## The second display pass
+
+Found by driving the running interface rather than by reading it: a throwaway
+instance, sixty torrents, and a probe that walks the DOM of every page, tab and
+window and reports anything drawn past an ancestor that clips without
+scrolling. It reports nothing now.
+
+- [x] **The preferences window cut its pages off.** The card layout sizes the
+      active page to the window, so anything taller ended below the frame with
+      no scrollbar and no way to reach it. The Bandwidth page lost its
+      per-torrent limits that way. Every page scrolls, the window fits the
+      widest of them, and it resizes.
+- [x] **The watched-folder grid was drawn past the frame**, six hundred pixels
+      of it in a three-hundred-pixel page, so half the columns were
+      unreachable.
+- [x] **Three captions wrapped under their own fields.** A form puts every
+      field at the label column's width, so a column narrower than the caption
+      draws the field on top of it rather than widening.
+- [x] **The add dialog's Options tab** ended the same way the preferences pages
+      did.
+- [x] **A long torrent name had no ellipsis.** The name is a block inside the
+      grid cell, and it overflowed on its own terms rather than the cell's.
+- [x] **The Files tab was blank for every torrent.** Not a layout problem: the
+      daemon never reported the three file keys at all, so the tree the Web UI
+      builds was always empty.
+- [x] **The sidebar listed its filter groups alphabetically**, Labels first and
+      States third, because the JSON object comes back with sorted keys. The
+      order is the Web UI's own now.
+- [x] **An unnamed filter row.** Torrents with no label formed a group with a
+      blank name and a count beside it.
 
 ## Loose ends, whenever
 
-- [ ] **The Alpine image was never verified running.** It was measured against
-      the Python image, which no longer exists; the Rust one is 189 MB on
-      Debian, so the saving would be smaller now. Either finish the check or
-      drop the idea.
-- [ ] **Archive tools.** If the block list work needs to read compressed lists,
-      `7zip` and `unrar-free` are not in the runtime image.
-- [ ] **Certificate pinning for remote daemons.** `TlsMode::Pinned` exists and
-      nothing uses it. The Python client verifies nothing, which is defensible
-      over loopback and not across a network.
-- [ ] **The OpenAPI spec says nothing about return types.** The contract records
-      each method's parameters, not the shape of what it answers, so a generated
-      client handles the envelope and hands back an untyped value. Filling that
-      in means describing 99 return shapes by hand, which would drift.
-- [ ] **Rate limiting on the web login.** Neither implementation has any. The
-      password is now scrypt, so an online guess is slow, but slow is not none.
+- [x] **The Alpine image: dropped, with a reason.** Alpine does ship
+      `libtorrent-rasterbar`, at 2.0.10 against Debian trixie's 2.0.11, which
+      is the version Deluge is tested against. The saving would be roughly
+      70 MB off 189 MB. Against that: a musl target for the whole build, a
+      libtorrent a release behind, and musl's allocator under a threaded C++
+      workload, which is exactly what this software is. Not worth it. The
+      experiment is not coming back.
+- [x] **Archive tools.** Not needed. The block list unpacks gzip and zip in
+      process, so nothing in the image has to shell out to an archiver.
+- [x] **Certificate pinning for remote daemons.** A `daemon_fingerprints`
+      object in `web.conf`, host id to sha256, turns on `TlsMode::Pinned` for
+      that host. The daemon prints its own fingerprint at startup, which is
+      where the value comes from. Connecting to a non-loopback daemon without
+      a pin warns once, rather than refusing: that would break every existing
+      remote setup.
+- [x] **The OpenAPI spec says nothing about return types.** It does now for 45
+      of the 99, from the Python annotations the contract recorded, translated
+      into JSON Schema by the generator rather than written by hand. The other
+      54 either declared nothing or return a class whose fields the contract
+      does not record; the specification says which, rather than guessing. The
+      schemas are not referenced from the response, because one endpoint
+      carries every method and OpenAPI cannot select a response by request
+      body.
+- [x] **Rate limiting on the web login.** A token bucket per client address:
+      five attempts free, then one every ten seconds. Checked before the
+      password is verified, because scrypt is deliberately slow and doing that
+      work for a client already over its budget is the denial of service rather
+      than the defence. A correct password clears the record.
 
 ---
 
@@ -124,3 +292,8 @@ Kept short, as a record of what the phases actually delivered.
   back with the bundled front end's licences, every source file carries an SPDX
   line, the changelog says where Deluge became redeluge, and the Photoshop
   sources that were being compiled into the binary are gone.
+- The leftovers, all twenty of them. Four turned out to understate what was
+  wrong: the upload endpoint was one of ten missing Web UI methods, the peer
+  country was a missing peer list, the block list's archive tools were not
+  needed at all, and gzip compression had never been switched on. Nothing is
+  open.

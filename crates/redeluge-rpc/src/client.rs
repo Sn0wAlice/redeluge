@@ -145,6 +145,15 @@ impl Client {
         })
     }
 
+    /// Whether the connection is gone.
+    ///
+    /// The task that owns the socket drops its receiver when the connection
+    /// ends, for any reason, which closes this channel. That is the only
+    /// signal a caller gets: there is no heartbeat in the protocol.
+    pub fn is_closed(&self) -> bool {
+        self.outgoing.is_closed()
+    }
+
     /// Subscribes to the daemon's events. Late subscribers miss earlier ones.
     pub fn events(&self) -> broadcast::Receiver<Event> {
         self.events.subscribe()

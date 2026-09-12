@@ -48,6 +48,19 @@ RUN test "$(strings target/release/redeluge-web | grep -c 'deluge-all')" -gt 0
 # -------------------------------------------------------------- runtime stage
 FROM debian:${DEBIAN_TAG}
 
+# What this image is, for anything that reads a registry rather than a README.
+# Both default to "unknown" so a local `docker build` needs no arguments; the
+# release workflow passes the version out of Cargo.toml and the commit it built.
+ARG VERSION=unknown
+ARG REVISION=unknown
+LABEL org.opencontainers.image.title="redeluge" \
+      org.opencontainers.image.description="Deluge's daemon and Web UI, rewritten in Rust" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.source="https://github.com/Sn0wAlice/redeluge" \
+      org.opencontainers.image.documentation="https://github.com/Sn0wAlice/redeluge/wiki" \
+      org.opencontainers.image.licenses="GPL-3.0-or-later"
+
 ENV DELUGE_CONFIG_DIR=/config \
     DELUGE_DOWNLOAD_DIR=/downloads \
     DELUGE_WEB_INTERFACE=0.0.0.0 \

@@ -114,24 +114,19 @@ Deluge.preferences.ProxyField = Ext.extend(Ext.form.FieldSet, {
         });
         this.proxy_tracker_conn.on('change', this.onFieldChange, this);
 
+        // "Force Use of Proxy" was here. libtorrent 2.0 dropped the setting
+        // it mapped onto; what it used to mean is now the three boxes above,
+        // which say which kinds of connection go through the proxy. Hiding the
+        // client identity is a separate thing and does still work.
         var fieldset = this.add({
             xtype: 'fieldset',
             border: false,
-            title: _('Force Proxy'),
+            title: _('Identity'),
             autoHeight: true,
             labelWidth: 1,
             defaultType: 'checkbox',
             style: 'padding-left: 0px; margin-top: 10px',
         });
-
-        this.force_proxy = fieldset.add({
-            fieldLabel: '',
-            labelSeparator: '',
-            height: 20,
-            name: 'force_proxy',
-            boxLabel: _('Force Use of Proxy'),
-        });
-        this.force_proxy.on('change', this.onFieldChange, this);
 
         this.anonymous_mode = fieldset.add({
             fieldLabel: '',
@@ -159,7 +154,6 @@ Deluge.preferences.ProxyField = Ext.extend(Ext.form.FieldSet, {
             proxy_hostnames: this.proxy_host_resolve.getValue(),
             proxy_peer_connections: this.proxy_peer_conn.getValue(),
             proxy_tracker_connections: this.proxy_tracker_conn.getValue(),
-            force_proxy: this.force_proxy.getValue(),
             anonymous_mode: this.anonymous_mode.getValue(),
         };
     },
@@ -178,7 +172,6 @@ Deluge.preferences.ProxyField = Ext.extend(Ext.form.FieldSet, {
         this.proxy_host_resolve.setValue(value['proxy_hostnames']);
         this.proxy_peer_conn.setValue(value['proxy_peer_connections']);
         this.proxy_tracker_conn.setValue(value['proxy_tracker_connections']);
-        this.force_proxy.setValue(value['force_proxy']);
         this.anonymous_mode.setValue(value['anonymous_mode']);
 
         this.onTypeSelect(this.type, record, index);

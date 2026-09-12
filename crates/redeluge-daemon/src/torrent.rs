@@ -191,6 +191,20 @@ impl Torrent {
         session_paused: bool,
         trackers: &[redeluge_libtorrent::TrackerEntry],
     ) -> BTreeMap<String, Value> {
+        self.status_with_peers(status, session_paused, trackers, &[])
+    }
+
+    /// The status, with the peer list filled in.
+    ///
+    /// Peers are a separate call into libtorrent and only one tab of the
+    /// interface shows them, so the caller decides whether to pay for them.
+    pub fn status_with_peers(
+        &self,
+        status: &LtStatus,
+        session_paused: bool,
+        trackers: &[redeluge_libtorrent::TrackerEntry],
+        peers: &[(redeluge_libtorrent::PeerInfo, Option<String>)],
+    ) -> BTreeMap<String, Value> {
         let state = self.state(status, session_paused);
         let mut out: BTreeMap<String, Value> = BTreeMap::new();
 
@@ -336,6 +350,40 @@ impl Torrent {
         put("move_completed_path", Value::Str(move_path.clone()));
         put("move_on_completed_path", Value::Str(move_path));
 
+        put(
+            "peers",
+            Value::List(
+                peers
+                    .iter()
+                    .map(|(peer, country)| {
+                        Value::Dict(vec![
+                            (
+                                Value::Str("ip".into()),
+                                Value::Str(format!("{}:{}", peer.ip, peer.port)),
+                            ),
+                            (Value::Str("client".into()), Value::Str(peer.client.clone())),
+                            (
+                                Value::Str("country".into()),
+                                Value::Str(country.clone().unwrap_or_default()),
+                            ),
+                            (
+                                Value::Str("progress".into()),
+                                Value::Float64(f64::from(peer.progress)),
+                            ),
+                            (
+                                Value::Str("down_speed".into()),
+                                Value::Int(i64::from(peer.down_speed)),
+                            ),
+                            (
+                                Value::Str("up_speed".into()),
+                                Value::Int(i64::from(peer.up_speed)),
+                            ),
+                            (Value::Str("seed".into()), Value::Int(i64::from(peer.seed))),
+                        ])
+                    })
+                    .collect(),
+            ),
+        );
         put("label", Value::Str(self.options.label.clone()));
         put("owner", Value::Str(self.options.owner.clone()));
         put("shared", Value::Bool(self.options.shared));
@@ -422,7 +470,7 @@ impl Torrent {
     ///
     /// Deluge reports -1 when nothing has been downloaded, which its clients
     /// render as a dash. Returning infinity would make every seeding rule fire.
-    fn ratio(&self, status: &LtStatus) -> f64 {
+    pub fn ratio(&self, status: &LtStatus) -> f64 {
         if status.all_time_download <= 0 {
             return -1.0;
         }
@@ -454,4 +502,147 @@ fn tracker_host(url: &str) -> String {
         }
     }
     host
+}
+
+/// Adds the three file keys to a status dictionary.
+///
+/// Kept out of `status_with_peers` because each of these is a separate call
+/// into libtorrent and only the Files tab wants them, the same reason the peer
+/// list is optional. Until this existed the daemon answered
+/// `core.get_torrent_status` without the keys at all, so `web.get_torrent_files`
+/// built an empty tree and the Files tab of the interface was blank for every
+/// torrent.
+///
+/// The shape is Deluge's: `files` is a list of dictionaries with the index,
+/// path, size and offset; `file_progress` is the fraction of each file that is
+/// done, not a byte count; `file_priorities` is one number per file.
+pub fn put_files(
+    out: &mut BTreeMap<String, Value>,
+    entries: &[redeluge_libtorrent::FileEntry],
+    progress: &[i64],
+    priorities: &[u8],
+) {
+    let files = entries
+        .iter()
+        .map(|file| {
+            Value::Dict(vec![
+                (
+                    Value::Str("index".into()),
+                    Value::Int(i64::from(file.index)),
+                ),
+                (Value::Str("path".into()), Value::Str(file.path.clone())),
+                (Value::Str("size".into()), Value::Int(file.size)),
+                (Value::Str("offset".into()), Value::Int(file.offset)),
+            ])
+        })
+        .collect();
+    out.insert("files".to_owned(), Value::List(files));
+
+    let done = entries
+        .iter()
+        .enumerate()
+        .map(|(index, file)| {
+            let bytes = progress.get(index).copied().unwrap_or(0);
+            let fraction = if file.size > 0 {
+                (bytes as f64 / file.size as f64).clamp(0.0, 1.0)
+            } else {
+                // A zero-length file is complete the moment it exists, and
+                // dividing by its size would be a NaN in the interface.
+                1.0
+            };
+            Value::Float64(fraction)
+        })
+        .collect();
+    out.insert("file_progress".to_owned(), Value::List(done));
+
+    let wanted = entries
+        .iter()
+        .enumerate()
+        .map(|(index, _)| Value::Int(i64::from(priorities.get(index).copied().unwrap_or(4))))
+        .collect();
+    out.insert("file_priorities".to_owned(), Value::List(wanted));
+}
+
+#[cfg(test)]
+mod file_tests {
+    use super::*;
+    use redeluge_libtorrent::FileEntry;
+
+    fn entry(index: i32, path: &str, size: i64, offset: i64) -> FileEntry {
+        FileEntry {
+            index,
+            path: path.to_owned(),
+            size,
+            offset,
+        }
+    }
+
+    #[test]
+    fn the_files_of_a_torrent_reach_the_status() {
+        // Without these three keys `web.get_torrent_files` builds an empty
+        // tree and the Files tab is blank for every torrent, which is what it
+        // did.
+        let mut out = BTreeMap::new();
+        put_files(
+            &mut out,
+            &[
+                entry(0, "video/episode.mkv", 1000, 0),
+                entry(1, "video/subtitles.srt", 200, 1000),
+            ],
+            &[500, 200],
+            &[4, 7],
+        );
+
+        let Some(Value::List(files)) = out.get("files") else {
+            panic!("no files key");
+        };
+        assert_eq!(files.len(), 2);
+
+        let Some(Value::List(progress)) = out.get("file_progress") else {
+            panic!("no file_progress key");
+        };
+        // A fraction, not a byte count: half of the first, all of the second.
+        assert_eq!(progress[0], Value::Float64(0.5));
+        assert_eq!(progress[1], Value::Float64(1.0));
+
+        let Some(Value::List(priorities)) = out.get("file_priorities") else {
+            panic!("no file_priorities key");
+        };
+        assert_eq!(priorities[1], Value::Int(7));
+    }
+
+    #[test]
+    fn a_file_of_no_length_is_complete_rather_than_a_division_by_zero() {
+        let mut out = BTreeMap::new();
+        put_files(&mut out, &[entry(0, "marker", 0, 0)], &[0], &[4]);
+
+        let Some(Value::List(progress)) = out.get("file_progress") else {
+            panic!("no file_progress key");
+        };
+        assert_eq!(progress[0], Value::Float64(1.0));
+    }
+
+    #[test]
+    fn a_missing_priority_or_progress_is_filled_in_rather_than_dropped() {
+        // libtorrent answers these as separate calls, so the three lists can
+        // disagree for an instant after a torrent changes.
+        let mut out = BTreeMap::new();
+        put_files(
+            &mut out,
+            &[entry(0, "a", 100, 0), entry(1, "b", 100, 100)],
+            &[50],
+            &[],
+        );
+
+        let Some(Value::List(progress)) = out.get("file_progress") else {
+            panic!("no file_progress key");
+        };
+        let Some(Value::List(priorities)) = out.get("file_priorities") else {
+            panic!("no file_priorities key");
+        };
+        assert_eq!(progress.len(), 2);
+        assert_eq!(progress[1], Value::Float64(0.0));
+        assert_eq!(priorities.len(), 2);
+        assert_eq!(priorities[0], Value::Int(4));
+    }
 }

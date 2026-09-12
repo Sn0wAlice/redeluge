@@ -64,7 +64,7 @@ knowing:
 | Key | Default | |
 |---|---|---|
 | `download_location` | `~/Downloads` | Where torrents are saved |
-| `move_completed` | `false` | Move on completion (stored, not yet enforced) |
+| `move_completed` | `false` | Move the files when the torrent finishes |
 | `move_completed_path` | `~/Downloads` | Where to |
 | `torrentfiles_location` | `<config>/torrents` | Copies of added `.torrent` files |
 | `copy_torrent_file` | `false` | Whether to keep those copies |
@@ -91,7 +91,7 @@ knowing:
 | `max_active_limit` | `8` | Queue: how many torrents run at once |
 | `max_active_downloading` | `3` | |
 | `max_active_seeding` | `5` | |
-| `stop_seed_at_ratio` | `false` | Stored, not yet enforced |
+| `stop_seed_at_ratio` | `false` | Pause a torrent at its share ratio |
 | `stop_seed_ratio` | `2.0` | |
 
 Rate limits are in KiB/s and `-1` means no limit, which is Deluge's convention.
@@ -106,10 +106,40 @@ in one place, so you never have to.
 | `blocklist` | The peer block list |
 | `scheduler` | The weekly schedule |
 
+Each has a preferences page in the Web UI as well.
+
 Each is one dictionary, and all three are off by default. [Features](Features)
 documents what goes in them. They are the only keys redeluge added; a test
 fails if any other key appears that is neither in the contract nor declared as
 an addition, which is how an invented key was caught once already.
+
+## Settings with no control in the interface
+
+Every key below is read and written by the API, because a client that speaks
+Deluge's protocol expects all of them. What some of them no longer have is a
+control in the preferences window, and the reason is always the same: nothing
+acts on the value.
+
+| Key | Why there is no control |
+|---|---|
+| `enc_in_policy`, `enc_out_policy`, `enc_level` | Never passed to libtorrent |
+| `cache_size`, `cache_expiry` | libtorrent 2.0 has no disk cache; it maps files into memory instead |
+| `utpex` | libtorrent 2.0 has no setting for peer exchange |
+| `outgoing_ports`, `random_outgoing_ports` | No setting for the source port of an outgoing connection |
+| `force_proxy` | Dropped by libtorrent 2.0; the three "proxy this kind of connection" switches are what it meant |
+| `new_release_check`, `send_info`, `info_sent` | There is no update service to ask and nothing is sent anywhere |
+| `port`, `interface`, `https`, `cert`, `pkey` | How the server is reached is the container's business; the server refuses to change its own listener from a browser |
+| `enabled_plugins`, `plugins_location` | There is no plugin system |
+| `path_chooser_*`, `download_location_paths_list`, `move_completed_paths_list` | Conveniences of the GTK client, which is not here |
+
+The keys that are defaults for the next torrent, on the other hand, do now
+reach one: `add_paused`, `download_location`, `move_completed`,
+`move_completed_path`, `pre_allocate_storage`, `prioritize_first_last_pieces`,
+`sequential_download`, `stop_seed_at_ratio`, `stop_seed_ratio`,
+`remove_seed_at_ratio`, `queue_new_to_top`, `copy_torrent_file`,
+`torrentfiles_location` and the four `*_per_torrent` limits are read when a
+torrent is added, whether by a client, by URL or from a watched directory. A
+dictionary the client sends wins over them, which is Deluge's order.
 
 ## What is in `web.conf`
 
@@ -118,10 +148,13 @@ an addition, which is how an invented key was caught once already.
 | `port` | `8112` | |
 | `interface` | `0.0.0.0` | |
 | `base` | `/` | Path prefix, for a reverse proxy subpath |
-| `theme` | `gray` | |
+| `theme` | `gray` | One of `gray`, `blue`, `access` |
+| `language` | `""` | Always empty: there is one language |
 | `session_timeout` | `3600` | Seconds |
+| `poll_interval` | `2000` | How often the interface polls, in milliseconds; Preferences, Interface |
 | `default_daemon` | unset | The daemon to connect to on start |
 | `pwd_sha1`, `pwd_salt` | seeded | The Web UI password, scrypt despite the key name |
+| `daemon_fingerprints` | absent | Host id to sha256, to pin a remote daemon's certificate; Connection Manager, Edit |
 | `https`, `cert`, `pkey` | `false` | TLS on the Web UI itself |
 | `show_sidebar`, `sidebar_show_zero` | | What the interface remembers |
 
@@ -153,5 +186,14 @@ certificate that is X.509 version 1, which is what Deluge wrote and what
 modern TLS stacks refuse, is moved aside with `.unusable` appended and a new
 pair is generated. Nothing is overwritten.
 
-The fingerprint is printed at startup, which is what you would pin a remote
-client against.
+The fingerprint is printed at startup. Paste it into *Pin sha256* in the
+Connection Manager's Edit window, or put it in `web.conf` directly:
+
+```json
+{"daemon_fingerprints": {"<host id>": "c91c7c0e…"}}
+```
+
+The host id comes from `web.get_hosts`. Clearing the field removes the pin. Without a pin the client encrypts and
+verifies nothing, which is what the Python client did; connecting to a
+non-loopback daemon without one logs a warning rather than refusing, because
+refusing would break every existing remote setup.

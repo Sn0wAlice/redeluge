@@ -12,12 +12,18 @@
 
 pub mod assets;
 pub mod auth;
+pub mod bencode;
 pub mod bootstrap;
 pub mod config;
 pub mod convert;
 pub mod hostlist;
 pub mod index;
 pub mod json_api;
+pub mod minify;
 pub mod persist;
+pub mod routes;
 pub mod state;
 pub mod template;
+pub mod throttle;
+pub mod torrentfile;
+pub mod upload;

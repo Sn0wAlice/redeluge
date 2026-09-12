@@ -20,6 +20,9 @@ Deluge.add.OptionsTab = Ext.extend(Ext.form.FormPanel, {
     bodyStyle: 'padding: 5px',
     disabled: true,
     labelWidth: 1,
+    // The tab is taller than the window gives it, so without this the last
+    // fieldset was simply cut off and there was no way to reach it.
+    autoScroll: true,
 
     initComponent: function () {
         Deluge.add.OptionsTab.superclass.initComponent.call(this);
@@ -62,6 +65,31 @@ Deluge.add.OptionsTab = Ext.extend(Ext.form.FormPanel, {
         });
         this.optionsManager.bind('move_completed', field.toggle);
         this.optionsManager.bind('move_completed_path', field.input);
+
+        // A label is a torrent option like any other here, which is why there
+        // is no page for it in Preferences: the daemon stores it with the
+        // torrent and the sidebar counts it. Until this field existed nothing
+        // in the interface could set one, so the sidebar's Labels list was
+        // always empty however many torrents there were.
+        fieldset = this.add({
+            xtype: 'fieldset',
+            title: _('Label'),
+            border: false,
+            autoHeight: true,
+            defaultType: 'textfield',
+            labelWidth: 1,
+            fieldLabel: '',
+            style: 'padding: 5px 0; margin-bottom: 0;',
+        });
+        this.optionsManager.bind(
+            'label',
+            fieldset.add({
+                fieldLabel: '',
+                name: 'label',
+                anchor: '95%',
+                labelSeparator: '',
+            })
+        );
 
         var panel = this.add({
             border: false,
@@ -207,6 +235,9 @@ Deluge.add.OptionsTab = Ext.extend(Ext.form.FormPanel, {
                         config.prioritize_first_last_pieces,
                     seed_mode: false,
                     super_seeding: false,
+                    // No configured default: a label is per torrent, and a
+                    // global one would put every torrent in the same bucket.
+                    label: '',
                 };
                 this.optionsManager.options = options;
                 this.optionsManager.resetAll();

@@ -16,9 +16,9 @@ Ext.namespace('Deluge.about');
  */
 Deluge.about.AboutWindow = Ext.extend(Ext.Window, {
     id: 'AboutWindow',
-    title: _('About Deluge'),
-    height: 330,
-    width: 270,
+    title: _('About RE:deluge'),
+    height: 350,
+    width: 290,
     iconCls: 'x-deluge-main-panel',
     resizable: false,
     plain: true,
@@ -45,14 +45,22 @@ Deluge.about.AboutWindow = Ext.extend(Ext.Window, {
             });
         };
 
+        // Two different versions, deliberately. `deluge.version` is what this
+        // server reports to clients, which is Deluge's, because a client
+        // written against the Python server expects to be talking to it.
+        // `redeluge_version` is the fork's own, and this window is the only
+        // place a person is shown it.
         var client_version = deluge.version;
+        var our_version = deluge.config.redeluge_version || '';
 
         var comment =
             _(
                 'A peer-to-peer file sharing program\nutilizing the BitTorrent protocol.'
             ).replace('\n', '<br/>') +
             '<br/><br/>' +
-            _('Client:') +
+            _('A fork of Deluge, rewritten in Rust.') +
+            '<br/><br/>' +
+            _('Reports to clients as Deluge:') +
             ' ' +
             client_version +
             '<br/>';
@@ -88,7 +96,9 @@ Deluge.about.AboutWindow = Ext.extend(Ext.Window, {
             {
                 xtype: 'label',
                 style: 'padding-top: 10px; font-weight: bold; font-size: 16px;',
-                text: _('Deluge') + ' ' + client_version,
+                text: our_version
+                    ? _('RE:deluge') + ' ' + our_version
+                    : _('RE:deluge'),
             },
             {
                 xtype: 'label',
@@ -98,13 +108,16 @@ Deluge.about.AboutWindow = Ext.extend(Ext.Window, {
             },
             {
                 xtype: 'label',
-                style: 'padding-top: 10px; font-size: 10px;',
-                text: _('Copyright 2007-2025 Deluge Team'),
+                style: 'padding-top: 10px; font-size: 10px; text-align: center;',
+                html:
+                    _('Copyright 2007-2025 Deluge Team') +
+                    '<br/>' +
+                    _('RE:deluge, GPL-3.0-or-later'),
             },
             {
                 xtype: 'label',
                 style: 'padding-top: 5px; font-size: 12px;',
-                html: '<a href="https://deluge-torrent.org" target="_blank">deluge-torrent.org</a>',
+                html: '<a href="https://github.com/Sn0wAlice/redeluge" target="_blank" rel="noopener">github.com/Sn0wAlice/redeluge</a>',
             },
         ]);
         this.addButton(_('Close'), this.onCloseClick, this);

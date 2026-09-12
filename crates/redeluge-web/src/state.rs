@@ -42,6 +42,8 @@ pub struct AppState {
     pub settings: Settings,
     pub password: RwLock<StoredPassword>,
     pub sessions: Mutex<Sessions>,
+    /// Failed-login budgets, one per client address.
+    pub login_throttle: Mutex<crate::throttle::Throttle>,
     pub hosts: RwLock<Vec<Host>>,
     /// The daemon connection, once one has been made.
     pub daemon: RwLock<Option<DaemonConnection>>,

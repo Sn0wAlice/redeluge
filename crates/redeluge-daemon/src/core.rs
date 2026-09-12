@@ -28,7 +28,7 @@ use crate::torrent::{Torrent, TorrentOptions};
 /// The daemon's version, as reported to clients.
 ///
 /// Deluge's own version rather than this crate's: clients compare it against
-/// what they know how to speak, and telling them "0.1.0" makes every one of
+/// what they know how to speak, and telling them "1.0.0" makes every one of
 /// them refuse to connect.
 pub const REPORTED_VERSION: &str = "2.2.1";
 
@@ -113,6 +113,29 @@ impl Core {
         }
     }
 
+    /// Loads the GeoIP database the configuration names, if there is one.
+    ///
+    /// Absent by default and absent in the container: the database cannot be
+    /// shipped, because its licence does not allow it. Without one the peer
+    /// country is simply empty, which is what it was before.
+    pub async fn load_country_database(&self) {
+        let path = {
+            let config = self.config.lock().await;
+            config
+                .string("geoip_db_location")
+                .unwrap_or_default()
+                .to_owned()
+        };
+        if path.is_empty() {
+            return;
+        }
+        let lookup = crate::geoip::CountryLookup::open(std::path::Path::new(&path));
+        let _ = self
+            .manager
+            .with(move |state| state.set_country_lookup(lookup))
+            .await;
+    }
+
     /// Pushes the whole configuration into libtorrent.
     pub async fn apply_config(&self) {
         let settings = {
@@ -159,6 +182,62 @@ impl Core {
         Ok(())
     }
 
+    /// The options a new torrent starts from, out of the configuration.
+    ///
+    /// Deluge builds this dictionary in `core.add_torrent_file` and every
+    /// client relies on it: the preferences window's "Add Torrent Options",
+    /// the per-torrent bandwidth limits and the seeding rules are all defaults
+    /// for the next torrent rather than settings of their own. This daemon
+    /// started every torrent from a constant instead, so seventeen settings
+    /// were stored and never read.
+    ///
+    /// Public because a watched directory adds torrents without an RPC call
+    /// ever arriving, and a torrent from a watched directory gets the same
+    /// defaults as one added by hand.
+    pub async fn torrent_defaults(&self) -> TorrentOptions {
+        let config = self.config.lock().await;
+        let mut options = TorrentOptions::default();
+
+        if let Some(path) = config.string("download_location") {
+            if !path.is_empty() {
+                options.save_path = Some(path.to_owned());
+            }
+        }
+        options.paused = config.boolean("add_paused").unwrap_or(false);
+        options.auto_managed = config.boolean("auto_managed").unwrap_or(true);
+        if config.boolean("pre_allocate_storage").unwrap_or(false) {
+            options.storage_mode = "allocate".to_owned();
+        }
+        options.prioritize_first_last = config
+            .boolean("prioritize_first_last_pieces")
+            .unwrap_or(false);
+        options.sequential_download = config.boolean("sequential_download").unwrap_or(false);
+        options.super_seeding = config.boolean("super_seeding").unwrap_or(false);
+        options.shared = config.boolean("shared").unwrap_or(false);
+
+        options.move_completed = config.boolean("move_completed").unwrap_or(false);
+        if let Some(path) = config.string("move_completed_path") {
+            if !path.is_empty() {
+                options.move_completed_path = Some(path.to_owned());
+            }
+        }
+
+        options.stop_at_ratio = config.boolean("stop_seed_at_ratio").unwrap_or(false);
+        options.stop_ratio = config.number("stop_seed_ratio").unwrap_or(2.0);
+        options.remove_at_ratio = config.boolean("remove_seed_at_ratio").unwrap_or(false);
+
+        options.max_connections = config.integer("max_connections_per_torrent").unwrap_or(-1);
+        options.max_upload_slots = config.integer("max_upload_slots_per_torrent").unwrap_or(-1);
+        options.max_download_speed = config
+            .number("max_download_speed_per_torrent")
+            .unwrap_or(-1.0);
+        options.max_upload_speed = config
+            .number("max_upload_speed_per_torrent")
+            .unwrap_or(-1.0);
+
+        options
+    }
+
     /// Adds a torrent and remembers its options.
     ///
     /// Public because a watched directory adds torrents without an RPC call
@@ -181,12 +260,11 @@ impl Core {
             return Err(RpcError::invalid_argument("no download location is set"));
         }
 
-        let add_paused = {
-            let config = self.config.lock().await;
-            config.boolean("add_paused").unwrap_or(false)
-        };
+        // `add_paused` is in the defaults every caller starts from now, so a
+        // client that asks for a running torrent gets one even when the
+        // configuration says otherwise. That is Deluge's order: the dictionary
+        // the client sends is applied over the configured defaults.
         let mut options = options;
-        options.paused |= add_paused;
         options.save_path = Some(request.save_path.clone());
         request.flags = request
             .flags
@@ -197,6 +275,24 @@ impl Core {
         // Kept so the torrent can be restored after a restart. Without it a
         // torrent added from a file comes back as nothing at all.
         let torrent_file = request.torrent_file.clone();
+
+        // Read before the session is locked, because both want the config.
+        let (queue_to_top, keep_a_copy) = {
+            let config = self.config.lock().await;
+            (
+                config.boolean("queue_new_to_top").unwrap_or(false),
+                config
+                    .boolean("copy_torrent_file")
+                    .unwrap_or(false)
+                    .then(|| {
+                        config
+                            .string("torrentfiles_location")
+                            .unwrap_or_default()
+                            .to_owned()
+                    }),
+            )
+        };
+        let copy_name = stored.filename.clone();
 
         let id = self
             .manager
@@ -211,6 +307,22 @@ impl Core {
                         tracing::error!(torrent = %id, error = %err,
                             "could not store the torrent file; it will not survive a restart");
                     }
+                }
+
+                // The user's own copy, which is a different thing from the one
+                // above: that one is the daemon's, under the state directory,
+                // and is deleted with the torrent.
+                if let (Some(directory), false) = (&keep_a_copy, torrent_file.is_empty()) {
+                    copy_torrent_file(directory, &copy_name, &id, &torrent_file);
+                }
+
+                // Limits and flags that only `core.set_torrent_options` used to
+                // apply, so a torrent added with them ran without them until
+                // something set them again.
+                apply_limits(state, &id, &stored);
+
+                if queue_to_top {
+                    let _ = state.session.queue_top(&id);
                 }
 
                 let mut stored = stored;
@@ -386,7 +498,7 @@ impl Rpc for Core {
             "core.add_torrent_file" | "core.add_torrent_file_async" => {
                 let filename = string_arg(&args, 0, "a filename")?;
                 let dump = bytes_arg(&args, 1, "the torrent file")?;
-                let options = options_from(args.get(2));
+                let options = options_from(args.get(2), self.torrent_defaults().await);
                 let mut stored = options.clone();
                 stored.filename = filename;
                 self.add(AddTorrent::from_file(dump, String::new()), stored)
@@ -394,7 +506,7 @@ impl Rpc for Core {
             }
             "core.add_torrent_magnet" => {
                 let uri = string_arg(&args, 0, "a magnet uri")?;
-                let mut stored = options_from(args.get(1));
+                let mut stored = options_from(args.get(1), self.torrent_defaults().await);
                 stored.magnet = Some(uri.clone());
                 self.add(AddTorrent::from_magnet(uri, String::new()), stored)
                     .await
@@ -415,17 +527,7 @@ impl Rpc for Core {
                             let outcome = state.session.remove_torrent(&id, with_data);
                             state.torrents.remove(&id);
 
-                            // The stored torrent file and resume data go with
-                            // it, or a removed torrent comes back at the next
-                            // restart.
-                            let state_dir = state.state_dir();
-                            let _ = std::fs::remove_file(crate::manager::torrent_file_path(
-                                &state_dir, &id,
-                            ));
-                            let _ = std::fs::remove_file(
-                                state_dir.join("resume").join(format!("{id}.resume")),
-                            );
-
+                            state.forget(&id);
                             state.mark_dirty();
                             let _ = state.save_state();
                             outcome
@@ -843,7 +945,7 @@ impl Rpc for Core {
                 let options = args.get(2).cloned();
                 let dump = fetch(&url).await?;
 
-                let mut stored = options_from(options.as_ref());
+                let mut stored = options_from(options.as_ref(), self.torrent_defaults().await);
                 stored.filename = filename_from_url(&url);
                 self.add(AddTorrent::from_file(dump, String::new()), stored)
                     .await
@@ -921,8 +1023,33 @@ impl Rpc for Core {
                 // Hashing reads every byte of the content, which can take
                 // minutes. On the async runtime that would stall every other
                 // client, so it goes to a blocking thread.
+                //
+                // Progress crosses back from the hashing loop in C++. It is
+                // throttled to a hundred events for the whole run: a torrent
+                // can have hundreds of thousands of pieces, and one event each
+                // would drown every client to tell them about a progress bar.
+                let manager = self.manager.clone();
                 let built = tokio::task::spawn_blocking(move || {
-                    redeluge_libtorrent::Session::create_torrent(
+                    let mut last_reported = -1i64;
+                    let mut progress =
+                        redeluge_libtorrent::HashProgress::new(Box::new(move |piece, total| {
+                            let total = i64::from(total).max(1);
+                            let piece = i64::from(piece) + 1;
+                            let step = (total / 100).max(1);
+                            if piece % step != 0 && piece != total {
+                                return;
+                            }
+                            if piece == last_reported {
+                                return;
+                            }
+                            last_reported = piece;
+                            manager.announce(Event::CreateTorrentProgress {
+                                piece_count: piece,
+                                num_pieces: total,
+                            });
+                        }));
+
+                    redeluge_libtorrent::Session::create_torrent_with_progress(
                         &path,
                         piece_length,
                         &comment,
@@ -930,6 +1057,7 @@ impl Rpc for Core {
                         private,
                         &trackers,
                         &web_seeds,
+                        &mut progress,
                     )
                 })
                 .await
@@ -989,7 +1117,23 @@ impl Rpc for Core {
             "core.get_torrent_status" => {
                 let id = string_arg(&args, 0, "a torrent id")?;
                 let keys = wanted_keys(&args, 1);
-                let status = self.status_of(&id).await?;
+                // The peers tab is the only caller that asks for them, and it
+                // asks for that key alone.
+                let peers = keys
+                    .as_ref()
+                    .map(|keys| keys.iter().any(|key| key == "peers"))
+                    .unwrap_or(true);
+                // The file list is three more calls into libtorrent, so like
+                // the peers it is only paid for when a client asks.
+                let files = keys
+                    .as_ref()
+                    .map(|keys| {
+                        keys.iter().any(|key| {
+                            matches!(key.as_str(), "files" | "file_progress" | "file_priorities")
+                        })
+                    })
+                    .unwrap_or(true);
+                let status = self.status_of_with(&id, peers, files).await?;
                 Ok(Value::Dict(filtered(status, &keys)))
             }
 
@@ -1407,8 +1551,125 @@ extern "C" {
     fn statvfs(path: *const std::ffi::c_char, buf: *mut libc_statvfs) -> i32;
 }
 
-fn options_from(value: Option<&Value>) -> TorrentOptions {
-    let mut options = TorrentOptions::default();
+/// Applies the per-torrent limits and flags an added torrent carries.
+///
+/// libtorrent takes the flags in the add request but not the limits, so
+/// without this a torrent added with a speed cap ran uncapped until something
+/// set the option a second time.
+fn apply_limits(state: &mut crate::manager::SessionState, id: &str, options: &TorrentOptions) {
+    let _ = state
+        .session
+        .set_max_connections(id, options.max_connections as i32);
+    let _ = state
+        .session
+        .set_max_uploads(id, options.max_upload_slots as i32);
+    let _ = state
+        .session
+        .set_download_limit(id, kib_to_bytes(options.max_download_speed));
+    let _ = state
+        .session
+        .set_upload_limit(id, kib_to_bytes(options.max_upload_speed));
+
+    let change = FlagChange::new()
+        .set_to(flags::SEQUENTIAL_DOWNLOAD, options.sequential_download)
+        .set_to(flags::SUPER_SEEDING, options.super_seeding);
+    let _ = state.session.set_flags(id, change);
+
+    if options.prioritize_first_last {
+        apply_first_last_priority(state, id, true);
+    }
+}
+
+/// Raises the priority of the pieces at each end of each file.
+///
+/// This is what "prioritise first and last pieces" means: a media player can
+/// read a file's header and its index before the middle has arrived. The
+/// setting was stored and never acted on, by `core.set_torrent_options` as
+/// well as on add.
+///
+/// Only the boundary pieces are touched, and a file the user skipped is left
+/// alone: writing a whole priority array would quietly un-skip it.
+fn apply_first_last_priority(state: &mut crate::manager::SessionState, id: &str, on: bool) {
+    let Ok(status) = state.session.torrent_status(id) else {
+        return;
+    };
+    if status.piece_length <= 0 || status.num_pieces <= 0 {
+        // No metadata yet. A magnet gets this applied when the torrent is next
+        // given options; there is nothing to prioritise before then.
+        return;
+    }
+
+    let Ok(files) = state.session.files(id) else {
+        return;
+    };
+    let Ok(priorities) = state.session.file_priorities(id) else {
+        return;
+    };
+    let Ok(mut pieces) = state.session.piece_priorities(id) else {
+        return;
+    };
+
+    let length = i64::from(status.piece_length);
+    let last_piece = pieces.len().saturating_sub(1);
+
+    for file in &files {
+        let own = priorities.get(file.index as usize).copied().unwrap_or(4);
+        if own == 0 || file.size <= 0 {
+            continue;
+        }
+        let first = (file.offset / length) as usize;
+        let last = ((file.offset + file.size - 1) / length) as usize;
+        for piece in [first.min(last_piece), last.min(last_piece)] {
+            if let Some(slot) = pieces.get_mut(piece) {
+                *slot = if on { 7 } else { own };
+            }
+        }
+    }
+
+    let _ = state.session.prioritize_pieces(id, &pieces);
+}
+
+/// Keeps the user's own copy of a `.torrent`, if they asked for one.
+///
+/// `copy_torrent_file` and `torrentfiles_location` are Deluge settings that
+/// this daemon stored and never acted on. The copy is named after the file it
+/// was added from where there is one, and after the torrent otherwise, which
+/// is what a magnet gives you.
+fn copy_torrent_file(directory: &str, filename: &str, id: &str, bytes: &[u8]) {
+    if directory.is_empty() {
+        return;
+    }
+    let name = if filename.is_empty() {
+        format!("{id}.torrent")
+    } else {
+        // Only the last component, and nothing that climbs out of the
+        // directory: the name came from a client.
+        let base = filename.rsplit(['/', '\\']).next().unwrap_or(filename);
+        let base = base.trim_matches('.');
+        if base.is_empty() {
+            format!("{id}.torrent")
+        } else {
+            base.to_owned()
+        }
+    };
+
+    let path = std::path::Path::new(directory).join(name);
+    if let Err(err) = std::fs::create_dir_all(directory).and_then(|()| std::fs::write(&path, bytes))
+    {
+        tracing::warn!(torrent = %id, path = %path.display(), error = %err,
+            "could not keep a copy of the torrent file");
+    }
+}
+
+/// The options a torrent is added with: the configured defaults, with
+/// whatever the client sent on top.
+///
+/// `defaults` used to be `TorrentOptions::default()`, a constant, so every
+/// preference under "Add Torrent Options", the per-torrent bandwidth limits
+/// and the seeding rules were stored and never read. A client that sends a key
+/// still wins, which is Deluge's order.
+fn options_from(value: Option<&Value>, defaults: TorrentOptions) -> TorrentOptions {
+    let mut options = defaults;
     let Some(Value::Dict(entries)) = value else {
         return options;
     };
@@ -1424,9 +1685,11 @@ fn options_from(value: Option<&Value>) -> TorrentOptions {
             "auto_managed" => options.auto_managed = value.as_bool().unwrap_or(true),
             "sequential_download" => options.sequential_download = value.as_bool().unwrap_or(false),
             "pre_allocate_storage" => {
-                if value.as_bool().unwrap_or(false) {
-                    options.storage_mode = "allocate".to_owned();
-                }
+                options.storage_mode = if value.as_bool().unwrap_or(false) {
+                    "allocate".to_owned()
+                } else {
+                    "sparse".to_owned()
+                };
             }
             "prioritize_first_last_pieces" => {
                 options.prioritize_first_last = value.as_bool().unwrap_or(false)
@@ -1563,7 +1826,14 @@ impl Core {
         ]))
     }
 
-    async fn status_of(&self, id: &str) -> Result<BTreeMap<String, Value>, RpcError> {
+    /// One torrent's status. `peers` costs a second call into libtorrent and a
+    /// country lookup each, so it is only paid for when a client asks.
+    async fn status_of_with(
+        &self,
+        id: &str,
+        peers: bool,
+        files: bool,
+    ) -> Result<BTreeMap<String, Value>, RpcError> {
         let wanted = id.to_owned();
         let status = self
             .manager
@@ -1571,7 +1841,35 @@ impl Core {
                 let torrent = state.torrents.get(&wanted)?.clone();
                 let status = state.session.torrent_status(&wanted).ok()?;
                 let trackers = state.session.trackers(&wanted).unwrap_or_default();
-                Some(torrent.status(&status, state.session_paused, &trackers))
+                let file_list = if files {
+                    Some((
+                        state.session.files(&wanted).unwrap_or_default(),
+                        state.session.file_progress(&wanted).unwrap_or_default(),
+                        state.session.file_priorities(&wanted).unwrap_or_default(),
+                    ))
+                } else {
+                    None
+                };
+                let peers = if peers {
+                    state
+                        .session
+                        .peers(&wanted)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|peer| {
+                            let country = state.country_of(&peer.ip);
+                            (peer, country)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let mut out =
+                    torrent.status_with_peers(&status, state.session_paused, &trackers, &peers);
+                if let Some((entries, progress, priorities)) = file_list {
+                    crate::torrent::put_files(&mut out, &entries, &progress, &priorities);
+                }
+                Some(out)
             })
             .await
             .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
@@ -1760,6 +2058,7 @@ impl Core {
                         continue;
                     };
                     let mut change = FlagChange::new();
+                    let mut first_last = None;
 
                     for (key, value) in &entries {
                         let Some(key) = key.as_str() else { continue };
@@ -1834,6 +2133,13 @@ impl Core {
                                 torrent.options.owner =
                                     value.as_str().unwrap_or_default().to_owned()
                             }
+                            "prioritize_first_last_pieces" => {
+                                let on = value.as_bool().unwrap_or(false);
+                                torrent.options.prioritize_first_last = on;
+                                // Applied after this loop: it reads the whole
+                                // session, and the torrent is borrowed here.
+                                first_last = Some(on);
+                            }
                             "shared" => torrent.options.shared = value.as_bool().unwrap_or(false),
                             "name" => torrent.options.name = value.as_str().map(str::to_owned),
                             _ => {}
@@ -1842,6 +2148,9 @@ impl Core {
 
                     if !change.is_empty() {
                         let _ = state.session.set_flags(id, change);
+                    }
+                    if let Some(on) = first_last {
+                        apply_first_last_priority(state, id, on);
                     }
                 }
                 state.mark_dirty();
@@ -1931,9 +2240,57 @@ fn matches_filter(status: &BTreeMap<String, Value>, filter: &[(String, Vec<Strin
                 Some("Downloading") | Some("Seeding")
             );
         }
+        // The quick search. Deluge looks in more than the name, so that
+        // "error" or the name of a tracker finds what you meant, and every
+        // term has to match.
+        if key == "keyword" {
+            return wanted
+                .iter()
+                .flat_map(|value| value.split(','))
+                .map(str::trim)
+                .filter(|term| !term.is_empty())
+                .all(|term| matches_keyword(status, &term.to_lowercase()));
+        }
+        // `name` is the other free-text filter, and it is a substring rather
+        // than an exact match: nothing would ever match a whole torrent name
+        // typed by hand.
+        if key == "name" {
+            let Some(name) = status.get("name").and_then(Value::as_str) else {
+                return false;
+            };
+            let name = name.to_lowercase();
+            return wanted
+                .iter()
+                .any(|value| name.contains(&value.to_lowercase()));
+        }
         match status.get(key).and_then(Value::as_str) {
             Some(actual) => wanted.iter().any(|value| value == actual),
             None => false,
         }
+    })
+}
+
+/// One search term against the fields Deluge searched.
+///
+/// Name, state, tracker, tracker message, label and the infohash. The file
+/// list is the one field upstream searched that this does not: it is not in
+/// the status, and fetching every torrent's files to answer a keystroke would
+/// be a great deal of work for a search box.
+fn matches_keyword(status: &BTreeMap<String, Value>, term: &str) -> bool {
+    const SEARCHED: &[&str] = &[
+        "name",
+        "state",
+        "tracker_host",
+        "tracker",
+        "tracker_status",
+        "label",
+        "hash",
+    ];
+
+    SEARCHED.iter().any(|key| {
+        status
+            .get(*key)
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.to_lowercase().contains(term))
     })
 }

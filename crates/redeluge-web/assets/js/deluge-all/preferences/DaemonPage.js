@@ -63,23 +63,7 @@ Deluge.preferences.Daemon = Ext.extend(Ext.form.FormPanel, {
             })
         );
 
-        fieldset = this.add({
-            xtype: 'fieldset',
-            border: false,
-            title: _('Other'),
-            autoHeight: true,
-            labelWidth: 1,
-            defaultType: 'checkbox',
-        });
-        om.bind(
-            'new_release_check',
-            fieldset.add({
-                fieldLabel: '',
-                labelSeparator: '',
-                height: 40,
-                boxLabel: _('Periodically check the website for new releases'),
-                id: 'new_release_check',
-            })
-        );
+        // The "Other" group held a release check, the second copy of the one
+        // on the Other page. Nothing checks anything, so both are gone.
     },
 });

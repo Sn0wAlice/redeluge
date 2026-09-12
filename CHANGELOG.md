@@ -3,11 +3,11 @@
 All notable changes to this project are documented in this file. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-redeluge numbers its own releases from 0.1.0. The version the daemon reports
+redeluge numbers its own releases from 1.0.0. The version the daemon reports
 to clients stays `2.2.1`, because that is the Deluge a client expects to be
 talking to.
 
-## [0.1.0] — 2026-09-11
+## [1.0.0] — 2026-09-12
 
 **This is where Deluge became redeluge.**
 
@@ -51,10 +51,26 @@ existing installations keep working.
   the Features page of the wiki.
 - A label is a torrent option, set with `core.set_torrent_options`, reported in
   the status and counted in `core.get_filter_tree` beside state, tracker and
-  owner. It is no longer a second file keyed by torrent id that can drift out
+  owner. A label can now be set from the interface as well, in the
+  Add dialog and in a torrent's Options tab; until then nothing in the Web UI
+  could set one, so the sidebar's Labels list was always empty.
+- Controls for the two settings redeluge added: the poll interval under
+  Preferences, Interface, and a daemon's certificate fingerprint in the
+  Connection Manager's Edit window. Both could only be set by editing
+  `web.conf` by hand before.
+- A *Fetch Now* button on the Block List page, which brings the next download
+  forward without a method for it: it clears the stored timestamp and the
+  minute-by-minute check does the rest. It is no longer a second file keyed by torrent id that can drift out
   of step with the first.
 - `set_ip_filter` on the libtorrent bridge, which is what the block list
   installs into.
+- `.github/workflows/docker.yml`, which builds the image and publishes it to
+  the repository's package registry. Started by hand, because publishing
+  follows a version bump rather than a push. The tag is the version in
+  `[workspace.package]` of `Cargo.toml` and nothing else, and the run stops
+  rather than replacing a version already in the registry.
+- OCI labels on the image, so the version and the commit it was built from are
+  readable without pulling it.
 - Documentation as a wiki under `wiki/`, mirrored to the GitHub wiki by a
   workflow on every push that touches it. The repository is the source; pages
   edited in the wiki interface are overwritten.
@@ -64,6 +80,33 @@ existing installations keep working.
 - `webutils.get_themes` and `webutils.get_languages`, which the contract
   records and the dispatcher did not answer. Aliases of their `web.*` twins, as
   in Deluge.
+- Ten Web UI methods that the shipped front end calls and nothing answered, so
+  adding a torrent by any route was impossible from the interface and the
+  connection manager did nothing: `web.get_torrent_info`,
+  `web.get_magnet_info`, `web.download_torrent_from_url`, `web.add_torrents`,
+  `web.get_torrent_status`, `web.get_torrent_files`, `web.add_host`,
+  `web.edit_host`, `web.remove_host` and `web.stop_daemon`.
+- `POST /upload`, the add-by-file endpoint, staging files under the
+  configuration directory and refusing anything that is not a torrent.
+- Preferences pages for watched folders, the block list and the schedule, the
+  last of them a clickable grid of the week.
+- The peer list in the torrent status, which was absent entirely, with peer
+  countries from a MaxMind DB database when `geoip_db_location` names one.
+- Move on completion, and the stop-and-remove-at-ratio rule, both of which were
+  stored and reported and never acted on.
+- `CreateTorrentProgressEvent`, reported from the hashing loop in C++ through
+  the only callback that crosses from C++ into Rust.
+- Minified script bundles, and the gzip compression whose feature was enabled
+  and whose middleware was never added.
+- Rate limiting on the Web UI login: five attempts, then one every thirty
+  seconds, per client address.
+- Reconnection to a restarted daemon, which previously needed the Web UI
+  restarted too.
+- Certificate pinning for a remote daemon, through `daemon_fingerprints` in
+  `web.conf`.
+- Magnet files in a watched directory, and zipped block lists.
+- An HTTP integration test that boots the server, and an SSL torrent test that
+  generates its own certificate authority.
 
 ### Changed
 
@@ -87,9 +130,162 @@ existing installations keep working.
   in the contract, and nothing shipped calls it.
 - Windows and macOS support. Linux only, from source or from the image.
 
+### Changed
+
+- **The interface is named after the fork.** The toolbar button, the browser
+  tab and the About window read `RE:deluge`, and the About window says which
+  version of the fork is running rather than only the Deluge version this
+  server reports to clients. Every protocol-facing string is untouched: the
+  daemon still reports `2.2.1` and still answers Deluge's API, because that is
+  what a client written against the Python server expects.
+- The Help button opens this project's wiki instead of upstream's user guide,
+  and the About window links to the repository.
+
+### Removed from the interface
+
+Each of these was a control whose setting nothing read. The configuration keys
+stay, because the daemon answers Deluge's API and a client that asks for them
+must get them; only the controls are gone, and
+[Configuration](https://github.com/Sn0wAlice/redeluge/wiki/Configuration) lists
+every one with its reason.
+
+- The Encryption page and the Cache page, whole. Encryption was never passed to
+  libtorrent, and libtorrent 2.0 has no disk cache: it maps files into memory.
+- Language, on the Interface page. There is one language.
+- Updates and System Information, on the Other page, and the second copy of the
+  release check on the Daemon page. Nothing checks for releases and nothing is
+  sent anywhere.
+- Peer Exchange and the Outgoing Ports group, on the Network page. libtorrent
+  2.0 has neither setting.
+- Force Use of Proxy. libtorrent 2.0 dropped it; the three switches above it
+  are what it meant.
+- Port, Enable SSL, Private Key and Certificate, on the Interface page. The
+  server has always refused to move its own listener on a browser's say-so.
+- Start Daemon, in the Connection Manager. The daemon is a service of its own.
+
 ### Fixed
 
+- Choosing a theme in the Web UI stored the first letter of its name.
+  `web.get_themes` answered with a flat list of names where the interface
+  expects name and label pairs, so ExtJS read each name as a row and took
+  character zero as the value: `gray` became `g`, and the page then asked for a
+  stylesheet that does not exist. `web.set_theme` now refuses a theme with no
+  stylesheet, and the page falls back to the default rather than rendering
+  unstyled.
+- A missing asset was answered with the page, so a browser asking for a
+  stylesheet was handed HTML and reported a parse error rather than a missing
+  file. A path that looks like a file now gets a 404; a front-end route still
+  gets the page.
+- `web.get_config` reported the theme from the startup snapshot rather than the
+  live configuration, so the interface showed the previous choice until the
+  server was restarted.
+- Uploading a torrent from the add dialog failed with "Failed to upload
+  torrent". `POST /upload` answered `application/json`, and a form with
+  `fileUpload: true` is submitted through a hidden iframe whose document the
+  browser builds from the response: only `text/html` makes it insert the body
+  unchanged where ExtJS can read it back. The Python server set `text/html` for
+  the same reason.
+- The interface polled more than it needed to. Nine places call the update
+  loop directly, and each one started a poll on top of the pending one, so a
+  burst of clicking produced overlapping requests. A poll now replaces the
+  pending one and will not start while another is in flight, and the interval
+  is `poll_interval` in `web.conf` rather than the number 2000 written into
+  five places in the JavaScript.
+- Asset URLs carry the build's identity. They are cached for an hour, so an
+  upgraded server served new JavaScript that browsers ignored until the cache
+  expired, running the old front end against the new API.
+- **Seventeen preferences did nothing.** Every torrent was added with a
+  hard-coded set of options rather than the configured ones, so the whole "Add
+  Torrent Options" group, the per-torrent bandwidth limits and the seeding
+  rules could be changed and meant nothing. They are read now, on every route a
+  torrent arrives by, and a dictionary the client sends still wins over them.
+  `queue_new_to_top`, `copy_torrent_file` and `torrentfiles_location` work too,
+  and "prioritise first and last pieces" now actually raises the priority of
+  the pieces at each end of each file instead of only being remembered.
+- Limits set while adding a torrent were stored and not applied, so a torrent
+  added with a speed cap ran uncapped until something set the option a second
+  time.
+- The three feature preferences pages wrote their settings back even when
+  nobody had opened them, which is what the Preferences window does to every
+  page on OK. An unopened page holds defaults and an empty grid, so pressing OK
+  erased the watched-folder list and reset the weekly schedule. A page that has
+  not read its settings now writes nothing.
+- A blank number field in those pages serialised as `null`, and `serde` fills
+  in a key that is absent rather than one that is present and null, so a single
+  null made the daemon discard the whole feature configuration and say so every
+  few seconds. Both ends are fixed, and a complaint about a configuration is
+  logged once rather than on every pass of the timer.
+- The Block List page dropped the two keys the daemon writes, so every Apply
+  looked like a list that had never been fetched and the next check downloaded
+  it again.
+- The watched-folders preferences page threw as it built itself. Its Add button
+  handler was called `onAdd`, which is a method `Ext.Container` calls on itself
+  every time anything is added to the panel, so the handler ran against a store
+  that did not exist yet. A test now refuses either name on the new pages.
+- **The preferences window cut its pages off.** The card layout sizes the
+  active page to the window, so a page taller than that simply ended below the
+  frame with nothing to say so and no way to reach the rest: the Bandwidth page
+  lost its per-torrent limits and the Schedule page lost everything below the
+  grid. Every page scrolls now, the window is wide enough for the widest of
+  them, and it can be resized.
+- The watched-folder grid was six hundred pixels wide in a three-hundred-pixel
+  page, so three of its six columns were drawn past the frame and could not be
+  reached at all. It tracks the page now.
+- "Scan every (seconds):" was drawn as three lines with its spinner across
+  them, and "Maximum Connection Attempts per Second:" and "Pin sha256:" each
+  wrapped onto two. A form lays every field out at the label column's width, so
+  a column narrower than the caption does not wrap the caption, it draws the
+  field on top of it.
+- The add dialog's Options tab had the same cut-off ending as the preferences
+  pages.
+- A long torrent name was cut at the edge of its cell with no ellipsis, because
+  the name is drawn in a block inside the cell and overflowed on its own terms
+  rather than the cell's.
+- **The Files tab was blank for every torrent.** The daemon never reported
+  `files`, `file_progress` or `file_priorities`, so `web.get_torrent_files`
+  built an empty tree. They are reported now, and like the peer list they are
+  only fetched when a client asks for them.
+- The sidebar listed its filter groups alphabetically, which put Labels first
+  and States third, because the JSON object they arrive in comes back with its
+  keys sorted rather than in the order the daemon wrote them. The Web UI orders
+  them itself now.
+- Torrents with no label showed as a blank row with a count beside it and
+  nothing to say what it was. That group is named now, "No Label" or "No
+  Owner".
+- The last rows of a long torrent list rendered empty. The buffered grid view
+  placed its render window with a constant row height, so any deviation from
+  it, a browser zoom, a larger font, a theme with more padding, walked the
+  window off the bottom of the viewport, and far enough down the list inverted
+  it and blanked every row on screen. It measures the real row pitch now, and
+  cannot produce an inverted window.
+- Three grid renderers could raise, which stops the grid's render loop and
+  empties every row it had not reached, looking exactly like the bug above. The
+  torrent name indexed the state without checking it, the progress bar indexed
+  a regular expression match without checking it, and the peer flag called a
+  string method on a field that may not be sent.
+- The peers tab drew its progress bar `NaN` pixels wide. It read `this.width`,
+  but a grid renderer is called unbound unless its column sets a scope. Both
+  progress renderers now read the width from the metadata the grid passes.
+- Peer country flags were broken images: the interface asks for `flag/<code>`
+  per row, which is Deluge's own URL, and nothing answered it. The flags are
+  shipped and the route validates the code rather than pasting it into a path.
+- Tracker icons were a 404 per row on every refresh. Deluge's web server
+  fetched each tracker's favicon; redeluge has no such fetcher and will not
+  make outbound requests to every host a torrent names, so the grid column and
+  the sidebar filter stopped asking for an image that cannot exist.
+- The `Allocating` and `Moving` states had no icon in the torrent list or the
+  sidebar, leaving an empty indent where one belongs.
+- A label or owner containing a quote or a `<` broke the sidebar row it was in:
+  the filter template put the value into a class attribute and into the text
+  without escaping either.
+
 Defects inherited from upstream and found while porting:
+
+- Two stylesheet references had never resolved, since well before the fork. The
+  About window's masthead pointed into a directory the web root does not have,
+  so that window has always been blank at the top, and the add dialog's spinner
+  was a root-absolute path missing a segment, which would also have broken
+  under a base path. A test now walks every `url()` in the stylesheets we own.
 
 - The daemon would not start with pyOpenSSL 26.4, which removed
   `crypto.X509Req`. Rust generates the keypair itself and the dependency is

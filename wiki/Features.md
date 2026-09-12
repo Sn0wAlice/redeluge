@@ -15,7 +15,15 @@ something on.
 
 ## Setting them
 
-Through the Web UI's JSON-RPC endpoint, having logged in first. See
+**In the Web UI**, under Preferences: *Watched Folders*, *Block List* and
+*Schedule*. The schedule is a grid of the week; clicking an hour cycles it
+through full speed, slow and stopped. The Block List page has a *Fetch Now*
+button, which clears the timestamp and brings the next download forward to
+within the minute. Labels have no page of their own: a label is a property of a
+torrent, set in the Add dialog or in the torrent's own Options tab, and the
+sidebar lists them once some exist.
+
+**Or through the API**, which is what the pages do. Having logged in first; see
 [Web API](Web-API) for the session cookie.
 
 ```bash
@@ -30,6 +38,12 @@ A key is replaced whole, not merged. Read the current value, change what you
 want, and send the result back.
 
 ## Labels
+
+**In the Web UI**, a label is a text field: in the Add dialog, under Options,
+and afterwards in a torrent's own Options tab. Type a name and apply. The
+Labels list appears in the sidebar as soon as one torrent carries one, and
+filters like any other category. There is no page in Preferences because there
+is nothing global to configure.
 
 A label is a torrent option like any other:
 
@@ -80,8 +94,10 @@ A file is not added the moment it appears. It has to be the same size on two
 scans running, because a file that is still being written parses as a corrupt
 torrent and the error says nothing about why.
 
-Only `.torrent` files are read. The plugin also read `.magnet` files; that is
-not here.
+`.torrent` and `.magnet` files are read. A `.magnet` file is magnet links, one
+per line, with blank lines and comments skipped; the file is one unit for
+disposal, so a bad link among several does not leave the good ones to be added
+again on every scan.
 
 ## Block list
 
@@ -103,7 +119,9 @@ A downloaded list of address ranges, installed as libtorrent's IP filter.
 The list is downloaded when the cached copy is older than `check_after_days`,
 and the cache is what a restart loads, so a daemon that starts without a
 network still filters. Set `check_after_days` to zero to pin a list you
-downloaded yourself. Turning `enabled` off clears the filter within the hour.
+downloaded yourself. The settings are read every minute, so changing the URL
+fetches the new list at once, changing the whitelist reinstalls from the cached
+one without downloading anything, and turning `enabled` off clears the filter.
 
 Two formats are read, both text, and which one is in use is detected from the
 first line that says anything:
@@ -113,10 +131,13 @@ first line that says anything:
 | PeerGuardian, also called SafePeer or p2p | `Some organisation:1.2.3.4-5.6.7.8` |
 | eMule | `001.002.003.004 - 005.006.007.008 , 000 , Some organisation` |
 
-Plain and gzipped lists are read. A zip or bzip2 archive is refused with a
-message naming the format. Lines that will not parse are counted and skipped,
-because a public list of two hundred thousand lines usually has a few; the
-count goes in the log next to the number of ranges installed.
+Plain, gzipped and zipped lists are read. A zip is unpacked by taking its
+largest member, because these archives often carry a readme beside the list. A
+bzip2 archive is refused with a message naming the format: it would mean a C
+dependency for something no list actually uses. Lines that will not parse are
+counted and skipped, because a public list of two hundred thousand lines
+usually has a few; the count goes in the log next to the number of ranges
+installed.
 
 `whitelisted` entries are never blocked whatever the list says. They are
 applied after the list, as allowing rules, which is what puts a hole in a
@@ -156,8 +177,9 @@ is one of:
 
 The `low_*` rates are in KiB/s, and -1 is no limit, as everywhere else in
 Deluge. The schedule is evaluated on the hour in local time, so a rule written
-for 9am still means 9am after a clock change. Set the container's timezone with
-`TZ` if it is not UTC.
+for 9am still means 9am after a clock change, and also every minute in between,
+so a grid you have just edited means something before the hour is out. Set the
+container's timezone with `TZ` if it is not UTC.
 
 A cell the grid does not have is read as no restriction, so a hand-edited grid
 that is too short does not stop everything.

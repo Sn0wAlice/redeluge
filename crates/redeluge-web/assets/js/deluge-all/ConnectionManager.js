@@ -198,23 +198,17 @@ Deluge.ConnectionManager = Ext.extend(Ext.Window, {
             if (status.toLowerCase() != 'online') button.disable();
         }
 
-        // Update the Stop/Start Daemon button
+        // The button only ever stops a daemon. Starting one from here meant
+        // the Web UI spawning an unsupervised child process; redeluge runs the
+        // daemon as a service of its own, so `web.start_daemon` refuses and
+        // there is nothing to offer for a host that is offline.
         if (
             status.toLowerCase() == 'connected' ||
             status.toLowerCase() == 'online'
         ) {
             this.stopHostButton.enable();
-            this.stopHostButton.setText(_('Stop Daemon'));
         } else {
-            if (
-                record.get('host') == '127.0.0.1' ||
-                record.get('host') == 'localhost'
-            ) {
-                this.stopHostButton.enable();
-                this.stopHostButton.setText(_('Start Daemon'));
-            } else {
-                this.stopHostButton.disable();
-            }
+            this.stopHostButton.disable();
         }
     },
 
@@ -388,8 +382,6 @@ Deluge.ConnectionManager = Ext.extend(Ext.Window, {
         if (selections[0]) {
             this.editHostButton.enable();
             this.removeHostButton.enable();
-            this.stopHostButton.enable();
-            this.stopHostButton.setText(_('Stop Daemon'));
             this.updateButtons(this.list.getRecord(selections[0]));
         } else {
             this.editHostButton.disable();
@@ -418,25 +410,19 @@ Deluge.ConnectionManager = Ext.extend(Ext.Window, {
         var connection = this.list.getSelectedRecords()[0];
         if (!connection) return;
 
-        if (connection.get('status') == 'Offline') {
-            // This means we need to start the daemon
-            deluge.client.web.start_daemon(connection.get('port'));
-        } else {
-            // This means we need to stop the daemon
-            deluge.client.web.stop_daemon(connection.id, {
-                success: function (result) {
-                    if (!result[0]) {
-                        Ext.MessageBox.show({
-                            title: _('Error'),
-                            msg: result[1],
-                            buttons: Ext.MessageBox.OK,
-                            modal: false,
-                            icon: Ext.MessageBox.ERROR,
-                            iconCls: 'x-deluge-icon-error',
-                        });
-                    }
-                },
-            });
-        }
+        deluge.client.web.stop_daemon(connection.id, {
+            success: function (result) {
+                if (!result[0]) {
+                    Ext.MessageBox.show({
+                        title: _('Error'),
+                        msg: result[1],
+                        buttons: Ext.MessageBox.OK,
+                        modal: false,
+                        icon: Ext.MessageBox.ERROR,
+                        iconCls: 'x-deluge-icon-error',
+                    });
+                }
+            },
+        });
     },
 });

@@ -128,6 +128,7 @@ Deluge.Keys = {
         'move_completed',
         'move_completed_path',
         'super_seeding',
+        'label',
     ],
 };
 

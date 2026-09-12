@@ -23,8 +23,14 @@ button::-moz-focus-inner {
     background-image: url('../icons/deluge.png') !important;
 }
 
+/* The About window's masthead. Upstream pointed this at
+   `../ui_images/deluge-about.png`, which is not in the web root and never was:
+   that file lives in the desktop client's pixmap directory and is not served,
+   so the box has always been empty. The application icon we do ship, scaled to
+   the box, is what the window wanted. */
 .x-deluge-logo {
-    background-image: url('../ui_images/deluge-about.png');
+    background: url('../icons/deluge-192.png') no-repeat center;
+    background-size: contain;
 }
 
 #tbar-deluge-text * {
@@ -42,11 +48,20 @@ button::-moz-focus-inner {
     line-height: 16px;
 }
 
+/* The grid cell around these already clips and elides, but a block inside it
+   overflows on its own terms: a long torrent name ran to its full width and
+   was cut at the cell edge with no ellipsis, so there was nothing to say the
+   name continued. The same div carries the state icon as a background, which
+   is what the padding is for. */
 .deluge-torrents .torrent-name,
 .x-deluge-peer,
 .x-deluge-seed {
     padding-left: 20px;
     background-repeat: no-repeat;
+    overflow: hidden;
+    -o-text-overflow: ellipsis;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .deluge-torrents .deluge-torrent-progress {
@@ -88,6 +103,18 @@ button::-moz-focus-inner {
 .x-deluge-checking,
 .deluge-torrents .checking {
     background-image: url('../icons/checking.png');
+}
+/* Both the name cell and the sidebar filter build their class from the state
+   name, so every state the daemon reports needs one here or the row shows
+   twenty pixels of empty indent where the icon belongs. These two were the
+   states with no rule. */
+.x-deluge-allocating,
+.deluge-torrents .allocating {
+    background-image: url('../icons/checking.png');
+}
+.x-deluge-moving,
+.deluge-torrents .moving {
+    background-image: url('../icons/move.png');
 }
 .x-deluge-dht,
 .x-btn .x-deluge-dht {
@@ -237,7 +264,7 @@ dl.singleline dd {
 .x-deluge-add-torrent-name-loading {
     padding-left: 20px;
     line-height: 20px;
-    background: url('/themes/default/tree/loading.gif') no-repeat 2px;
+    background: url('../themes/images/default/tree/loading.gif') no-repeat 2px;
 }
 
 /* Add Url Window */
@@ -567,4 +594,50 @@ dl.singleline dd {
 
 .icon-high {
     background-image: url('../icons/high.png') !important;
+}
+
+/* Preferences: the weekly schedule grid */
+.x-deluge-schedule {
+    border-collapse: collapse;
+    font-size: 11px;
+}
+
+.x-deluge-schedule th {
+    font-weight: normal;
+    color: #555;
+    padding: 1px 4px;
+    text-align: center;
+}
+
+.x-deluge-schedule td {
+    width: 34px;
+    height: 14px;
+    border: 1px solid #fff;
+    cursor: pointer;
+}
+
+.x-deluge-schedule-0 {
+    background-color: #7ebf7e;
+}
+
+.x-deluge-schedule-1 {
+    background-color: #e3c95c;
+}
+
+.x-deluge-schedule-2 {
+    background-color: #cc7a6b;
+}
+
+.x-deluge-schedule-key {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #555;
+}
+
+.x-deluge-schedule-key span {
+    display: inline-block;
+    width: 14px;
+    height: 10px;
+    border: 1px solid #aaa;
+    vertical-align: middle;
 }

@@ -50,6 +50,18 @@ impl ScriptSet {
     }
 }
 
+/// What makes one build's asset URLs different from another's.
+///
+/// The reported version is the same `2.2.1` for every build, so it cannot be
+/// the key on its own: the bundle's own size is added, which changes whenever
+/// the front end does.
+fn cache_key(version: &str) -> String {
+    let size = assets::get("js/deluge-all-debug.js")
+        .map(|bytes| bytes.len())
+        .unwrap_or(0);
+    format!("{version}-{size}")
+}
+
 /// Picks the best script set that was actually embedded.
 pub fn choose_scripts(debug_requested: bool) -> ScriptSet {
     let wanted = if debug_requested {
@@ -98,6 +110,21 @@ pub fn render_index(
 
     let mut script_list = vec!["js/gettext.js".to_owned()];
     script_list.extend(scripts.scripts().iter().map(|name| (*name).to_owned()));
+
+    // Every asset URL carries the build's version. The assets are compiled
+    // into the binary and are cached for an hour, so without this an upgraded
+    // server serves new JavaScript that browsers ignore until the cache
+    // expires: the page runs the old front end against the new API and fails
+    // in ways that look nothing like a caching problem.
+    let stamp = cache_key(version);
+    let stylesheets: Vec<String> = stylesheets
+        .into_iter()
+        .map(|path| format!("{path}?v={stamp}"))
+        .collect();
+    let script_list: Vec<String> = script_list
+        .into_iter()
+        .map(|path| format!("{path}?v={stamp}"))
+        .collect();
 
     let context = Context::new()
         .set("version", version)

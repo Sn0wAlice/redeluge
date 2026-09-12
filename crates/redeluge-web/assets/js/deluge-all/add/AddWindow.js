@@ -50,7 +50,7 @@ Deluge.add.AddWindow = Ext.extend(Deluge.add.Window, {
     title: _('Add Torrents'),
     layout: 'border',
     width: 470,
-    height: 450,
+    height: 500,
     bodyStyle: 'padding: 10px 5px;',
     buttonAlign: 'right',
     closeAction: 'hide',

@@ -10,6 +10,21 @@
 Ext.ns('Deluge');
 
 /**
+ * Turns a filter value into something that is safe as a class name.
+ *
+ * The sidebar builds an icon class out of the filter it is showing. For the
+ * state list those values are a fixed vocabulary, but the label and owner
+ * lists carry whatever someone typed, and that went into a `class="..."`
+ * attribute unquoted-safe: one apostrophe in a label ended the attribute and
+ * the rest of the row rendered as markup.
+ */
+Ext.util.Format.delugeFilterClass = function (value) {
+    return String(value)
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, '-');
+};
+
+/**
  * @class Deluge.FilterPanel
  * @extends Ext.list.ListView
  */
@@ -47,7 +62,7 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
             var tpl = Deluge.FilterPanel.templates[this.filterType];
         } else {
             var tpl =
-                '<div class="x-deluge-filter x-deluge-{filter:lowercase}">{filter} ({count})</div>';
+                '<div class="x-deluge-filter x-deluge-{filter:delugeFilterClass}">{filter:htmlEncode} ({count})</div>';
         }
 
         this.list = this.add({
@@ -69,6 +84,15 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
             ],
         });
         this.relayEvents(this.list, ['selectionchange']);
+    },
+
+    /**
+     * What to call the group of torrents that have no value for this filter.
+     */
+    emptyLabel: function () {
+        if (this.filterType == 'label') return _('No Label');
+        if (this.filterType == 'owner') return _('No Owner');
+        return _('None');
     },
 
     /**
@@ -141,7 +165,10 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
                     store.insert(i, record);
                 }
                 record.beginEdit();
-                record.set('filter', _(s[0]));
+                // An empty value is a real group: the torrents with no label,
+                // or with no owner. It drew as a blank row with a count beside
+                // it and nothing to say what it was.
+                record.set('filter', s[0] === '' ? this.emptyLabel() : _(s[0]));
                 record.set('count', s[1]);
                 record.endEdit();
                 filters[s[0]] = true;
@@ -167,9 +194,11 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
     },
 });
 
+// The tracker filter had the tracker's own favicon here, served by Deluge's
+// icon fetcher. redeluge has none, so the URL answered 404 once per host on
+// every sidebar refresh and drew nothing. The indent stays, which keeps the
+// tracker list lined up with the state and label lists beside it.
 Deluge.FilterPanel.templates = {
     tracker_host:
-        '<div class="x-deluge-filter" style="background-image: url(' +
-        deluge.config.base +
-        'tracker/{filter});">{filter:htmlEncode} ({count})</div>',
+        '<div class="x-deluge-filter">{filter:htmlEncode} ({count})</div>',
 };

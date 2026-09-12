@@ -112,7 +112,45 @@ deluge.ui = {
         });
     },
 
+    /**
+     * How long between polls, in milliseconds.
+     *
+     * Read from the server's configuration so it can be turned down on a slow
+     * link or a busy daemon, and so it is one number rather than the five
+     * copies of `2000` this file used to carry.
+     */
+    pollInterval: function () {
+        var configured = deluge.config ? deluge.config.poll_interval : null;
+        return configured > 0 ? configured : 2000;
+    },
+
+    /**
+     * Schedules the next poll, replacing any already pending.
+     */
+    schedule: function () {
+        if (this.running) {
+            clearTimeout(this.running);
+        }
+        this.running = setTimeout(this.update, this.pollInterval());
+    },
+
     update: function () {
+        // Nine places call this directly: every filter click, every menu
+        // action, every toolbar button. Without clearing the pending timer
+        // each of those fires a poll on top of the scheduled one, so a few
+        // clicks in a row produce a burst of overlapping requests that the
+        // interface does not need and the daemon has to answer.
+        if (this.running) {
+            clearTimeout(this.running);
+            this.running = undefined;
+        }
+        if (this.inFlight) {
+            // The previous poll has not answered yet. Asking again now would
+            // only queue work behind it.
+            return;
+        }
+        this.inFlight = true;
+
         var filters = deluge.sidebar.getFilterStates();
         this.oldFilters = this.filters;
         this.filters = filters;
@@ -137,7 +175,6 @@ deluge.ui = {
             clearTimeout(this.checking);
             this.checking = undefined;
         }
-        this.running = setTimeout(this.update, 2000);
         this.update();
         deluge.statusbar.setStatus({
             iconCls: 'x-deluge-statusbar icon-ok',
@@ -149,6 +186,9 @@ deluge.ui = {
     },
 
     onUpdateError: function (error) {
+        // Without this the loop would never poll again after one failure,
+        // because `update` refuses to start while a poll is in flight.
+        this.inFlight = false;
         if (this.errorCount == 2) {
             Ext.MessageBox.show({
                 title: _('Lost Connection'),
@@ -175,6 +215,7 @@ deluge.ui = {
      * Updates the various components in the interface.
      */
     onUpdate: function (data) {
+        this.inFlight = false;
         if (this.running) {
             clearTimeout(this.running);
             this.running = undefined;
@@ -183,7 +224,7 @@ deluge.ui = {
             deluge.connectionManager.disconnect(true);
             return;
         }
-        this.running = setTimeout(this.update, 2000);
+        this.schedule();
 
         if (deluge.config.show_session_speed) {
             document.title =
@@ -211,7 +252,6 @@ deluge.ui = {
      */
     onConnect: function () {
         if (!this.running) {
-            this.running = setTimeout(this.update, 2000);
             this.update();
         }
     },

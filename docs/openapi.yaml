@@ -86,6 +86,51 @@ paths:
         "400":
           description: The body was not a JSON-RPC call.
 
+  /upload:
+    post:
+      summary: Stage one or more torrent files.
+      description: |-
+        The add-by-file dialog posts a multipart form here. The answer carries
+        the paths the files were staged at, which then go to
+        `web.get_torrent_info` and `web.add_torrents`.
+
+        Always HTTP 200 with a `success` field: ExtJS's form submit treats any
+        other status as a transport failure and shows its own message instead
+        of this one. A file that does not parse as a torrent is refused, and
+        one file may not exceed 10 MB.
+      operationId: upload
+      tags: [web]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        "200":
+          description: Whether the files were staged, and where.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success]
+                properties:
+                  success:
+                    type: boolean
+                  files:
+                    type: array
+                    description: Paths to pass to `web.get_torrent_info`.
+                    items:
+                      type: string
+                  error:
+                    type: string
+
   /:
     get:
       summary: The Web UI itself.
@@ -129,6 +174,38 @@ paths:
                 type: string
         "404":
           description: No such fragment.
+
+  /flag/{code}:
+    get:
+      summary: The flag for a peer's country.
+      description:
+        |-
+          The peers tab draws one of these per row. The code is ISO 3166-1 alpha-2 and
+          is validated: anything else is a 404 rather than a path. Countries are only
+          filled in when the daemon has a GeoIP database configured, so on a default
+          install this is never asked for.
+      operationId: flag
+      tags: [web]
+      security:
+        - {}
+      parameters:
+        - name: code
+          in: path
+          required: true
+          description: A two-letter country code, such as `fr`.
+          schema:
+            type: string
+            pattern: "^[A-Za-z]{2}$"
+      responses:
+        "200":
+          description: The flag.
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: No flag for that code.
 
   /{asset}:
     get:
@@ -2719,6 +2796,315 @@ components:
           description: Empty; this method takes no parameters.
           maxItems: 0
           default: []
+
+    CoreAddTorrentFileResult:
+      {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What core.add_torrent_file puts in `result`."
+      }
+
+    CoreAddTorrentFileAsyncResult:
+      {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What core.add_torrent_file_async puts in `result`."
+      }
+
+    CoreAddTorrentFilesResult:
+      {
+        "type": "array",
+        "description": "What core.add_torrent_files puts in `result`."
+      }
+
+    CoreAddTorrentMagnetResult:
+      {
+        "type": "string",
+        "description": "What core.add_torrent_magnet puts in `result`."
+      }
+
+    CoreAddTorrentUrlResult:
+      {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What core.add_torrent_url puts in `result`."
+      }
+
+    CoreCreateAccountResult:
+      {
+        "type": "boolean",
+        "description": "What core.create_account puts in `result`."
+      }
+
+    CoreForceReannounceResult:
+      {
+        "type": "null",
+        "description": "What core.force_reannounce puts in `result`."
+      }
+
+    CoreForceRecheckResult:
+      {
+        "type": "null",
+        "description": "What core.force_recheck puts in `result`."
+      }
+
+    CoreGetAuthLevelsMappingsResult:
+      {
+        "type": "array",
+        "description": "What core.get_auth_levels_mappings puts in `result`."
+      }
+
+    CoreGetCompletionPathsResult:
+      {
+        "type": "object",
+        "description": "What core.get_completion_paths puts in `result`."
+      }
+
+    CoreGetConfigResult:
+      {
+        "type": "object",
+        "description": "What core.get_config puts in `result`."
+      }
+
+    CoreGetConfigValueResult:
+      {
+        "description": "What core.get_config_value puts in `result`."
+      }
+
+    CoreGetConfigValuesResult:
+      {
+        "type": "object",
+        "description": "What core.get_config_values puts in `result`."
+      }
+
+    CoreGetExternalIpResult:
+      {
+        "type": "string",
+        "description": "What core.get_external_ip puts in `result`."
+      }
+
+    CoreGetFreeSpaceResult:
+      {
+        "type": "integer",
+        "description": "What core.get_free_space puts in `result`."
+      }
+
+    CoreGetKnownAccountsResult:
+      {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "description": "What core.get_known_accounts puts in `result`."
+      }
+
+    CoreGetLibtorrentVersionResult:
+      {
+        "type": "string",
+        "description": "What core.get_libtorrent_version puts in `result`."
+      }
+
+    CoreGetListenPortResult:
+      {
+        "type": "integer",
+        "description": "What core.get_listen_port puts in `result`."
+      }
+
+    CoreGetMagnetUriResult:
+      {
+        "type": "string",
+        "description": "What core.get_magnet_uri puts in `result`."
+      }
+
+    CoreGetProxyResult:
+      {
+        "type": "object",
+        "description": "What core.get_proxy puts in `result`."
+      }
+
+    CoreGetSessionStateResult:
+      {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "What core.get_session_state puts in `result`."
+      }
+
+    CoreGetSessionStatusResult:
+      {
+        "type": "object",
+        "description": "What core.get_session_status puts in `result`."
+      }
+
+    CoreGetSslListenPortResult:
+      {
+        "type": "integer",
+        "description": "What core.get_ssl_listen_port puts in `result`."
+      }
+
+    CoreGetTorrentStatusResult:
+      {
+        "type": "object",
+        "description": "What core.get_torrent_status puts in `result`."
+      }
+
+    CoreGetTorrentsStatusResult:
+      {
+        "type": "object",
+        "description": "What core.get_torrents_status puts in `result`."
+      }
+
+    CoreGlobResult:
+      {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "What core.glob puts in `result`."
+      }
+
+    CoreIsSessionPausedResult:
+      {
+        "type": "boolean",
+        "description": "What core.is_session_paused puts in `result`."
+      }
+
+    CorePauseSessionResult:
+      {
+        "type": "null",
+        "description": "What core.pause_session puts in `result`."
+      }
+
+    CorePauseTorrentResult:
+      {
+        "type": "null",
+        "description": "What core.pause_torrent puts in `result`."
+      }
+
+    CorePauseTorrentsResult:
+      {
+        "type": "null",
+        "description": "What core.pause_torrents puts in `result`."
+      }
+
+    CorePrefetchMagnetMetadataResult:
+      {
+        "type": "array",
+        "description": "What core.prefetch_magnet_metadata puts in `result`."
+      }
+
+    CoreQueueBottomResult:
+      {
+        "type": "null",
+        "description": "What core.queue_bottom puts in `result`."
+      }
+
+    CoreQueueDownResult:
+      {
+        "type": "null",
+        "description": "What core.queue_down puts in `result`."
+      }
+
+    CoreQueueTopResult:
+      {
+        "type": "null",
+        "description": "What core.queue_top puts in `result`."
+      }
+
+    CoreQueueUpResult:
+      {
+        "type": "null",
+        "description": "What core.queue_up puts in `result`."
+      }
+
+    CoreRemoveAccountResult:
+      {
+        "type": "boolean",
+        "description": "What core.remove_account puts in `result`."
+      }
+
+    CoreRemoveTorrentResult:
+      {
+        "type": "boolean",
+        "description": "What core.remove_torrent puts in `result`."
+      }
+
+    CoreRemoveTorrentsResult:
+      {
+        "type": "array",
+        "items": {
+          "type": "array"
+        },
+        "description": "What core.remove_torrents puts in `result`."
+      }
+
+    CoreResumeSessionResult:
+      {
+        "type": "null",
+        "description": "What core.resume_session puts in `result`."
+      }
+
+    CoreResumeTorrentResult:
+      {
+        "type": "null",
+        "description": "What core.resume_torrent puts in `result`."
+      }
+
+    CoreResumeTorrentsResult:
+      {
+        "type": "null",
+        "description": "What core.resume_torrents puts in `result`."
+      }
+
+    CoreSetTorrentOptionsResult:
+      {
+        "type": "null",
+        "description": "What core.set_torrent_options puts in `result`."
+      }
+
+    CoreSetTorrentTrackersResult:
+      {
+        "type": "null",
+        "description": "What core.set_torrent_trackers puts in `result`."
+      }
+
+    CoreTestListenPortResult:
+      {
+        "oneOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What core.test_listen_port puts in `result`."
+      }
+
+    CoreUpdateAccountResult:
+      {
+        "type": "boolean",
+        "description": "What core.update_account puts in `result`."
+      }
 
 
 # Methods the Python implementation had and redeluge does not.

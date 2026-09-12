@@ -14,10 +14,14 @@
         return value == -1 ? '' : value + 1;
     }
     function torrentNameRenderer(value, p, r) {
+        // `state` is what picks the icon. A record without it used to throw
+        // here, and a renderer that throws stops the grid's render loop, so
+        // one torrent in an unexpected state emptied every row after it.
+        var state = String(r.data['state'] || '').toLowerCase();
         return String.format(
             '<div class="torrent-name x-deluge-{0}">{1}</div>',
-            r.data['state'].toLowerCase(),
-            Ext.util.Format.htmlEncode(value)
+            state.replace(/[^a-z0-9_-]/g, ''),
+            Ext.util.Format.htmlEncode(value || '')
         );
     }
     function torrentSpeedRenderer(value) {
@@ -30,14 +34,11 @@
     }
     function torrentProgressRenderer(value, p, r) {
         value = new Number(value);
-        var progress = value;
-        var text = _(r.data['state']) + ' ' + value.toFixed(2) + '%';
-        if (this.style) {
-            var style = this.style;
-        } else {
-            var style = p.style;
-        }
-        var width = new Number(style.match(/\w+:\s*(\d+)\w+/)[1]);
+        var text = _(r.data['state'] || '') + ' ' + value.toFixed(2) + '%';
+        // The old form indexed the result of a regex match without checking
+        // it, so a column whose style carried no width threw from inside the
+        // grid's render loop and left the rows it had not reached blank.
+        var width = Deluge.columnWidth(p, 150);
         return Deluge.progressBar(value, width - 8, text);
     }
     function seedsRenderer(value, p, r) {
@@ -58,12 +59,14 @@
         return value < 0 ? '&infin;' : parseFloat(new Number(value).toFixed(3));
     }
     function trackerRenderer(value, p, r) {
-        return String.format(
-            '<div style="background: url(' +
-                deluge.config.base +
-                'tracker/{0}) no-repeat; background-size: contain; padding-left: 20px;">{0}</div>',
-            Ext.util.Format.htmlEncode(value)
-        );
+        // Deluge drew the tracker's own favicon here, fetched by the web
+        // server from each tracker and cached. redeluge has no such fetcher:
+        // it would mean the server making an outbound request to every host a
+        // torrent names, which is not something an interface should do
+        // quietly. Without one the per-host URL answered 404 for every row on
+        // every refresh, leaving a twenty-pixel indent where the icon was, so
+        // the column is the host name and nothing else.
+        return Ext.util.Format.htmlEncode(value || '');
     }
 
     function etaSorter(eta) {

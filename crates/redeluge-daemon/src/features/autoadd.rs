@@ -69,17 +69,19 @@ fn added() -> String {
 
 impl WatchDir {
     /// The per-torrent options a file from this directory is added with.
-    pub fn options(&self) -> TorrentOptions {
-        TorrentOptions {
-            save_path: if self.download_location.is_empty() {
-                None
-            } else {
-                Some(self.download_location.clone())
-            },
-            label: crate::core::normalise_label(&self.label),
-            paused: self.add_paused,
-            ..TorrentOptions::default()
+    ///
+    /// `defaults` is what the daemon would give any other new torrent, out of
+    /// the configuration. A watched directory overrides three of them and
+    /// leaves the rest alone, so a folder that says nothing about pausing
+    /// behaves like the Add dialog rather than like a hard-coded default.
+    pub fn options(&self, defaults: TorrentOptions) -> TorrentOptions {
+        let mut options = defaults;
+        if !self.download_location.is_empty() {
+            options.save_path = Some(self.download_location.clone());
         }
+        options.label = crate::core::normalise_label(&self.label);
+        options.paused = self.add_paused;
+        options
     }
 }
 
@@ -112,10 +114,15 @@ impl Default for Settings {
 impl Settings {
     pub fn from_config(value: Option<&Json>) -> Self {
         match value {
-            Some(value) => serde_json::from_value(value.clone()).unwrap_or_else(|err| {
-                tracing::warn!(error = %err, "the autoadd configuration is malformed, ignoring it");
-                Self::default()
-            }),
+            // The nulls come out first: `serde` fills in a key that is
+            // absent, not one that is present and null, so one null used to
+            // cost the whole dictionary.
+            Some(value) => {
+                serde_json::from_value(super::without_nulls(value)).unwrap_or_else(|err| {
+                    super::warn_malformed("autoadd", &err.to_string());
+                    Self::default()
+                })
+            }
             None => Self::default(),
         }
     }
@@ -137,18 +144,44 @@ impl Settings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     pub path: PathBuf,
+    pub kind: Kind,
     pub size: u64,
 }
 
-/// Whether a name is one this looks at.
+/// What a file in a watched directory is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A `.torrent`, added as itself.
+    Torrent,
+    /// A `.magnet`: a text file of magnet links, one per line, each added
+    /// separately. The file is one unit for disposal, so a line that fails
+    /// does not leave the others to be added again on the next scan.
+    Magnet,
+}
+
+/// Whether a name is one this looks at, and which kind it is.
+pub fn kind_of(path: &Path) -> Option<Kind> {
+    let extension = path.extension()?.to_str()?;
+    if extension.eq_ignore_ascii_case("torrent") {
+        Some(Kind::Torrent)
+    } else if extension.eq_ignore_ascii_case("magnet") {
+        Some(Kind::Magnet)
+    } else {
+        None
+    }
+}
+
+/// The magnet links in a `.magnet` file.
 ///
-/// Only `.torrent`. The plugin also read `.magnet` files, a list of magnet
-/// links one per line; that is not here, and the TODO says so.
-pub fn is_torrent_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.eq_ignore_ascii_case("torrent"))
-        .unwrap_or(false)
+/// One per line, blank lines and comments skipped. Deluge accepted a file of
+/// several because that is what a browser extension writes.
+pub fn magnet_links(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter(|line| line.starts_with("magnet:?"))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Every torrent file directly in a directory, with its size.
@@ -160,15 +193,16 @@ pub fn scan(directory: &Path) -> std::io::Result<Vec<Candidate>> {
     for entry in std::fs::read_dir(directory)? {
         let entry = entry?;
         let path = entry.path();
-        if !is_torrent_file(&path) {
+        let Some(kind) = kind_of(&path) else {
             continue;
-        }
+        };
         let metadata = match entry.metadata() {
             Ok(metadata) if metadata.is_file() => metadata,
             _ => continue,
         };
         found.push(Candidate {
             path,
+            kind,
             size: metadata.len(),
         });
     }
@@ -189,14 +223,14 @@ pub struct Settled {
 
 impl Settled {
     /// Files that have stopped changing since the last call.
-    pub fn ready(&mut self, seen: &[Candidate]) -> Vec<PathBuf> {
+    pub fn ready(&mut self, seen: &[Candidate]) -> Vec<(PathBuf, Kind)> {
         let mut ready = Vec::new();
         let mut next = HashMap::with_capacity(seen.len());
 
         for candidate in seen {
             let previous = self.sizes.get(&candidate.path).copied();
             if previous == Some(candidate.size) {
-                ready.push(candidate.path.clone());
+                ready.push((candidate.path.clone(), candidate.kind));
             }
             next.insert(candidate.path.clone(), candidate.size);
         }
@@ -291,6 +325,7 @@ mod tests {
     fn candidate(path: &str, size: u64) -> Candidate {
         Candidate {
             path: PathBuf::from(path),
+            kind: Kind::Torrent,
             size,
         }
     }
@@ -352,7 +387,7 @@ mod tests {
         dir.label = "Films".to_owned();
         dir.add_paused = true;
 
-        let options = dir.options();
+        let options = dir.options(TorrentOptions::default());
         assert_eq!(options.save_path.as_deref(), Some("/films"));
         assert_eq!(options.label, "films", "labels are lower case");
         assert!(options.paused);
@@ -360,18 +395,48 @@ mod tests {
 
     #[test]
     fn a_directory_with_no_location_leaves_it_to_the_daemon() {
-        assert_eq!(watchdir("/watch").options().save_path, None);
+        assert_eq!(
+            watchdir("/watch")
+                .options(TorrentOptions::default())
+                .save_path,
+            None
+        );
     }
 
     // ---------------------------------------------------------- recognising
 
     #[test]
-    fn only_torrent_files_are_looked_at() {
-        assert!(is_torrent_file(Path::new("/w/a.torrent")));
-        assert!(is_torrent_file(Path::new("/w/a.TORRENT")));
-        assert!(!is_torrent_file(Path::new("/w/a.torrent.added")));
-        assert!(!is_torrent_file(Path::new("/w/a.part")));
-        assert!(!is_torrent_file(Path::new("/w/torrent")));
+    fn only_torrent_and_magnet_files_are_looked_at() {
+        assert_eq!(kind_of(Path::new("/w/a.torrent")), Some(Kind::Torrent));
+        assert_eq!(kind_of(Path::new("/w/a.TORRENT")), Some(Kind::Torrent));
+        assert_eq!(kind_of(Path::new("/w/a.magnet")), Some(Kind::Magnet));
+        assert_eq!(kind_of(Path::new("/w/a.torrent.added")), None);
+        assert_eq!(kind_of(Path::new("/w/a.part")), None);
+        assert_eq!(kind_of(Path::new("/w/torrent")), None);
+    }
+
+    #[test]
+    fn a_magnet_file_yields_one_link_per_line() {
+        let text = concat!(
+            "# a comment\n",
+            "magnet:?xt=urn:btih:one\n",
+            "\n",
+            "   magnet:?xt=urn:btih:two   \n",
+            "not a magnet at all\n",
+        );
+        assert_eq!(
+            magnet_links(text),
+            vec![
+                "magnet:?xt=urn:btih:one".to_owned(),
+                "magnet:?xt=urn:btih:two".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_magnet_file_with_nothing_in_it_yields_nothing() {
+        assert!(magnet_links("").is_empty());
+        assert!(magnet_links("# only a comment\n").is_empty());
     }
 
     // -------------------------------------------------------------- settling
@@ -388,7 +453,7 @@ mod tests {
         settled.ready(&[candidate("/w/a.torrent", 100)]);
 
         let ready = settled.ready(&[candidate("/w/a.torrent", 100)]);
-        assert_eq!(ready, vec![PathBuf::from("/w/a.torrent")]);
+        assert_eq!(ready, vec![(PathBuf::from("/w/a.torrent"), Kind::Torrent)]);
     }
 
     #[test]
@@ -400,7 +465,7 @@ mod tests {
         assert!(settled.ready(&[candidate("/w/a.torrent", 900)]).is_empty());
         assert_eq!(
             settled.ready(&[candidate("/w/a.torrent", 900)]),
-            vec![PathBuf::from("/w/a.torrent")]
+            vec![(PathBuf::from("/w/a.torrent"), Kind::Torrent)]
         );
     }
 
@@ -429,7 +494,7 @@ mod tests {
         settled.ready(&[candidate("/w/a.torrent", 10), candidate("/w/b.torrent", 20)]);
 
         let ready = settled.ready(&[candidate("/w/a.torrent", 10), candidate("/w/b.torrent", 99)]);
-        assert_eq!(ready, vec![PathBuf::from("/w/a.torrent")]);
+        assert_eq!(ready, vec![(PathBuf::from("/w/a.torrent"), Kind::Torrent)]);
     }
 
     // -------------------------------------------------------------- disposal

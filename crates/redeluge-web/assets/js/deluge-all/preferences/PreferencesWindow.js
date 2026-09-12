@@ -23,8 +23,14 @@ Deluge.preferences.PreferencesWindow = Ext.extend(Ext.Window, {
 
     title: _('Preferences'),
     layout: 'border',
-    width: 485,
-    height: 500,
+    // Wide enough for the widest page, which is the watched-folder grid: at
+    // Deluge's 485 that grid stuck two hundred pixels out past the frame with
+    // no way to reach the columns. Taller too, so the pages that scroll have
+    // less to scroll.
+    width: 700,
+    height: 540,
+    minWidth: 420,
+    minHeight: 360,
     border: false,
     constrainHeader: true,
     buttonAlign: 'right',
@@ -32,7 +38,9 @@ Deluge.preferences.PreferencesWindow = Ext.extend(Ext.Window, {
     closable: true,
     iconCls: 'x-deluge-preferences',
     plain: true,
-    resizable: false,
+    // Resizable now that the pages scroll: on a short screen the window can be
+    // made to fit, and every page still reaches its last setting.
+    resizable: true,
 
     pages: {},
 
@@ -97,14 +105,17 @@ Deluge.preferences.PreferencesWindow = Ext.extend(Ext.Window, {
         deluge.preferences = this;
         this.addPage(new Deluge.preferences.Downloads());
         this.addPage(new Deluge.preferences.Network());
-        this.addPage(new Deluge.preferences.Encryption());
         this.addPage(new Deluge.preferences.Bandwidth());
         this.addPage(new Deluge.preferences.Interface());
         this.addPage(new Deluge.preferences.Other());
         this.addPage(new Deluge.preferences.Daemon());
         this.addPage(new Deluge.preferences.Queue());
         this.addPage(new Deluge.preferences.Proxy());
-        this.addPage(new Deluge.preferences.Cache());
+        // The four plugins that became features. Labels need no page: they are
+        // a torrent option and appear in the sidebar on their own.
+        this.addPage(new Deluge.preferences.AutoAdd());
+        this.addPage(new Deluge.preferences.Blocklist());
+        this.addPage(new Deluge.preferences.Scheduler());
     },
 
     onApply: function (e) {
@@ -145,6 +156,13 @@ Deluge.preferences.PreferencesWindow = Ext.extend(Ext.Window, {
         var name = page.title;
         store.add([new PreferencesRecord({ name: name })]);
         page['bodyStyle'] = 'padding: 5px';
+        // Every page scrolls, set here rather than on each page so a new one
+        // cannot forget. The card layout sizes the active page to the window,
+        // so a page taller than that had its last fieldsets simply cut off:
+        // the Bandwidth page ended below the frame and nothing said so. The
+        // scrollbar has to be on the page, not on the container around it,
+        // because the container is never the thing that overflows.
+        page.autoScroll = true;
         page.preferences = this;
         this.pages[name] = this.configPanel.add(page);
         this.pages[name].index = -1;

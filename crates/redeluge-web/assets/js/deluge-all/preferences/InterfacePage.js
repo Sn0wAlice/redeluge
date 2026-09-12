@@ -61,33 +61,6 @@ Deluge.preferences.Interface = Ext.extend(Ext.form.FormPanel, {
             })
         );
 
-        var languagePanel = this.add({
-            xtype: 'fieldset',
-            border: false,
-            title: _('Language'),
-            style: 'margin-bottom: 0px; padding-bottom: 5px; padding-top: 5px',
-            autoHeight: true,
-            labelWidth: 1,
-            defaultType: 'checkbox',
-        });
-        this.language = om.bind(
-            'language',
-            languagePanel.add({
-                xtype: 'combo',
-                labelSeparator: '',
-                name: 'language',
-                mode: 'local',
-                width: 200,
-                store: new Ext.data.ArrayStore({
-                    fields: ['id', 'text'],
-                }),
-                editable: false,
-                triggerAction: 'all',
-                valueField: 'id',
-                displayField: 'text',
-            })
-        );
-
         var themePanel = this.add({
             xtype: 'fieldset',
             border: false,
@@ -171,47 +144,14 @@ Deluge.preferences.Interface = Ext.extend(Ext.form.FormPanel, {
             })
         );
         om.bind(
-            'port',
+            'poll_interval',
             fieldset.add({
-                name: 'port',
-                fieldLabel: _('Port:'),
+                name: 'poll_interval',
+                fieldLabel: _('Refresh (ms):'),
                 decimalPrecision: 0,
-                minValue: 1,
-                maxValue: 65535,
-            })
-        );
-        this.httpsField = om.bind(
-            'https',
-            fieldset.add({
-                xtype: 'checkbox',
-                name: 'https',
-                hideLabel: true,
-                width: 300,
-                style: 'margin-left: 5px',
-                boxLabel: _(
-                    'Enable SSL (paths relative to Deluge config folder)'
-                ),
-            })
-        );
-        this.httpsField.on('check', this.onSSLCheck, this);
-        this.pkeyField = om.bind(
-            'pkey',
-            fieldset.add({
-                xtype: 'textfield',
-                disabled: true,
-                name: 'pkey',
-                width: 180,
-                fieldLabel: _('Private Key:'),
-            })
-        );
-        this.certField = om.bind(
-            'cert',
-            fieldset.add({
-                xtype: 'textfield',
-                disabled: true,
-                name: 'cert',
-                width: 180,
-                fieldLabel: _('Certificate:'),
+                minValue: 500,
+                maxValue: 60000,
+                incrementValue: 500,
             })
         );
     },
@@ -227,22 +167,13 @@ Deluge.preferences.Interface = Ext.extend(Ext.form.FormPanel, {
             for (var key in deluge.config) {
                 deluge.config[key] = this.optionsManager.get(key);
             }
-            if ('language' in changed) {
-                Ext.Msg.show({
-                    title: _('WebUI Language Changed'),
-                    msg: _(
-                        'Do you want to refresh the page now to use the new language?'
-                    ),
-                    buttons: {
-                        yes: _('Refresh'),
-                        no: _('Close'),
-                    },
-                    multiline: false,
-                    fn: function (btnText) {
-                        if (btnText === 'yes') location.reload();
-                    },
-                    icon: Ext.MessageBox.QUESTION,
-                });
+            if ('poll_interval' in changed) {
+                // The loop reads the interval out of `deluge.config` every
+                // time it schedules, and the copy above has just been updated.
+                // Rescheduling now rather than waiting for the pending poll
+                // makes a longer interval take effect immediately, which is
+                // the direction someone changing this usually wants.
+                deluge.ui.schedule();
             }
             if ('theme' in changed) {
                 deluge.client.web.set_theme(changed['theme']);
@@ -274,12 +205,6 @@ Deluge.preferences.Interface = Ext.extend(Ext.form.FormPanel, {
 
     onGotConfig: function (config) {
         this.optionsManager.set(config);
-    },
-
-    onGotLanguages: function (info, obj, response, request) {
-        info.unshift(['', _('System Default')]);
-        this.language.store.loadData(info);
-        this.language.setValue(this.optionsManager.get('language'));
     },
 
     onGotThemes: function (info, obj, response, request) {
@@ -341,18 +266,10 @@ Deluge.preferences.Interface = Ext.extend(Ext.form.FormPanel, {
             success: this.onGotConfig,
             scope: this,
         });
-        deluge.client.webutils.get_languages({
-            success: this.onGotLanguages,
-            scope: this,
-        });
         deluge.client.webutils.get_themes({
             success: this.onGotThemes,
             scope: this,
         });
     },
 
-    onSSLCheck: function (e, checked) {
-        this.pkeyField.setDisabled(!checked);
-        this.certField.setDisabled(!checked);
-    },
 });

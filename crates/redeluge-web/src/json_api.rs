@@ -187,6 +187,27 @@ async fn dispatch(
         "web.deregister_event_listener" => web_register_event(call, state, false).await,
         "web.get_events" => web_get_events(state).await,
 
+        // Adding a torrent. The dialog uploads or downloads a file, asks about
+        // it, and then adds it, so all three steps live here.
+        "web.get_torrent_info" => web_get_torrent_info(call, state).await,
+        "web.get_magnet_info" => web_get_magnet_info(call).await,
+        "web.download_torrent_from_url" => web_download_torrent(call, state).await,
+        "web.add_torrents" => web_add_torrents(call, state).await,
+
+        // Two conveniences over the daemon's own calls, in the shapes the
+        // front end reads.
+        "web.get_torrent_status" => web_get_torrent_status(call, state).await,
+        "web.get_torrent_files" => web_get_torrent_files(call, state).await,
+
+        // The connection manager.
+        "web.add_host" => web_add_host(call, state).await,
+        "web.edit_host" => web_edit_host(call, state).await,
+        "web.remove_host" => web_remove_host(call, state).await,
+        "web.start_daemon" => Err(ApiError::local(
+            "the daemon is not started by the Web UI; it is a service of its own",
+        )),
+        "web.stop_daemon" => web_stop_daemon(call, state).await,
+
         // Everything in the daemon's namespaces goes to the daemon.
         method if method.starts_with("core.") || method.starts_with("daemon.") => {
             forward(method, &call.params, state).await
@@ -257,19 +278,36 @@ async fn auth_login(
         .and_then(Json::as_str)
         .ok_or_else(|| ApiError::local("auth.login takes a password"))?;
 
+    let peer = request
+        .connection_info()
+        .realip_remote_addr()
+        .unwrap_or("unknown")
+        .to_owned();
+
+    // Guessing is the whole attack against a single shared password, so a run
+    // of wrong ones has to cost time. Checked before the password is verified:
+    // scrypt is deliberately slow, and doing that work for a client that is
+    // already over its budget is the denial of service, not the defence.
+    let now = std::time::Instant::now();
+    if let Err(wait) = state.login_throttle.lock().await.check(&peer, now) {
+        tracing::warn!(client = %peer, seconds = wait.as_secs(),
+            "web login refused, too many attempts");
+        return Err(ApiError::local(format!(
+            "too many failed attempts, try again in {} seconds",
+            wait.as_secs().max(1)
+        )));
+    }
+
     let stored = state.password.read().await.clone();
     if !stored.verify(password) {
-        let peer = request
-            .connection_info()
-            .realip_remote_addr()
-            .unwrap_or("unknown")
-            .to_owned();
+        state.login_throttle.lock().await.failed(&peer, now);
         tracing::warn!(client = %peer, "web login failed");
         return Ok(Dispatched {
             result: Json::Bool(false),
             new_session: None,
         });
     }
+    state.login_throttle.lock().await.succeeded(&peer);
 
     // A password stored as the old single-round SHA-1 is rewritten as scrypt on
     // the first successful login, so an installation upgrades by being used.
@@ -397,10 +435,27 @@ pub async fn connect_to(host_id: &str, state: &SharedState) -> Result<(), String
         .cloned()
         .ok_or_else(|| format!("no such host: {host_id}"))?;
 
-    let client =
-        redeluge_rpc::Client::connect(&host.host, host.port, state.client_settings.clone())
-            .await
-            .map_err(|err| err.to_string())?;
+    // A pin, if one is configured for this host. Without it the client
+    // encrypts and verifies nothing, which is what the Python client did and
+    // is defensible over loopback and nowhere else.
+    let mut settings = state.client_settings.clone();
+    match pinned_fingerprint(state, &host.id).await {
+        Some(sha256) => {
+            settings.tls = redeluge_rpc::tls::TlsMode::Pinned { sha256 };
+            tracing::debug!(host = %host.host, "pinning the daemon certificate");
+        }
+        None if !is_loopback(&host.host) => {
+            tracing::warn!(
+                host = %host.host,
+                "connecting to a remote daemon without a pinned certificate;                  set daemon_fingerprints in web.conf to the daemon's own                  sha256, which it prints at startup"
+            );
+        }
+        None => {}
+    }
+
+    let client = redeluge_rpc::Client::connect(&host.host, host.port, settings)
+        .await
+        .map_err(|err| err.to_string())?;
 
     client
         .login(&host.username, &host.password)
@@ -593,20 +648,40 @@ async fn web_update_ui(call: &JsonRequest, state: &SharedState) -> ApiResult {
 
 async fn web_get_config(state: &SharedState) -> ApiResult {
     let settings = &state.settings;
+    // The theme is read live rather than from the startup snapshot: the
+    // interface reads it back here after setting it, and a stale value made
+    // the theme combo show the previous choice until the server restarted.
+    let theme = current_theme(state).await;
     Ok(json!({
-        "theme": settings.theme,
+        "theme": theme,
         "base": settings.base,
         "sidebar_show_zero": state.web_config.read().await.boolean("sidebar_show_zero").unwrap_or(false),
         "sidebar_multiple_filters": state.web_config.read().await.boolean("sidebar_multiple_filters").unwrap_or(true),
         "show_session_speed": state.web_config.read().await.boolean("show_session_speed").unwrap_or(false),
         "show_sidebar": state.web_config.read().await.boolean("show_sidebar").unwrap_or(true),
         "first_login": false,
+        // Always empty: there is one language. The key stays because a client
+        // written against the Python server reads it.
         "language": "",
         "session_timeout": settings.session_timeout.as_secs(),
+        // How often the interface polls, in milliseconds. Deluge had this
+        // hardcoded in five places in its JavaScript; here it is one setting,
+        // so a busy daemon or a slow link can be given a longer interval.
+        "poll_interval": poll_interval(state).await,
         "interface": settings.interface,
         "port": settings.port,
         "https": false,
         "default_daemon": settings.default_daemon.clone().unwrap_or_default(),
+        // Host id to certificate fingerprint. The connection manager reads and
+        // writes this, which is the only way to pin a remote daemon without
+        // editing the file by hand.
+        "daemon_fingerprints": state
+            .web_config
+            .read()
+            .await
+            .get("daemon_fingerprints")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
     }))
 }
 
@@ -638,6 +713,51 @@ async fn web_set_config(call: &JsonRequest, state: &SharedState) -> ApiResult {
 }
 
 async fn web_get_themes(_state: &SharedState) -> ApiResult {
+    // Pairs, not names. The interface loads these straight into a combo box
+    // whose store has two fields; a flat list of strings makes ExtJS read each
+    // string as a row and take its first character as the value, which is how
+    // choosing a theme ended up setting the theme to "g".
+    let themes: Vec<Json> = theme_names()
+        .into_iter()
+        .map(|name| json!([name, capitalise(&name)]))
+        .collect();
+    Ok(json!(themes))
+}
+
+/// How often the interface should poll, in milliseconds.
+///
+/// Bounded rather than trusted: zero would spin, and an hour would look like
+/// the interface had stopped working.
+pub async fn poll_interval(state: &SharedState) -> u64 {
+    const DEFAULT: u64 = 2000;
+    state
+        .web_config
+        .read()
+        .await
+        .integer("poll_interval")
+        .map(|value| (value as u64).clamp(500, 60_000))
+        .unwrap_or(DEFAULT)
+}
+
+/// The theme in force: what was configured, if it has a stylesheet.
+pub async fn current_theme(state: &SharedState) -> String {
+    let configured = state
+        .web_config
+        .read()
+        .await
+        .string("theme")
+        .unwrap_or(&state.settings.theme)
+        .to_owned();
+
+    if crate::assets::contains(&format!("themes/css/xtheme-{configured}.css")) {
+        configured
+    } else {
+        crate::routes::DEFAULT_THEME.to_owned()
+    }
+}
+
+/// Every theme that has a stylesheet, sorted.
+fn theme_names() -> Vec<String> {
     let mut themes: Vec<String> = crate::assets::files()
         .keys()
         .filter_map(|path| path.strip_prefix("themes/css/xtheme-"))
@@ -645,7 +765,16 @@ async fn web_get_themes(_state: &SharedState) -> ApiResult {
         .map(str::to_owned)
         .collect();
     themes.sort();
-    Ok(json!(themes))
+    themes
+}
+
+/// What the interface shows for a theme: `gray` becomes `Gray`.
+fn capitalise(name: &str) -> String {
+    let mut characters = name.chars();
+    match characters.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + characters.as_str(),
+        None => String::new(),
+    }
 }
 
 async fn web_set_theme(call: &JsonRequest, state: &SharedState) -> ApiResult {
@@ -654,6 +783,12 @@ async fn web_set_theme(call: &JsonRequest, state: &SharedState) -> ApiResult {
         .first()
         .and_then(Json::as_str)
         .ok_or_else(|| ApiError::local("web.set_theme takes a name"))?;
+
+    // A theme with no stylesheet would leave the page asking for a file that
+    // does not exist, which is worse than ignoring the request.
+    if !crate::assets::contains(&format!("themes/css/xtheme-{theme}.css")) {
+        return Err(ApiError::local(format!("no such theme: {theme}")));
+    }
 
     let mut config = state.web_config.write().await;
     config
@@ -714,6 +849,494 @@ async fn system_list_methods(state: &SharedState) -> ApiResult {
     Ok(json!(methods))
 }
 
+// ------------------------------------------------------------ adding torrents
+
+/// Reads a staged torrent file and describes it for the add dialog.
+async fn web_get_torrent_info(call: &JsonRequest, state: &SharedState) -> ApiResult {
+    let filename = call
+        .params
+        .first()
+        .and_then(Json::as_str)
+        .ok_or_else(|| ApiError::local("web.get_torrent_info takes a filename"))?;
+
+    let path = std::path::PathBuf::from(filename);
+    // The path comes from the browser. Only files this server staged are
+    // readable through it, or an authenticated client could read anything the
+    // server can.
+    if !crate::torrentfile::is_staged(&state.settings.config_dir, &path) {
+        return Err(ApiError::local("no such uploaded torrent"));
+    }
+
+    match crate::torrentfile::read(&path) {
+        Ok(info) => Ok(info.to_json(filename)),
+        Err(err) => Err(ApiError::local(err.to_string())),
+    }
+}
+
+/// Describes a magnet link, which has a name and a hash and no files yet.
+async fn web_get_magnet_info(call: &JsonRequest) -> ApiResult {
+    let uri = call
+        .params
+        .first()
+        .and_then(Json::as_str)
+        .ok_or_else(|| ApiError::local("web.get_magnet_info takes a magnet uri"))?;
+
+    crate::torrentfile::magnet_info(uri).map_err(|err| ApiError::local(err.to_string()))
+}
+
+/// Fetches a `.torrent` by URL into the staging directory.
+///
+/// The server fetches it, not the browser: the URL may be reachable only from
+/// here, which is the point of the feature.
+async fn web_download_torrent(call: &JsonRequest, state: &SharedState) -> ApiResult {
+    let url = call
+        .params
+        .first()
+        .and_then(Json::as_str)
+        .ok_or_else(|| ApiError::local("web.download_torrent_from_url takes a url"))?;
+    let cookie = call.params.get(1).and_then(Json::as_str).unwrap_or("");
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|err| ApiError::local(err.to_string()))?;
+
+    let mut request = client.get(url);
+    if !cookie.is_empty() {
+        request = request.header(reqwest::header::COOKIE, cookie);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|err| ApiError::local(format!("could not fetch {url}: {err}")))?;
+    if !response.status().is_success() {
+        return Err(ApiError::local(format!(
+            "could not fetch {url}: the server answered {}",
+            response.status()
+        )));
+    }
+
+    let name = crate::torrentfile::safe_name(
+        url.rsplit('/')
+            .next()
+            .filter(|part| !part.is_empty())
+            .unwrap_or("download.torrent"),
+    );
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|err| ApiError::local(err.to_string()))?;
+
+    // Parsed before it is stored, so a URL that answers with an error page is
+    // refused here rather than at the next call.
+    crate::torrentfile::parse(&bytes)
+        .map_err(|err| ApiError::local(format!("{url} is not a torrent file: {err}")))?;
+
+    let staging = crate::torrentfile::staging_dir(&state.settings.config_dir);
+    tokio::fs::create_dir_all(&staging)
+        .await
+        .map_err(|err| ApiError::local(err.to_string()))?;
+    let path = staging.join(&name);
+    tokio::fs::write(&path, &bytes)
+        .await
+        .map_err(|err| ApiError::local(err.to_string()))?;
+
+    Ok(Json::String(path.display().to_string()))
+}
+
+/// Adds the torrents the dialog collected.
+///
+/// Each entry is `{"path": ..., "options": {...}}` where the path is a staged
+/// file or a magnet link. Returns true if every one was added, which is what
+/// the dialog checks.
+async fn web_add_torrents(call: &JsonRequest, state: &SharedState) -> ApiResult {
+    let entries = call
+        .params
+        .first()
+        .and_then(Json::as_array)
+        .ok_or_else(|| ApiError::local("web.add_torrents takes a list"))?
+        .clone();
+
+    let mut all_added = true;
+    for entry in entries {
+        let path = entry.get("path").and_then(Json::as_str).unwrap_or("");
+        let options = entry.get("options").cloned().unwrap_or_else(|| json!({}));
+        if path.is_empty() {
+            all_added = false;
+            continue;
+        }
+
+        let outcome = if path.starts_with("magnet:") {
+            forward(
+                "core.add_torrent_magnet",
+                &[Json::String(path.to_owned()), options],
+                state,
+            )
+            .await
+        } else {
+            let file = std::path::PathBuf::from(path);
+            if !crate::torrentfile::is_staged(&state.settings.config_dir, &file) {
+                tracing::warn!(
+                    path,
+                    "refused to add a torrent from outside the staging area"
+                );
+                all_added = false;
+                continue;
+            }
+            match tokio::fs::read(&file).await {
+                Ok(bytes) => {
+                    let name = file
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "torrent".to_owned());
+                    let added =
+                        forward_bytes("core.add_torrent_file", name, bytes, options, state).await;
+                    // The staged copy has done its job either way; the daemon
+                    // keeps its own copy of what it added.
+                    let _ = tokio::fs::remove_file(&file).await;
+                    added
+                }
+                Err(err) => Err(ApiError::local(err.to_string())),
+            }
+        };
+
+        if let Err(err) = outcome {
+            tracing::warn!(path, error = %err.message, "could not add a torrent");
+            all_added = false;
+        }
+    }
+
+    Ok(Json::Bool(all_added))
+}
+
+/// `core.add_torrent_file` with the dump as bytes rather than as text.
+///
+/// rencode carries bytes, so there is no base64 step: the JSON side never sees
+/// the file, only this does.
+async fn forward_bytes(
+    method: &str,
+    filename: String,
+    dump: Vec<u8>,
+    options: Json,
+    state: &SharedState,
+) -> ApiResult {
+    let guard = state.daemon.read().await;
+    let connection = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::remote("not connected to a daemon"))?;
+
+    let args = vec![
+        Value::Str(filename),
+        Value::Bytes(dump),
+        json_to_rencode(&options),
+    ];
+    match connection.client.call(method, args).await {
+        Ok(value) => Ok(rencode_to_json(&value)),
+        Err(redeluge_rpc::client::Error::Remote(failure)) => {
+            Err(ApiError::remote(failure.to_string()))
+        }
+        Err(err) => Err(ApiError::remote(err.to_string())),
+    }
+}
+
+// ------------------------------------------------------------- torrent views
+
+/// One torrent's status, which the details panel asks for by itself.
+async fn web_get_torrent_status(call: &JsonRequest, state: &SharedState) -> ApiResult {
+    let id = call
+        .params
+        .first()
+        .and_then(Json::as_str)
+        .ok_or_else(|| ApiError::local("web.get_torrent_status takes a torrent id"))?;
+    let keys = call.params.get(1).cloned().unwrap_or_else(|| json!([]));
+
+    forward(
+        "core.get_torrent_status",
+        &[Json::String(id.to_owned()), keys],
+        state,
+    )
+    .await
+}
+
+/// The file tree of a torrent that has been added.
+///
+/// The same shape as `files_tree` in the add dialog, built from what the
+/// daemon reports rather than from the torrent file, because priorities and
+/// progress only exist once it is running.
+async fn web_get_torrent_files(call: &JsonRequest, state: &SharedState) -> ApiResult {
+    let id = call
+        .params
+        .first()
+        .and_then(Json::as_str)
+        .ok_or_else(|| ApiError::local("web.get_torrent_files takes a torrent id"))?;
+
+    let status = forward(
+        "core.get_torrent_status",
+        &[
+            Json::String(id.to_owned()),
+            json!(["files", "file_progress", "file_priorities"]),
+        ],
+        state,
+    )
+    .await?;
+
+    let files = status
+        .get("files")
+        .and_then(Json::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let progress = status
+        .get("file_progress")
+        .and_then(Json::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let priorities = status
+        .get("file_priorities")
+        .and_then(Json::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut root = serde_json::Map::new();
+    for file in &files {
+        let path = file.get("path").and_then(Json::as_str).unwrap_or_default();
+        let index = file.get("index").and_then(Json::as_u64).unwrap_or(0) as usize;
+        let size = file.get("size").and_then(Json::as_i64).unwrap_or(0);
+        if path.is_empty() {
+            continue;
+        }
+        insert_file(
+            &mut root,
+            path,
+            index,
+            size,
+            progress.get(index).and_then(Json::as_f64).unwrap_or(0.0),
+            priorities.get(index).and_then(Json::as_i64).unwrap_or(4),
+        );
+    }
+
+    Ok(json!({ "contents": Json::Object(root) }))
+}
+
+fn insert_file(
+    into: &mut serde_json::Map<String, Json>,
+    path: &str,
+    index: usize,
+    size: i64,
+    progress: f64,
+    priority: i64,
+) {
+    let (head, rest) = match path.split_once('/') {
+        Some((head, rest)) => (head, Some(rest)),
+        None => (path, None),
+    };
+    if head.is_empty() {
+        return;
+    }
+
+    match rest {
+        None => {
+            into.insert(
+                head.to_owned(),
+                json!({
+                    "type": "file",
+                    "index": index,
+                    "size": size,
+                    "progress": progress,
+                    "priority": priority,
+                    "path": path,
+                }),
+            );
+        }
+        Some(rest) => {
+            let entry = into
+                .entry(head.to_owned())
+                .or_insert_with(|| json!({"type": "dir", "contents": {}, "size": 0}));
+            if entry.get("contents").is_none() {
+                *entry = json!({"type": "dir", "contents": {}, "size": 0});
+            }
+            if let Some(total) = entry.get("size").and_then(Json::as_i64) {
+                entry["size"] = json!(total + size);
+            }
+            if let Some(Json::Object(contents)) = entry.get_mut("contents") {
+                insert_file(contents, rest, index, size, progress, priority);
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------- connection manager
+
+async fn web_add_host(call: &JsonRequest, state: &SharedState) -> ApiResult {
+    let host = call.params.first().and_then(Json::as_str).unwrap_or("");
+    let port = call.params.get(1).and_then(Json::as_u64).unwrap_or(58846);
+    let username = call.params.get(2).and_then(Json::as_str).unwrap_or("");
+    let password = call.params.get(3).and_then(Json::as_str).unwrap_or("");
+
+    if host.is_empty() {
+        return Err(ApiError::local("a host is required"));
+    }
+    let port = u16::try_from(port).map_err(|_| ApiError::local("a port is 1 to 65535"))?;
+
+    let entry = crate::state::Host {
+        id: crate::hostlist::new_id(),
+        host: host.to_owned(),
+        port,
+        username: username.to_owned(),
+        password: password.to_owned(),
+    };
+    let id = entry.id.clone();
+
+    {
+        let mut hosts = state.hosts.write().await;
+        if hosts
+            .iter()
+            .any(|existing| existing.host == entry.host && existing.port == entry.port)
+        {
+            return Err(ApiError::local("that host is already in the list"));
+        }
+        hosts.push(entry);
+    }
+    save_hosts(state).await?;
+
+    // Deluge answers [success, id] here, which is what the dialog reads.
+    Ok(json!([true, id]))
+}
+
+async fn web_edit_host(call: &JsonRequest, state: &SharedState) -> ApiResult {
+    let id = call
+        .params
+        .first()
+        .and_then(Json::as_str)
+        .ok_or_else(|| ApiError::local("web.edit_host takes a host id"))?;
+    let host = call.params.get(1).and_then(Json::as_str).unwrap_or("");
+    let port = call.params.get(2).and_then(Json::as_u64).unwrap_or(58846);
+    let username = call.params.get(3).and_then(Json::as_str).unwrap_or("");
+    let password = call.params.get(4).and_then(Json::as_str).unwrap_or("");
+    let port = u16::try_from(port).map_err(|_| ApiError::local("a port is 1 to 65535"))?;
+
+    {
+        let mut hosts = state.hosts.write().await;
+        let Some(entry) = hosts.iter_mut().find(|entry| entry.id == id) else {
+            return Err(ApiError::local("no such host"));
+        };
+        entry.host = host.to_owned();
+        entry.port = port;
+        entry.username = username.to_owned();
+        entry.password = password.to_owned();
+    }
+    save_hosts(state).await?;
+    Ok(Json::Bool(true))
+}
+
+async fn web_remove_host(call: &JsonRequest, state: &SharedState) -> ApiResult {
+    let id = call
+        .params
+        .first()
+        .and_then(Json::as_str)
+        .ok_or_else(|| ApiError::local("web.remove_host takes a host id"))?;
+
+    let removed = {
+        let mut hosts = state.hosts.write().await;
+        let before = hosts.len();
+        hosts.retain(|entry| entry.id != id);
+        hosts.len() != before
+    };
+    if !removed {
+        return Err(ApiError::local("no such host"));
+    }
+
+    // A connection to the host that has just been removed would otherwise
+    // stay up with nothing naming it.
+    {
+        let mut daemon = state.daemon.write().await;
+        if daemon.as_ref().is_some_and(|c| c.host_id == id) {
+            *daemon = None;
+        }
+    }
+    save_hosts(state).await?;
+    Ok(Json::Bool(true))
+}
+
+/// Asks a daemon to shut down. Only one this server knows about.
+async fn web_stop_daemon(call: &JsonRequest, state: &SharedState) -> ApiResult {
+    let id = call
+        .params
+        .first()
+        .and_then(Json::as_str)
+        .ok_or_else(|| ApiError::local("web.stop_daemon takes a host id"))?;
+
+    let connected_to = state
+        .daemon
+        .read()
+        .await
+        .as_ref()
+        .map(|connection| connection.host_id.clone());
+    if connected_to.as_deref() != Some(id) {
+        return Err(ApiError::local("not connected to that daemon"));
+    }
+
+    forward("daemon.shutdown", &[], state).await?;
+    *state.daemon.write().await = None;
+    Ok(Json::Bool(true))
+}
+
+async fn save_hosts(state: &SharedState) -> Result<(), ApiError> {
+    let hosts = state.hosts.read().await.clone();
+    crate::hostlist::save(&state.settings.config_dir, &hosts)
+        .await
+        .map_err(|err| ApiError::local(format!("could not write hostlist.conf: {err}")))
+}
+
+/// The pinned fingerprint for a host, from `web.conf`.
+///
+/// `daemon_fingerprints` is an object of host id to lower-case hex sha256. The
+/// daemon prints its own fingerprint at startup, which is where the value
+/// comes from.
+async fn pinned_fingerprint(state: &SharedState, host_id: &str) -> Option<[u8; 32]> {
+    let config = state.web_config.read().await;
+    let raw = config
+        .settings
+        .get("daemon_fingerprints")?
+        .get(host_id)?
+        .as_str()?
+        .trim()
+        .replace(':', "")
+        .to_lowercase();
+
+    let bytes = hex::decode(&raw).ok()?;
+    if bytes.len() != 32 {
+        tracing::warn!(
+            host_id,
+            "the pinned fingerprint is not a sha256, ignoring it"
+        );
+        return None;
+    }
+    let mut sha256 = [0u8; 32];
+    sha256.copy_from_slice(&bytes);
+    Some(sha256)
+}
+
+/// Whether an address is the machine this is running on.
+fn is_loopback(host: &str) -> bool {
+    if host == "localhost" {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .map(|address| address.is_loopback())
+        .unwrap_or(false)
+}
+
+/// Whether a request carries a live admin session.
+///
+/// `POST /upload` is not a JSON-RPC call and so does not go through `dispatch`,
+/// but it writes files and must not be open.
+pub async fn is_authenticated(request: &HttpRequest, state: &SharedState) -> bool {
+    current_session(request, state)
+        .await
+        .is_some_and(|(_, level)| level >= AUTH_LEVEL_ADMIN)
+}
+
 /// Everything answered here rather than by the daemon.
 pub const LOCAL_METHODS: &[&str] = &[
     "auth.change_password",
@@ -721,21 +1344,32 @@ pub const LOCAL_METHODS: &[&str] = &[
     "auth.delete_session",
     "auth.login",
     "system.listMethods",
+    "web.add_host",
+    "web.add_torrents",
     "web.connect",
     "web.connected",
     "web.deregister_event_listener",
     "web.disconnect",
+    "web.download_torrent_from_url",
+    "web.edit_host",
     "web.get_config",
     "web.get_events",
     "web.get_host_status",
     "web.get_hosts",
     "web.get_languages",
+    "web.get_magnet_info",
     "web.get_plugin_info",
     "web.get_plugins",
     "web.get_themes",
+    "web.get_torrent_files",
+    "web.get_torrent_info",
+    "web.get_torrent_status",
     "web.register_event_listener",
+    "web.remove_host",
     "web.set_config",
     "web.set_theme",
+    "web.start_daemon",
+    "web.stop_daemon",
     "web.update_ui",
     "webutils.get_languages",
     "webutils.get_themes",

@@ -38,6 +38,8 @@ pub struct SessionState {
     pub counters: Vec<i64>,
     /// Resume data waiting to be written, by infohash.
     pub resume_data: BTreeMap<String, Vec<u8>>,
+    /// Where peer countries come from, when the operator provided a database.
+    countries: Option<crate::geoip::CountryLookup>,
     config_dir: PathBuf,
     /// Set when something changed that the state file does not yet reflect.
     dirty: bool,
@@ -49,8 +51,31 @@ impl SessionState {
         self.config_dir.join("state")
     }
 
+    /// Loads the country database named by the configuration, if there is one.
+    pub fn set_country_lookup(&mut self, lookup: Option<crate::geoip::CountryLookup>) {
+        self.countries = lookup;
+    }
+
+    /// The country of a peer address, when a database is loaded.
+    pub fn country_of(&self, address: &str) -> Option<String> {
+        self.countries
+            .as_ref()
+            .and_then(|lookup| lookup.country_of_text(address))
+    }
+
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
+    }
+
+    /// Drops everything on disk that belongs to one torrent.
+    ///
+    /// Not the downloaded data: the stored `.torrent` and its resume file.
+    /// Without this a removed torrent comes back at the next restart.
+    pub fn forget(&mut self, id: &str) {
+        let state_dir = self.state_dir();
+        let _ = std::fs::remove_file(torrent_file_path(&state_dir, id));
+        let _ = std::fs::remove_file(state_dir.join("resume").join(format!("{id}.resume")));
+        self.resume_data.remove(id);
     }
 
     /// The status of one torrent, or None when it is gone.
@@ -202,6 +227,7 @@ impl Manager {
             external_ip: None,
             counters: Vec::new(),
             resume_data: BTreeMap::new(),
+            countries: None,
             config_dir,
             dirty: false,
         };
@@ -259,6 +285,7 @@ fn run(
 ) {
     let mut last_save = Instant::now();
     let mut last_resume_save = Instant::now();
+    let mut last_ratio_check = Instant::now();
     let mut states: BTreeMap<String, TorrentState> = BTreeMap::new();
 
     let emit = |event: Event| {
@@ -305,6 +332,14 @@ fn run(
         }
         states.retain(|id, _| state.torrents.contains_key(id));
 
+        // Seeding rules, checked on a timer rather than on an alert: a ratio
+        // creeps past its limit while nothing happens, so there is no event to
+        // hang this on.
+        if last_ratio_check.elapsed() > Duration::from_secs(5) {
+            last_ratio_check = Instant::now();
+            enforce_seeding_rules(&mut state, &emit);
+        }
+
         if last_resume_save.elapsed() > Duration::from_secs(10) {
             last_resume_save = Instant::now();
             match state.save_resume_data() {
@@ -325,12 +360,121 @@ fn run(
     }
 }
 
+/// Pauses or removes torrents that have reached their share ratio.
+///
+/// Deluge's own rule, and its two surprises. A torrent is only considered once
+/// it has finished, so a ratio reached while still downloading does not stop
+/// it. And removing is checked before pausing, because `remove_at_ratio`
+/// without `stop_at_ratio` means nothing in Deluge: the remove is what the
+/// stop turns into.
+fn enforce_seeding_rules<F: Fn(Event)>(state: &mut SessionState, emit: &F) {
+    if state.session_paused {
+        return;
+    }
+
+    let mut pause = Vec::new();
+    let mut remove = Vec::new();
+
+    for status in state.session.all_torrent_status() {
+        let Some(torrent) = state.torrents.get(&status.info_hash) else {
+            continue;
+        };
+        if !torrent.options.stop_at_ratio || !torrent.options.is_finished {
+            continue;
+        }
+        let ratio = torrent.ratio(&status);
+        if ratio < 0.0 || ratio < torrent.options.stop_ratio {
+            continue;
+        }
+
+        if torrent.options.remove_at_ratio {
+            remove.push(status.info_hash.clone());
+        } else if !status.is_paused {
+            pause.push(status.info_hash.clone());
+        }
+    }
+
+    for id in pause {
+        match state.session.pause_torrent(&id) {
+            Ok(()) => tracing::info!(torrent = %id, "stopped at its share ratio"),
+            Err(err) => tracing::warn!(torrent = %id, error = %err,
+                "could not stop a torrent at its share ratio"),
+        }
+    }
+
+    for id in remove {
+        emit(Event::PreTorrentRemoved {
+            torrent_id: id.clone(),
+        });
+        // The data stays. Deluge removes the torrent, not the download, and a
+        // rule that deleted files on a timer would be a bad surprise.
+        match state.session.remove_torrent(&id, false) {
+            Ok(()) => {
+                state.torrents.remove(&id);
+                state.forget(&id);
+                state.dirty = true;
+                tracing::info!(torrent = %id, "removed at its share ratio");
+                emit(Event::TorrentRemoved { torrent_id: id });
+            }
+            Err(err) => tracing::warn!(torrent = %id, error = %err,
+                "could not remove a torrent at its share ratio"),
+        }
+    }
+}
+
+/// Moves a finished torrent to its completion directory, if it has one.
+///
+/// The move is asynchronous: libtorrent answers with a `storage_moved` alert,
+/// which is where `save_path` is updated. Recording the destination in
+/// `moving_to` is what makes the status say "Moving" in the meantime.
+fn move_on_completion(state: &mut SessionState, id: &str) {
+    let Some(torrent) = state.torrents.get(id) else {
+        return;
+    };
+    if !torrent.options.move_completed {
+        return;
+    }
+    let Some(destination) = torrent.options.move_completed_path.clone() else {
+        return;
+    };
+    if destination.is_empty() || torrent.options.save_path.as_deref() == Some(destination.as_str())
+    {
+        return;
+    }
+
+    match state.session.move_storage(id, &destination) {
+        Ok(()) => {
+            tracing::info!(torrent = %id, destination, "moving a finished torrent");
+            if let Some(torrent) = state.torrents.get_mut(id) {
+                torrent.moving_to = Some(destination);
+            }
+        }
+        Err(err) => {
+            tracing::warn!(torrent = %id, error = %err, "could not move a finished torrent");
+            if let Some(torrent) = state.torrents.get_mut(id) {
+                torrent.forced_error = Some(format!("could not move the files: {err}"));
+            }
+        }
+    }
+}
+
 /// Turns a libtorrent alert into daemon state and daemon events.
 fn handle_alert<F: Fn(Event)>(state: &mut SessionState, alert: &Alert, emit: &F) {
     let id = alert.info_hash.clone().unwrap_or_default();
 
     match alert.kind {
         AlertKind::TorrentFinished => {
+            // libtorrent posts this on the transition, but also after a
+            // recheck of a torrent that was already complete. Moving the files
+            // every time that happened would move them out from under
+            // themselves on each restart, so the move is only for a torrent
+            // that was not already finished.
+            let was_finished = state
+                .torrents
+                .get(&id)
+                .map(|torrent| torrent.options.is_finished)
+                .unwrap_or(true);
+
             if let Some(torrent) = state.torrents.get_mut(&id) {
                 torrent.options.is_finished = true;
                 state.dirty = true;
@@ -341,6 +485,10 @@ fn handle_alert<F: Fn(Event)>(state: &mut SessionState, alert: &Alert, emit: &F)
             // Resume data is worth having the moment a torrent completes, not
             // on the next timer tick.
             let _ = state.session.save_resume_data(&id, false);
+
+            if !was_finished {
+                move_on_completion(state, &id);
+            }
         }
 
         AlertKind::TorrentPaused => {

@@ -35,6 +35,55 @@ pub fn spawn(core: Arc<Core>) {
     tokio::spawn(maintain_blocklist(core));
 }
 
+/// The same value with every `null` taken out of it.
+///
+/// `serde`'s `default` fills in a key that is absent, not one that is present
+/// and null, so a single null in the dictionary made the whole feature
+/// configuration unreadable and the feature fell back to its defaults. The Web
+/// UI wrote nulls for a while: a blank number field reads as `NaN`, and `NaN`
+/// serialises as `null`. That is fixed where it was written, but a
+/// configuration already carrying one has to keep working, and a null has no
+/// meaning for any of these settings in any case.
+pub fn without_nulls(value: &Json) -> Json {
+    match value {
+        Json::Object(fields) => Json::Object(
+            fields
+                .iter()
+                .filter(|(_, field)| !field.is_null())
+                .map(|(name, field)| (name.clone(), without_nulls(field)))
+                .collect(),
+        ),
+        Json::Array(items) => Json::Array(items.iter().map(without_nulls).collect()),
+        other => other.clone(),
+    }
+}
+
+/// Reports a configuration this cannot read, once per distinct complaint.
+///
+/// Every one of these is re-read on a timer, so a mistake nobody has corrected
+/// would otherwise write the same line to the log every few seconds and bury
+/// everything else.
+pub fn warn_malformed(feature: &str, error: &str) {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static REPORTED: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    let reported = REPORTED.get_or_init(Default::default);
+
+    let Ok(mut reported) = reported.lock() else {
+        return;
+    };
+    if reported.get(feature).map(String::as_str) == Some(error) {
+        return;
+    }
+    reported.insert(feature.to_owned(), error.to_owned());
+    tracing::warn!(
+        feature,
+        error,
+        "the configuration is malformed, ignoring it"
+    );
+}
+
 /// Seconds since the Unix epoch, as the configuration stores them.
 fn now() -> f64 {
     SystemTime::now()
@@ -73,45 +122,105 @@ async fn watch_directories(core: Arc<Core>) {
                 }
             };
 
-            for path in settled.ready(&found) {
+            for (path, kind) in settled.ready(&found) {
                 settled.forget(&path);
-                let dump = match std::fs::read(&path) {
-                    Ok(dump) => dump,
-                    Err(err) => {
-                        tracing::warn!(path = %path.display(), error = %err,
-                            "could not read a torrent file");
-                        continue;
-                    }
+                let added = match kind {
+                    autoadd::Kind::Torrent => add_torrent_file(&core, directory, &path).await,
+                    autoadd::Kind::Magnet => add_magnet_file(&core, directory, &path).await,
                 };
 
-                let mut options = directory.options();
-                options.filename = path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let save_path = options.save_path.clone().unwrap_or_default();
-
-                match core
-                    .add(AddTorrent::from_file(dump, save_path), options)
-                    .await
-                {
-                    Ok(_) => {
-                        tracing::info!(path = %path.display(), "added from a watched directory");
-                        let disposal = autoadd::disposal(directory, &path);
-                        if let Err(err) = autoadd::dispose(&disposal, &path) {
-                            // The torrent is added either way. Saying so
-                            // matters because the file will be picked up again
-                            // on the next scan and refused as a duplicate.
-                            tracing::warn!(path = %path.display(), error = %err,
-                                "could not dispose of a torrent file after adding it");
-                        }
+                if added {
+                    let disposal = autoadd::disposal(directory, &path);
+                    if let Err(err) = autoadd::dispose(&disposal, &path) {
+                        // The torrent is added either way. Saying so matters
+                        // because the file will be picked up again on the next
+                        // scan and refused as a duplicate.
+                        tracing::warn!(path = %path.display(), error = %err,
+                            "could not dispose of a file after adding it");
                     }
-                    Err(err) => tracing::warn!(path = %path.display(), error = %err.message,
-                        "could not add a torrent from a watched directory"),
                 }
             }
         }
     }
+}
+
+/// Adds one `.torrent`. True if it is now the daemon's problem rather than the
+/// directory's.
+async fn add_torrent_file(core: &Core, directory: &autoadd::WatchDir, path: &Path) -> bool {
+    let dump = match std::fs::read(path) {
+        Ok(dump) => dump,
+        Err(err) => {
+            tracing::warn!(path = %path.display(), error = %err,
+                "could not read a torrent file");
+            return false;
+        }
+    };
+
+    let mut options = directory.options(core.torrent_defaults().await);
+    options.filename = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let save_path = options.save_path.clone().unwrap_or_default();
+
+    match core
+        .add(AddTorrent::from_file(dump, save_path), options)
+        .await
+    {
+        Ok(_) => {
+            tracing::info!(path = %path.display(), "added from a watched directory");
+            true
+        }
+        Err(err) => {
+            tracing::warn!(path = %path.display(), error = %err.message,
+                "could not add a torrent from a watched directory");
+            false
+        }
+    }
+}
+
+/// Adds every magnet link in a `.magnet` file.
+///
+/// The file is disposed of if any link was added. One bad link among several
+/// would otherwise leave the file in place and re-add the good ones on every
+/// scan.
+async fn add_magnet_file(core: &Core, directory: &autoadd::WatchDir, path: &Path) -> bool {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) => {
+            tracing::warn!(path = %path.display(), error = %err,
+                "could not read a magnet file");
+            return false;
+        }
+    };
+
+    let links = autoadd::magnet_links(&text);
+    if links.is_empty() {
+        tracing::warn!(path = %path.display(), "no magnet links in the file, leaving it alone");
+        return false;
+    }
+
+    let mut added = 0;
+    for link in &links {
+        let mut options = directory.options(core.torrent_defaults().await);
+        options.magnet = Some(link.clone());
+        let save_path = options.save_path.clone().unwrap_or_default();
+
+        match core
+            .add(AddTorrent::from_magnet(link.clone(), save_path), options)
+            .await
+        {
+            Ok(_) => added += 1,
+            Err(err) => tracing::warn!(path = %path.display(), error = %err.message,
+                "could not add a magnet from a watched directory"),
+        }
+    }
+
+    if added > 0 {
+        tracing::info!(path = %path.display(), added, of = links.len(),
+            "added magnets from a watched directory");
+    }
+    added > 0
 }
 
 // --------------------------------------------------------------- scheduler
@@ -133,7 +242,12 @@ async fn follow_schedule(core: Arc<Core>) {
             current = Some(state);
         }
 
-        tokio::time::sleep(Duration::from_secs(seconds_to_the_next_hour())).await;
+        // Woken on the hour, which is when the grid can change by itself, but
+        // also every minute in between, because someone who just edited the
+        // grid expects it to mean something before the hour is out. Both are
+        // cheap: nothing happens unless the state actually differs.
+        let wait = seconds_to_the_next_hour().min(60);
+        tokio::time::sleep(Duration::from_secs(wait)).await;
     }
 }
 
@@ -217,34 +331,78 @@ async fn maintain_blocklist(core: Arc<Core>) {
         }
     }
 
+    // What the installed filter was built from, so a changed URL or a changed
+    // whitelist takes effect at the next check rather than at the next refetch.
+    let mut installed_from = settings.url.clone();
+    let mut installed_whitelist = settings.whitelisted.clone();
+    let mut was_enabled = settings.enabled;
+
     loop {
+        // Checked every minute rather than hourly: the download itself is
+        // still governed by `check_after_days`, but a setting someone just
+        // changed should not sit unread for an hour.
+        tokio::time::sleep(Duration::from_secs(60)).await;
         let settings = blocklist::Settings::from_config(setting(&core, "blocklist").await.as_ref());
 
         if !settings.enabled {
             // Turning it off has to put the filter back, or the last list
             // stays in force until a restart.
-            let outcome = core
-                .manager
-                .with(|state| state.session.clear_ip_filter())
-                .await;
-            if let Ok(Err(err)) = outcome {
-                tracing::warn!(error = %err, "could not clear the IP filter");
-            }
-        } else if !settings.url.is_empty() && settings.is_stale(now()) {
-            match download(&settings).await {
-                Ok(bytes) => {
-                    let cache = blocklist::Settings::cache_path(&core.config_dir);
-                    if let Err(err) = std::fs::write(&cache, &bytes) {
-                        tracing::warn!(error = %err, "could not cache the block list");
+            if was_enabled {
+                let outcome = core
+                    .manager
+                    .with(|state| state.session.clear_ip_filter())
+                    .await;
+                match outcome {
+                    Ok(Ok(())) => tracing::info!("the block list is off, cleared the IP filter"),
+                    Ok(Err(err)) => tracing::warn!(error = %err, "could not clear the IP filter"),
+                    Err(err) => {
+                        tracing::warn!(error = %err, "the torrent manager is not answering")
                     }
-                    install(&core, &settings, &bytes).await;
                 }
-                Err(err) => tracing::warn!(error = %err, url = %settings.url,
-                    "could not download the block list"),
+                was_enabled = false;
             }
+            continue;
+        }
+        was_enabled = true;
+
+        let url_changed = settings.url != installed_from;
+        let whitelist_changed = settings.whitelisted != installed_whitelist;
+
+        // A changed whitelist needs no download: the cached list is still the
+        // right list, only the rules over the top of it have moved.
+        if whitelist_changed && !url_changed {
+            let cache = blocklist::Settings::cache_path(&core.config_dir);
+            if let Ok(bytes) = std::fs::read(&cache) {
+                tracing::info!("the whitelist changed, reinstalling the block list");
+                install(&core, &settings, &bytes).await;
+            }
+            installed_whitelist = settings.whitelisted.clone();
+            continue;
         }
 
-        tokio::time::sleep(Duration::from_secs(3600)).await;
+        if settings.url.is_empty() {
+            continue;
+        }
+        if !url_changed && !settings.is_stale(now()) {
+            continue;
+        }
+        if url_changed {
+            tracing::info!(url = %settings.url, "the block list URL changed, fetching it");
+        }
+
+        match download(&settings).await {
+            Ok(bytes) => {
+                let cache = blocklist::Settings::cache_path(&core.config_dir);
+                if let Err(err) = std::fs::write(&cache, &bytes) {
+                    tracing::warn!(error = %err, "could not cache the block list");
+                }
+                install(&core, &settings, &bytes).await;
+                installed_from = settings.url.clone();
+                installed_whitelist = settings.whitelisted.clone();
+            }
+            Err(err) => tracing::warn!(error = %err, url = %settings.url,
+                "could not download the block list"),
+        }
     }
 }
 

@@ -49,6 +49,7 @@ Deluge.details.OptionsTab = Ext.extend(Ext.form.FormPanel, {
                 private: false,
                 prioritize_first_last: false,
                 super_seeding: false,
+                label: '',
             },
         });
 
@@ -293,6 +294,25 @@ Deluge.details.OptionsTab = Ext.extend(Ext.form.FormPanel, {
             labelSeparator: '',
             boxLabel: _('Super Seeding'),
             id: 'super_seeding',
+        });
+
+        // The only place a torrent's label can be changed. It is a torrent
+        // option here rather than a plugin's own store, so it goes out with
+        // the rest of this panel through `core.set_torrent_options`, and the
+        // Labels list in the sidebar counts it on the next poll.
+        this.fieldsets.general.add({
+            xtype: 'label',
+            text: _('Label:'),
+            style: 'display: block; margin-top: 4px',
+        });
+        // The fieldset is a form layout with a label width of one pixel, which
+        // suits the checkboxes above and would clip a field label, so the
+        // caption is its own component.
+        this.fields.label = this.fieldsets.general.add({
+            xtype: 'textfield',
+            hideLabel: true,
+            id: 'torrent_label',
+            width: 180,
         });
 
         // Bind the fields so the options manager can manage them.

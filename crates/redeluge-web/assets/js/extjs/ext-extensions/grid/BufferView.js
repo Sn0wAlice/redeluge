@@ -74,8 +74,59 @@ Ext.ux.grid.BufferView = Ext.extend(Ext.grid.GridView, {
             : this.rowHeight;
     },
 
+    /**
+     * How far apart two rows really are, in pixels.
+     *
+     * Diverges from the Ext JS original, which returns `rowHeight +
+     * borderHeight` and trusts it. That constant is only right at a browser
+     * zoom of exactly 100% with the stylesheet's own font size. Anywhere else
+     * the real row is a fraction of a pixel taller or shorter, the error
+     * accumulates down the list, and the window this drives stops covering
+     * what is actually on screen: the last rows of the viewport are never
+     * rendered and show as empty stripes. Measuring costs one layout read per
+     * refresh and cannot drift.
+     */
     getCalculatedRowHeight: function () {
+        if (this.measuredRowHeight > 0) {
+            return this.measuredRowHeight;
+        }
+
+        var rows = this.getRows();
+        if (rows && rows.length > 1) {
+            // Measured across the whole list rather than between two
+            // neighbours, and with `getBoundingClientRect` rather than
+            // `offsetTop`, because the latter rounds to whole pixels. At a
+            // browser zoom of 110% a row is 28.4px; rounding that to 28 puts
+            // the error back, just more slowly.
+            var span = rows.length - 1;
+            var top = rows[0].getBoundingClientRect().top;
+            var bottom = rows[span].getBoundingClientRect().top;
+            var pitch = (bottom - top) / span;
+            if (pitch > 0) {
+                this.measuredRowHeight = pitch;
+                return pitch;
+            }
+        }
+        if (rows && rows.length === 1) {
+            var single = rows[0].getBoundingClientRect().height;
+            if (single > 0) {
+                this.measuredRowHeight = single;
+                return single;
+            }
+        }
+
+        // Nothing rendered yet. The configured value is the best guess, and it
+        // is not cached, so the first real measurement still happens.
         return this.rowHeight + this.borderHeight;
+    },
+
+    /**
+     * Forgets the measurement, so the next read takes it again.
+     *
+     * Called wherever the geometry can change: a resize, a zoom, a theme.
+     */
+    forgetRowHeight: function () {
+        this.measuredRowHeight = null;
     },
 
     getVisibleRowCount: function () {
@@ -86,15 +137,18 @@ Ext.ux.grid.BufferView = Ext.extend(Ext.grid.GridView, {
 
     getVisibleRows: function () {
         var count = this.getVisibleRowCount(),
+            rh = this.getCalculatedRowHeight(),
             sc = this.scroller.dom.scrollTop,
-            start =
-                sc === 0
-                    ? 0
-                    : Math.floor(sc / this.getCalculatedRowHeight()) - 1;
-        return {
-            first: Math.max(start, 0),
-            last: Math.min(start + count + 2, this.ds.getCount() - 1),
-        };
+            start = sc === 0 ? 0 : Math.floor(sc / rh) - 1,
+            end = this.ds.getCount() - 1;
+
+        // Clamped so the window is never inverted. When it was, `first` could
+        // exceed `last` and every row in view rendered empty.
+        var first = Math.max(Math.min(start, end), 0);
+        // Four rows of slack rather than two: enough that a residual rounding
+        // error still covers the bottom of the viewport.
+        var last = Math.max(Math.min(start + count + 4, end), first);
+        return { first: first, last: last };
     },
 
     doRender: function (cs, rs, ds, startRow, colCount, stripe, onlyBody) {
@@ -239,7 +293,11 @@ Ext.ux.grid.BufferView = Ext.extend(Ext.grid.GridView, {
             if (vr.first <= 0) {
                 i = vr.last + 1;
             }
-            for (var len = this.ds.getCount(); i < len; i++) {
+            // `len` is the smaller of the two: the store can hold more
+            // records than the body holds rows for a moment after an add, and
+            // indexing past the end threw from inside a timer.
+            var len = Math.min(this.ds.getCount(), rows.length);
+            for (; i < len; i++) {
                 // if current row is outside of first and last and
                 // has content, update the innerHTML to nothing
                 if ((i < vr.first || i > vr.last) && rows[i].innerHTML) {
@@ -265,6 +323,8 @@ Ext.ux.grid.BufferView = Ext.extend(Ext.grid.GridView, {
 
     layout: function () {
         Ext.ux.grid.BufferView.superclass.layout.call(this);
+        // The grid has just been sized, so any earlier measurement is stale.
+        this.forgetRowHeight();
         this.update();
     },
 });

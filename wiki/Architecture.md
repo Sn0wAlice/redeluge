@@ -123,5 +123,5 @@ step and the class of bug that came with it.
 Binaries and crates are `redeluge`. Configuration file names, their formats and
 the directory they live in stay Deluge's, so an existing installation keeps
 working. The daemon reports version `2.2.1` to clients, because that is the
-Deluge they know how to speak; telling them `0.1.0` makes every one of them
+Deluge they know how to speak; telling them `1.0.0` makes every one of them
 refuse to connect.

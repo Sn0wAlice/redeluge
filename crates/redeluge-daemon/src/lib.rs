@@ -15,6 +15,7 @@ pub mod config;
 pub mod core;
 pub mod events;
 pub mod features;
+pub mod geoip;
 pub mod manager;
 pub mod prefs;
 pub mod rpc;

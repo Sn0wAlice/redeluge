@@ -7,8 +7,13 @@
 //! into [`FlatAlert`] on the C++ side so the boundary stays trivial. That
 //! choice is what keeps this crate maintainable across libtorrent releases.
 
+// `create_torrent` carries every field of a torrent file, which is more than
+// the lint likes. Grouping them into a struct would put a second type on the
+// boundary for no gain.
+#[allow(clippy::too_many_arguments)]
 #[cxx::bridge(namespace = "redeluge")]
 pub mod ffi {
+
     /// One libtorrent alert, flattened into scalars.
     ///
     /// `kind` is a discriminant from `contract/alerts.json`, in the order the
@@ -216,6 +221,13 @@ pub mod ffi {
         blocked: bool,
     }
 
+    extern "Rust" {
+        /// Where hashing progress goes. Opaque to C++, which only calls the
+        /// one method on it.
+        type HashProgress;
+        fn note_piece(self: &mut HashProgress, piece: i32, total: i32);
+    }
+
     unsafe extern "C++" {
         include!("shim.h");
 
@@ -291,6 +303,9 @@ pub mod ffi {
             private_torrent: bool,
             trackers: &[String],
             web_seeds: &[String],
+            // Called once per piece as the hashing runs, so a client watching
+            // a progress dialog sees it move.
+            progress: &mut HashProgress,
         ) -> Result<Vec<u8>>;
 
         /// Reads a `.torrent` file's infohash without adding it.
@@ -415,5 +430,31 @@ pub mod ffi {
             dh_params: &[u8],
             passphrase: &str,
         ) -> Result<()>;
+    }
+}
+
+/// A sink for hashing progress, borrowed by C++ for the length of one call.
+///
+/// Creating a torrent reads every byte of its content, which can take minutes,
+/// and a client watching a progress dialog needs to see it move. libtorrent
+/// reports each piece through a callback, so something has to cross back into
+/// Rust; this is the only place anything does.
+pub struct HashProgress {
+    sink: Box<dyn FnMut(i32, i32) + Send>,
+}
+
+impl HashProgress {
+    /// `sink` is called with the piece just hashed and the total.
+    pub fn new(sink: Box<dyn FnMut(i32, i32) + Send>) -> Self {
+        Self { sink }
+    }
+
+    /// Progress that goes nowhere, for a caller that does not want it.
+    pub fn ignored() -> Self {
+        Self::new(Box::new(|_, _| {}))
+    }
+
+    fn note_piece(&mut self, piece: i32, total: i32) {
+        (self.sink)(piece, total);
     }
 }

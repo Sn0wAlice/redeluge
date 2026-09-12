@@ -58,6 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manager = Manager::start(config_dir.clone(), settings, events.clone())?;
 
     let core = Core::new(manager.clone(), config, auth, config_dir.clone());
+    core.load_country_database().await;
     core.save_config().await;
     core.apply_config().await;
     core.restore().await;

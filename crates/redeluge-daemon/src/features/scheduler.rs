@@ -99,10 +99,15 @@ impl Settings {
     /// that schedules nothing.
     pub fn from_config(value: Option<&Json>) -> Self {
         match value {
-            Some(value) => serde_json::from_value(value.clone()).unwrap_or_else(|err| {
-                tracing::warn!(error = %err, "the scheduler configuration is malformed, ignoring it");
-                Self::default()
-            }),
+            // The nulls come out first: `serde` fills in a key that is
+            // absent, not one that is present and null, so one null used to
+            // cost the whole dictionary.
+            Some(value) => {
+                serde_json::from_value(super::without_nulls(value)).unwrap_or_else(|err| {
+                    super::warn_malformed("scheduler", &err.to_string());
+                    Self::default()
+                })
+            }
             None => Self::default(),
         }
     }

@@ -10,8 +10,9 @@ file works against either.
 
 ## What is in it
 
-One path carries everything, `POST /json`, and its request body is a union over
-every method discriminated by the `method` field. Each method's schema pins the
+Two paths carry everything: `POST /json`, whose request body is a union over
+every method discriminated by the `method` field, and `POST /upload` for the
+add-by-file dialog. Each method's schema pins the
 method name, lists its parameters in order with which are required, and carries
 its authorisation level and the file in the Python implementation that defined
 it.
@@ -43,10 +44,20 @@ Read it in any OpenAPI viewer, or generate a client:
 npx @redocly/cli preview-docs docs/openapi.yaml
 ```
 
-Generated clients handle the envelope but not the meaning of `result`, which is
-untyped: the contract records each method's parameters, not the shape of what
-it returns. For what a call actually gives back, the worked examples on
-[Web API](Web-API) are more use.
+## What `result` holds
+
+Forty-five of the ninety-nine methods carry a schema for what they put in
+`result`, named `<Method>Result` in the components. They come from the type
+annotations the Python source declared, translated by the generator, so they
+cannot drift either. The other fifty-four either declared nothing or return a
+class whose fields the contract does not record; the specification says which
+rather than guessing.
+
+Those schemas are not referenced from the response, and cannot be: one endpoint
+carries every method, and OpenAPI selects a response by status code, not by
+request body. A generated client has to pick the right one by the method it
+called. For what a call actually gives back in practice, the worked examples on
+[Web API](Web-API) are still more use.
 
 ## One method the contract could not see
 

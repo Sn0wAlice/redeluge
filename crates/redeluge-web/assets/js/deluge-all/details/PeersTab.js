@@ -10,7 +10,11 @@
 
 (function () {
     function flagRenderer(value) {
-        if (!value.replace(' ', '').replace(' ', '')) {
+        // A renderer that throws takes the whole grid's render with it and
+        // leaves empty rows behind, so nothing here may assume the daemon
+        // filled the field in. Ours always sends `country`, empty when no
+        // GeoIP database is configured; another implementation need not.
+        if (!value || !String(value).trim()) {
             return '';
         }
         return String.format(
@@ -31,9 +35,10 @@
         }
         return String.format('<div class="{0}">{1}</div>', seed, value);
     }
-    function peerProgressRenderer(value) {
+    function peerProgressRenderer(value, p) {
         var progress = (value * 100).toFixed(0);
-        return Deluge.progressBar(progress, this.width - 8, progress + '%');
+        var width = Deluge.columnWidth(p, 150);
+        return Deluge.progressBar(progress, width - 8, progress + '%');
     }
 
     Deluge.details.PeersTab = Ext.extend(Ext.grid.GridPanel, {

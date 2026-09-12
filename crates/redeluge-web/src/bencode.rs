@@ -1,0 +1,318 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Just enough bencode to read a `.torrent` file.
+//!
+//! The daemon needs no bencode at all: resume data crosses the FFI boundary as
+//! an opaque blob and libtorrent reads it. The Web UI server is the one place
+//! that has to look inside a torrent, because the add dialog shows the name and
+//! the file tree before anything is added.
+//!
+//! Only decoding, and only what a torrent file contains. The one subtlety is
+//! that an infohash is the SHA-1 of the *raw bytes* of the `info` dictionary,
+//! not of a re-encoding of it: re-encoding normalises, and a torrent whose
+//! producer ordered its keys unusually would come out with a different hash and
+//! fail to match the swarm. So every value remembers where it came from.
+
+use std::collections::BTreeMap;
+use std::ops::Range;
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum Error {
+    #[error("unexpected end of input at byte {0}")]
+    Truncated(usize),
+    #[error("not bencode at byte {0}")]
+    Malformed(usize),
+    #[error("nested more than {0} deep")]
+    TooDeep(usize),
+    #[error("a length that does not fit at byte {0}")]
+    BadLength(usize),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// How deep a torrent may nest. A real one is three or four.
+const MAX_DEPTH: usize = 32;
+
+/// One bencode value, with the byte range it occupied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Value {
+    Int(i64),
+    Bytes(Vec<u8>),
+    List(Vec<Value>),
+    /// Keys are byte strings in the file; they are kept as bytes rather than
+    /// text because nothing guarantees UTF-8, and sorted because bencode
+    /// requires it.
+    Dict(BTreeMap<Vec<u8>, Value>),
+}
+
+impl Value {
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            Self::Int(value) => Some(*value),
+            _ => None,
+        }
+    }
+
+    pub fn as_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Bytes(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    /// A byte string as text, replacing anything that is not UTF-8.
+    ///
+    /// A torrent name is written by whoever made it and is not required to be
+    /// UTF-8. Dropping the field would hide the torrent the user is looking at.
+    pub fn as_text(&self) -> Option<String> {
+        self.as_bytes()
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+    }
+
+    pub fn as_list(&self) -> Option<&[Value]> {
+        match self {
+            Self::List(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        match self {
+            Self::Dict(entries) => entries.get(key.as_bytes()),
+            _ => None,
+        }
+    }
+}
+
+/// Decodes one value from the front of `input`.
+pub fn decode(input: &[u8]) -> Result<Value> {
+    let mut parser = Parser {
+        input,
+        at: 0,
+        depth: 0,
+    };
+    parser.value()
+}
+
+/// Decodes a value and reports where one of its top-level members lay.
+///
+/// Used for `info`, whose raw bytes are what the infohash is taken over.
+pub fn decode_with_span(input: &[u8], key: &str) -> Result<(Value, Option<Range<usize>>)> {
+    let mut parser = Parser {
+        input,
+        at: 0,
+        depth: 0,
+    };
+    let mut span = None;
+    let value = parser.value_noting(key.as_bytes(), &mut span)?;
+    Ok((value, span))
+}
+
+struct Parser<'a> {
+    input: &'a [u8],
+    at: usize,
+    depth: usize,
+}
+
+impl<'a> Parser<'a> {
+    fn peek(&self) -> Result<u8> {
+        self.input
+            .get(self.at)
+            .copied()
+            .ok_or(Error::Truncated(self.at))
+    }
+
+    fn value(&mut self) -> Result<Value> {
+        let mut ignored = None;
+        self.value_noting(b"\0none", &mut ignored)
+    }
+
+    /// Parses a value; if it is a dictionary, records where `wanted` lay.
+    ///
+    /// Only the outermost dictionary is considered, which is what an infohash
+    /// needs and keeps this from tracking a span per nested key.
+    fn value_noting(&mut self, wanted: &[u8], span: &mut Option<Range<usize>>) -> Result<Value> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(Error::TooDeep(MAX_DEPTH));
+        }
+        let outermost = self.depth == 1;
+
+        let value = match self.peek()? {
+            b'i' => self.integer()?,
+            b'l' => {
+                self.at += 1;
+                let mut items = Vec::new();
+                while self.peek()? != b'e' {
+                    items.push(self.value()?);
+                }
+                self.at += 1;
+                Value::List(items)
+            }
+            b'd' => {
+                self.at += 1;
+                let mut entries = BTreeMap::new();
+                while self.peek()? != b'e' {
+                    let key = match self.value()? {
+                        Value::Bytes(key) => key,
+                        _ => return Err(Error::Malformed(self.at)),
+                    };
+                    let start = self.at;
+                    let item = self.value()?;
+                    if outermost && key == wanted {
+                        *span = Some(start..self.at);
+                    }
+                    entries.insert(key, item);
+                }
+                self.at += 1;
+                Value::Dict(entries)
+            }
+            b'0'..=b'9' => self.bytes()?,
+            _ => return Err(Error::Malformed(self.at)),
+        };
+
+        self.depth -= 1;
+        Ok(value)
+    }
+
+    fn integer(&mut self) -> Result<Value> {
+        let start = self.at + 1;
+        let end = self.find(b'e', start)?;
+        let text =
+            std::str::from_utf8(&self.input[start..end]).map_err(|_| Error::Malformed(start))?;
+        let value: i64 = text.parse().map_err(|_| Error::Malformed(start))?;
+        self.at = end + 1;
+        Ok(Value::Int(value))
+    }
+
+    fn bytes(&mut self) -> Result<Value> {
+        let colon = self.find(b':', self.at)?;
+        let text = std::str::from_utf8(&self.input[self.at..colon])
+            .map_err(|_| Error::Malformed(self.at))?;
+        let length: usize = text.parse().map_err(|_| Error::BadLength(self.at))?;
+
+        let start = colon + 1;
+        let end = start.checked_add(length).ok_or(Error::BadLength(self.at))?;
+        if end > self.input.len() {
+            return Err(Error::Truncated(self.at));
+        }
+        self.at = end;
+        Ok(Value::Bytes(self.input[start..end].to_vec()))
+    }
+
+    fn find(&self, byte: u8, from: usize) -> Result<usize> {
+        self.input[from..]
+            .iter()
+            .position(|candidate| *candidate == byte)
+            .map(|offset| from + offset)
+            .ok_or(Error::Truncated(from))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn integers_strings_lists_and_dictionaries_decode() {
+        assert_eq!(decode(b"i42e").unwrap(), Value::Int(42));
+        assert_eq!(decode(b"i-7e").unwrap(), Value::Int(-7));
+        assert_eq!(decode(b"4:spam").unwrap(), Value::Bytes(b"spam".to_vec()));
+        assert_eq!(decode(b"0:").unwrap(), Value::Bytes(Vec::new()));
+        assert_eq!(
+            decode(b"li1ei2ee").unwrap(),
+            Value::List(vec![Value::Int(1), Value::Int(2)])
+        );
+
+        let dict = decode(b"d3:cow3:moo4:spam4:eggse").unwrap();
+        assert_eq!(dict.get("cow").unwrap().as_text().unwrap(), "moo");
+        assert_eq!(dict.get("spam").unwrap().as_text().unwrap(), "eggs");
+    }
+
+    #[test]
+    fn a_name_that_is_not_utf8_still_reads() {
+        // A torrent name is written by whoever made it. Dropping the field
+        // would hide the torrent the user is looking at.
+        let value = Value::Bytes(vec![0xff, 0xfe, b'o', b'k']);
+        assert!(value.as_text().unwrap().ends_with("ok"));
+    }
+
+    #[test]
+    fn truncated_input_is_an_error_not_a_panic() {
+        for input in [
+            &b"i42"[..],
+            b"4:spa",
+            b"li1e",
+            b"d3:cow",
+            b"d3:cow3:moo",
+            b"",
+            b"5:",
+        ] {
+            assert!(decode(input).is_err(), "{input:?} should not decode");
+        }
+    }
+
+    #[test]
+    fn rubbish_is_an_error() {
+        assert!(decode(b"x").is_err());
+        assert!(decode(b"ie").is_err());
+        assert!(decode(b"i1x2e").is_err());
+        assert!(decode(b"d3:cowi1ei2ee").is_err(), "a non-string key");
+    }
+
+    #[test]
+    fn a_length_that_would_overflow_is_refused() {
+        // The length field is attacker-controlled in a file someone uploads.
+        let input = b"99999999999999999999:x";
+        assert!(matches!(decode(input), Err(Error::BadLength(_))));
+    }
+
+    #[test]
+    fn a_length_longer_than_the_input_is_refused_rather_than_read() {
+        assert!(matches!(decode(b"100:short"), Err(Error::Truncated(_))));
+    }
+
+    #[test]
+    fn nesting_is_bounded() {
+        let deep = "l".repeat(MAX_DEPTH + 5) + &"e".repeat(MAX_DEPTH + 5);
+        assert!(matches!(
+            decode(deep.as_bytes()),
+            Err(Error::TooDeep(MAX_DEPTH))
+        ));
+    }
+
+    #[test]
+    fn the_span_of_a_top_level_member_is_reported() {
+        // This is what makes an infohash right: the raw bytes, not a
+        // re-encoding, which would normalise key order and change the hash.
+        let input = b"d4:infod4:name4:testee";
+        let (value, span) = decode_with_span(input, "info").unwrap();
+        let span = span.expect("info is there");
+
+        assert_eq!(&input[span.clone()], b"d4:name4:teste");
+        assert_eq!(
+            value
+                .get("info")
+                .unwrap()
+                .get("name")
+                .unwrap()
+                .as_text()
+                .unwrap(),
+            "test"
+        );
+    }
+
+    #[test]
+    fn a_missing_member_has_no_span() {
+        let (_, span) = decode_with_span(b"d3:cow3:mooe", "info").unwrap();
+        assert!(span.is_none());
+    }
+
+    #[test]
+    fn only_the_outermost_dictionary_is_searched_for_the_span() {
+        // A nested key called `info` must not be mistaken for the real one.
+        let input = b"d5:outerd4:info3:note4:infod4:name2:okee";
+        let (_, span) = decode_with_span(input, "info").unwrap();
+        let span = span.expect("the outer info");
+        assert_eq!(&input[span], b"d4:name2:oke");
+    }
+}

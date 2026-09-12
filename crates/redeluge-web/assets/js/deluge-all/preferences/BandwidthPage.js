@@ -36,7 +36,10 @@ Deluge.preferences.Bandwidth = Ext.extend(Ext.form.FormPanel, {
             xtype: 'fieldset',
             border: false,
             title: _('Global Bandwidth Usage'),
-            labelWidth: 200,
+            // Fits "Maximum Connection Attempts per Second:" on one line;
+            // at 200 it wrapped and left that row a line taller than the
+            // ones around it.
+            labelWidth: 235,
             defaultType: 'spinnerfield',
             defaults: {
                 minValue: -1,
@@ -147,7 +150,7 @@ Deluge.preferences.Bandwidth = Ext.extend(Ext.form.FormPanel, {
             title: _('Per Torrent Bandwidth Usage'),
             style: 'margin-bottom: 0px; padding-bottom: 0px;',
             defaultType: 'spinnerfield',
-            labelWidth: 200,
+            labelWidth: 235,
             defaults: {
                 minValue: -1,
                 maxValue: 99999,

@@ -332,7 +332,8 @@ rust::Vec<rust::String> session_stat_names() {
 rust::Vec<uint8_t> create_torrent(rust::Str path, int32_t piece_length, rust::Str comment,
                                   rust::Str creator, bool private_torrent,
                                   rust::Slice<rust::String const> trackers,
-                                  rust::Slice<rust::String const> web_seeds) {
+                                  rust::Slice<rust::String const> web_seeds,
+                                  HashProgress& progress) {
   std::string const root = to_string(path);
   if (root.empty()) throw std::runtime_error("a path is required");
 
@@ -365,7 +366,13 @@ rust::Vec<uint8_t> create_torrent(rust::Str path, int32_t piece_length, rust::St
       root.substr(0, root.find_last_of("/\\") == std::string::npos
                          ? 0
                          : root.find_last_of("/\\"));
-  lt::set_piece_hashes(builder, parent.empty() ? "." : parent, ec);
+  int const total_pieces = builder.num_pieces();
+  lt::set_piece_hashes(
+      builder, parent.empty() ? "." : parent,
+      [&progress, total_pieces](lt::piece_index_t piece) {
+        progress.note_piece(static_cast<int32_t>(piece), total_pieces);
+      },
+      ec);
   if (ec) throw std::runtime_error("could not hash the files: " + ec.message());
 
   std::vector<char> encoded;

@@ -119,8 +119,26 @@ Deluge.Sidebar = Ext.extend(Ext.Panel, {
         deluge.ui.update();
     },
 
+    /**
+     * The order the filter groups are shown in.
+     *
+     * The server answers with a JSON object, and its keys come back sorted
+     * rather than in the order the daemon wrote them, which put Labels at the
+     * top and States third. Anything the server sends that is not named here
+     * follows, in the order it arrived.
+     */
+    filterOrder: ['state', 'tracker_host', 'label', 'owner'],
+
     update: function (filters) {
-        for (var filter in filters) {
+        var ordered = this.filterOrder.filter(function (name) {
+            return name in filters;
+        });
+        Ext.each(Ext.keys(filters), function (name) {
+            if (ordered.indexOf(name) == -1) ordered.push(name);
+        });
+
+        for (var i = 0; i < ordered.length; i++) {
+            var filter = ordered[i];
             var states = filters[filter];
             if (Ext.getKeys(this.panels).indexOf(filter) > -1) {
                 this.panels[filter].updateStates(states);

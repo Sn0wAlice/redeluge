@@ -38,8 +38,13 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # fixed offset: a rule written for 9am has to still mean 9am after a clock
 # change. Only the clock, none of the formatting or parsing.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-# Block lists are distributed gzipped.
+# Block lists are distributed gzipped, and iblocklist also offers zip. Pure
+# Rust in both cases: bzip2 would mean a C dependency for a format no list
+# actually uses.
 flate2 = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# Peer countries. The database is not shipped, only read if one is provided.
+maxminddb = "0.24"
 
 [dev-dependencies]
 tempfile = "3"

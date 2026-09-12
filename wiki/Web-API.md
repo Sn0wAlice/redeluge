@@ -198,13 +198,56 @@ The Web UI server is a convenience, not a requirement. Anything in `core.*` and
 `daemon.*` is the daemon's own API, reachable on port 58846 over TLS with the
 binary protocol. That is the interface a thin client uses.
 
+## Uploading a torrent file
+
+`POST /upload` is the one endpoint that is not a JSON-RPC call. The add dialog
+posts a multipart form to it; the answer is the paths the files were staged at,
+which then go to `web.get_torrent_info` and `web.add_torrents`.
+
+```bash
+curl -b cookies.txt -F 'file=@x.torrent' http://127.0.0.1:8112/upload
+```
+
+```json
+{"success": true, "files": ["/config/web-uploads/x.torrent"]}
+```
+
+It always answers HTTP 200 with a `success` field, because ExtJS's form submit
+treats any other status as a transport failure and shows its own message
+instead. The content type is `text/html` rather than `application/json`, which
+looks wrong and is not: the dialog posts through a hidden iframe, and only
+`text/html` makes the browser insert the body unchanged where ExtJS can read it
+back. The body is still JSON. It needs the same session cookie as everything else, refuses anything
+that does not parse as a torrent, and caps a file at 10 MB. Staged files that
+nothing comes back for are swept after an hour.
+
+A path from `/upload` is the only path `web.get_torrent_info` and
+`web.add_torrents` will read: without that, an authenticated client could read
+any file the server can.
+
+## The two routes that are not JSON
+
+`POST /upload` is above. The other is `GET /flag/<code>`, which the peers tab
+asks for once per row: a two-letter country code, answered with a PNG. Anything
+that is not two ASCII letters is a 404, because the code comes from the daemon
+rather than from the client and a path segment built from data is how a
+traversal starts. Countries are empty unless the daemon has a GeoIP database
+configured, so on a default install nothing ever asks.
+
+Deluge had a third, `GET /tracker/<host>`, which answered with the tracker's
+own favicon: the web server fetched it from the tracker and cached it. redeluge
+does not have it. Fetching a favicon means the server making an outbound
+request to every host a torrent names, which is not something the interface
+should do without being asked, so the tracker column and the tracker filter are
+text.
+
 ## Known differences from Deluge
 
-Two, both documented rather than hidden:
-
-- **There is no `POST /upload`.** Adding a torrent by file works through
-  `core.add_torrent_file` as above; the multipart upload the Web UI's own
-  add-by-file dialog posts to is not implemented yet.
 - **The plugin-management methods are gone**, ten of them. `web.get_plugins`
   and `web.get_plugin_info` answer with nothing rather than erroring, so a
   client that asks on connect does not break.
+- **Tracker icons are gone**, with the `/tracker/<host>` route that served
+  them. See above.
+- **`web.start_daemon` refuses.** The daemon is a service of its own under
+  systemd or the container, so spawning an unsupervised child from the Web UI
+  would be wrong. Every other connection-manager call works.

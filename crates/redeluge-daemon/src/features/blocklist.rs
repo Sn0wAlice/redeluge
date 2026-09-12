@@ -176,6 +176,13 @@ pub fn parse(text: &str) -> Result<(Format, Import), Error> {
     Ok((format, import))
 }
 
+/// The largest a list may unpack to.
+///
+/// A zip declares its uncompressed size before anything is read, so a bomb is
+/// refused rather than written into memory. The largest public list is a few
+/// tens of megabytes.
+const MAX_LIST: u64 = 256 * 1024 * 1024;
+
 /// Unpacks a downloaded list.
 pub fn decompress(bytes: &[u8]) -> Result<Vec<u8>, Error> {
     match Compression::detect(bytes) {
@@ -184,6 +191,39 @@ pub fn decompress(bytes: &[u8]) -> Result<Vec<u8>, Error> {
             use std::io::Read;
             let mut out = Vec::new();
             flate2::read::GzDecoder::new(bytes)
+                .read_to_end(&mut out)
+                .map_err(|err| Error::Decompress(err.to_string()))?;
+            Ok(out)
+        }
+        // A zip of one list. Taking the largest member rather than the first
+        // is deliberate: these archives often carry a readme beside the list.
+        Compression::Zip => {
+            use std::io::Read;
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+                .map_err(|err| Error::Decompress(err.to_string()))?;
+
+            let largest = (0..archive.len())
+                .filter_map(|index| {
+                    let entry = archive.by_index(index).ok()?;
+                    entry.is_file().then(|| (index, entry.size()))
+                })
+                .max_by_key(|(_, size)| *size)
+                .map(|(index, _)| index)
+                .ok_or_else(|| Error::Decompress("the archive holds no files".to_owned()))?;
+
+            let mut member = archive
+                .by_index(largest)
+                .map_err(|err| Error::Decompress(err.to_string()))?;
+            // A list that claims to be larger than this is not a list.
+            if member.size() > MAX_LIST {
+                return Err(Error::Decompress(format!(
+                    "the list unpacks to {} bytes, more than the {MAX_LIST} allowed",
+                    member.size()
+                )));
+            }
+
+            let mut out = Vec::with_capacity(member.size() as usize);
+            member
                 .read_to_end(&mut out)
                 .map_err(|err| Error::Decompress(err.to_string()))?;
             Ok(out)
@@ -251,7 +291,7 @@ fn pair(first: &str, last: &str) -> Option<(IpAddr, IpAddr)> {
 pub enum Error {
     #[error("no reader recognises this list")]
     UnknownFormat,
-    #[error("{} lists are not supported, only gzip and plain text", .0.as_str())]
+    #[error("{} lists are not supported, only gzip, zip and plain text", .0.as_str())]
     UnsupportedCompression(Compression),
     #[error("could not decompress the list: {0}")]
     Decompress(String),
@@ -326,10 +366,15 @@ impl Default for Settings {
 impl Settings {
     pub fn from_config(value: Option<&Json>) -> Self {
         match value {
-            Some(value) => serde_json::from_value(value.clone()).unwrap_or_else(|err| {
-                tracing::warn!(error = %err, "the blocklist configuration is malformed, ignoring it");
-                Self::default()
-            }),
+            // The nulls come out first: `serde` fills in a key that is
+            // absent, not one that is present and null, so one null used to
+            // cost the whole dictionary.
+            Some(value) => {
+                serde_json::from_value(super::without_nulls(value)).unwrap_or_else(|err| {
+                    super::warn_malformed("blocklist", &err.to_string());
+                    Self::default()
+                })
+            }
             None => Self::default(),
         }
     }
@@ -535,8 +580,49 @@ mod tests {
 
     #[test]
     fn an_unsupported_archive_says_which_one_it_is() {
-        let err = decompress(b"PK\x03\x04rest").unwrap_err();
-        assert!(err.to_string().contains("zip"), "{err}");
+        let err = decompress(b"BZh9rest").unwrap_err();
+        assert!(err.to_string().contains("bzip2"), "{err}");
+    }
+
+    #[test]
+    fn a_zipped_list_is_unpacked() {
+        use std::io::Write;
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        archive
+            .start_file::<_, ()>("list.p2p", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(b"One:1.2.3.4-1.2.3.9\n").unwrap();
+        let packed = archive.finish().unwrap().into_inner();
+
+        assert_eq!(decompress(&packed).unwrap(), b"One:1.2.3.4-1.2.3.9\n");
+    }
+
+    #[test]
+    fn the_largest_member_of_an_archive_is_the_list() {
+        // These archives often carry a readme beside the list, and taking the
+        // first member would then import the readme as zero ranges.
+        use std::io::Write;
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        archive
+            .start_file::<_, ()>("readme.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(b"about this list\n").unwrap();
+        archive
+            .start_file::<_, ()>("list.p2p", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        for n in 0..50 {
+            writeln!(archive, "Org {n}:10.0.{n}.0-10.0.{n}.255").unwrap();
+        }
+        let packed = archive.finish().unwrap().into_inner();
+
+        let plain = decompress(&packed).unwrap();
+        let (_, import) = parse(&String::from_utf8(plain).unwrap()).unwrap();
+        assert_eq!(import.ranges.len(), 50);
+    }
+
+    #[test]
+    fn a_zip_that_is_not_a_zip_is_an_error_not_a_panic() {
+        assert!(decompress(b"PK\x03\x04 and then rubbish").is_err());
     }
 
     #[test]

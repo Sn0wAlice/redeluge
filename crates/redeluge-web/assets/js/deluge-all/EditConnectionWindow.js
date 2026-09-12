@@ -18,8 +18,8 @@ Deluge.EditConnectionWindow = Ext.extend(Ext.Window, {
     iconCls: 'x-deluge-add-window-icon',
 
     layout: 'fit',
-    width: 300,
-    height: 195,
+    width: 340,
+    height: 235,
     constrainHeader: true,
     bodyStyle: 'padding: 10px 5px;',
     closeAction: 'hide',
@@ -38,7 +38,9 @@ Deluge.EditConnectionWindow = Ext.extend(Ext.Window, {
             xtype: 'form',
             defaultType: 'textfield',
             baseCls: 'x-plain',
-            labelWidth: 60,
+            // Wide enough for "Pin sha256:", which wrapped onto two lines at
+            // the 60 that suited the four captions above it.
+            labelWidth: 75,
             items: [
                 {
                     fieldLabel: _('Host:'),
@@ -76,6 +78,23 @@ Deluge.EditConnectionWindow = Ext.extend(Ext.Window, {
                     inputType: 'password',
                     value: '',
                 },
+                {
+                    // The daemon prints its own certificate fingerprint when
+                    // it starts. Pasting it here pins the certificate for this
+                    // host; leaving it empty connects without verifying
+                    // anything, which is what the Python client always did and
+                    // is only reasonable over loopback.
+                    fieldLabel: _('Pin sha256:'),
+                    labelSeparator: '',
+                    name: 'fingerprint',
+                    // The same anchor as the fields above it. At 95% the box
+                    // ran past the right edge of the window and was clipped;
+                    // a sha256 is wider than any of these boxes anyway, so it
+                    // scrolls inside whatever width it is given.
+                    anchor: '75%',
+                    emptyText: _('unpinned'),
+                    value: '',
+                },
             ],
         });
     },
@@ -90,6 +109,20 @@ Deluge.EditConnectionWindow = Ext.extend(Ext.Window, {
             .findField('username')
             .setValue(connection.get('user'));
         this.host_id = connection.id;
+
+        // Pins live in the Web UI's own configuration, keyed by host id,
+        // rather than in the host list: they are this server's opinion about
+        // that daemon, not part of the address.
+        var field = this.form.getForm().findField('fingerprint');
+        field.setValue('');
+        deluge.client.web.get_config({
+            success: function (config) {
+                var pins = config['daemon_fingerprints'] || {};
+                field.setValue(pins[this.host_id] || '');
+                this.pins = pins;
+            },
+            scope: this,
+        });
     },
 
     onEditClick: function () {
@@ -113,6 +146,7 @@ Deluge.EditConnectionWindow = Ext.extend(Ext.Window, {
                             iconCls: 'x-deluge-icon-error',
                         });
                     } else {
+                        this.saveFingerprint(values.fingerprint);
                         this.fireEvent('hostedited');
                     }
                     this.hide();
@@ -120,6 +154,21 @@ Deluge.EditConnectionWindow = Ext.extend(Ext.Window, {
                 scope: this,
             }
         );
+    },
+
+    /**
+     * Stores, or clears, the pinned fingerprint for the host being edited.
+     */
+    saveFingerprint: function (value) {
+        var pins = Ext.apply({}, this.pins || {});
+        var pin = (value || '').replace(/[\s:]/g, '').toLowerCase();
+        if (pin) {
+            pins[this.host_id] = pin;
+        } else {
+            delete pins[this.host_id];
+        }
+        deluge.client.web.set_config({ daemon_fingerprints: pins });
+        this.pins = pins;
     },
 
     onHide: function () {

@@ -40,13 +40,19 @@ fn main() {
             panic!("missing bundle sources: {}", dir.display());
         }
         let bundled = concatenate(&dir);
+        let minified = minify(&bundled);
         println!(
-            "cargo:warning=bundled {} into {} ({} bytes)",
+            "cargo:warning=bundled {} into {} ({} bytes, {} minified)",
             source_dir,
             output,
-            bundled.len()
+            bundled.len(),
+            minified.len()
         );
+        // The release name is the debug name without `-debug`, which is what
+        // `ScriptSet::Normal` looks for.
+        let release = output.replace("-debug.js", ".js");
         files.insert((*output).to_owned(), bundled);
+        files.insert(release, minified);
     }
 
     let archive = pack(&files);
@@ -177,3 +183,8 @@ fn pack(files: &BTreeMap<String, Vec<u8>>) -> Vec<u8> {
     }
     out
 }
+
+// The minifier lives in the library so its tests run with the others: a
+// function only reachable from a build script is a function nothing tests, and
+// a minifier that eats half a file looks exactly like one that works.
+include!("src/minify.rs");

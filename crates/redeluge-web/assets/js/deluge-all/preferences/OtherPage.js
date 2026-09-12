@@ -32,54 +32,11 @@ Deluge.preferences.Other = Ext.extend(Ext.form.FormPanel, {
 
         var optMan = deluge.preferences.getOptionsManager();
 
+        // What was here: a release check and an anonymous-statistics
+        // upload. Neither has anything behind it. redeluge has no update
+        // service to ask and sends nothing anywhere, so both were a
+        // preference that could be set and could not mean anything.
         var fieldset = this.add({
-            xtype: 'fieldset',
-            border: false,
-            title: _('Updates'),
-            autoHeight: true,
-            labelWidth: 1,
-            defaultType: 'checkbox',
-        });
-        optMan.bind(
-            'new_release_check',
-            fieldset.add({
-                fieldLabel: '',
-                labelSeparator: '',
-                height: 22,
-                name: 'new_release_check',
-                boxLabel: _('Be alerted about new releases'),
-            })
-        );
-
-        fieldset = this.add({
-            xtype: 'fieldset',
-            border: false,
-            title: _('System Information'),
-            autoHeight: true,
-            labelWidth: 1,
-            defaultType: 'checkbox',
-        });
-        fieldset.add({
-            xtype: 'panel',
-            border: false,
-            bodyCfg: {
-                html: _(
-                    'Help us improve Deluge by sending us your Python version, PyGTK version, OS and processor types. Absolutely no other information is sent.'
-                ),
-            },
-        });
-        optMan.bind(
-            'send_info',
-            fieldset.add({
-                fieldLabel: '',
-                labelSeparator: '',
-                height: 22,
-                boxLabel: _('Yes, please send anonymous statistics'),
-                name: 'send_info',
-            })
-        );
-
-        fieldset = this.add({
             xtype: 'fieldset',
             border: false,
             title: _('GeoIP Database'),

@@ -89,6 +89,40 @@ Ext.apply(Deluge, {
         '</div>',
 
     /**
+     * A number out of a form field, or the fallback when the field is empty.
+     *
+     * `parseInt('')` is `NaN`, and `NaN` serialises to `null`, so a blank
+     * field wrote a null into the configuration and the daemon threw the whole
+     * dictionary away as malformed.
+     *
+     * @param {String} value The field's value
+     * @param {Number} fallback What the setting defaults to
+     */
+    number: function (value, fallback) {
+        var parsed = Number(value);
+        return value === '' || value === null || isNaN(parsed) ? fallback : parsed;
+    },
+
+    /**
+     * How wide the cell a renderer is drawing into will be, in pixels.
+     *
+     * A grid renderer is called with `this` unbound unless the column sets a
+     * scope, so reading `this.width` there gets `undefined` and every pixel
+     * computed from it becomes `NaN`. The width the grid actually used is in
+     * the metadata object it passes as the second argument, as a style string
+     * like `width:150px;`. This reads that, and falls back rather than
+     * throwing when the column has no width of its own.
+     *
+     * @param {Object} meta The metadata object passed to the renderer
+     * @param {Number} fallback What to return when the style says nothing
+     */
+    columnWidth: function (meta, fallback) {
+        var style = meta && meta.style;
+        var match = style ? String(style).match(/width\s*:\s*(\d+)/) : null;
+        return match ? parseInt(match[1], 10) : fallback;
+    },
+
+    /**
      * A method to create a progress bar that can be used by renderers
      * to display a bar within a grid or tree.
      * @param {Number} progress The bars progress

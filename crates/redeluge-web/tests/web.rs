@@ -224,6 +224,105 @@ fn the_web_ui_assets_were_embedded() {
     assert!(assets::files().len() > 400, "too few assets embedded");
 }
 
+/// Every `url()` in a stylesheet we wrote names an asset that is embedded.
+///
+/// Two did not, and both had been wrong since before the fork: the About
+/// window's masthead pointed into a directory the web root never had, and the
+/// add dialog's spinner was an absolute path missing a segment. Neither fails
+/// visibly. The image is simply absent, which reads as a layout quirk rather
+/// than as a missing file, so nothing ever caught them.
+///
+/// Only our own stylesheets are checked. The vendored Ext JS ones carry
+/// references to parts of the Ext JS distribution that Deluge never shipped
+/// either, for rules nothing in the interface applies; rewriting vendored CSS
+/// to satisfy a test would be worse than the dead references.
+#[test]
+fn our_stylesheets_only_point_at_assets_we_ship() {
+    let ours = ["css/deluge.css"];
+
+    for name in ours {
+        let raw = assets::get(name).unwrap_or_else(|| panic!("{name} was not embedded"));
+        let text = std::str::from_utf8(raw).expect("CSS is UTF-8");
+        let directory = name.rsplit_once('/').map(|(head, _)| head).unwrap_or("");
+
+        for reference in css_urls(text) {
+            // A root-absolute path is wrong on its own: the interface can be
+            // served under a prefix, and the prefix is not in the stylesheet.
+            assert!(
+                !reference.starts_with('/'),
+                "{name} refers to {reference} from the server root, \
+                 which breaks under a base path"
+            );
+
+            let resolved = resolve(directory, &reference);
+            assert!(
+                assets::contains(&resolved),
+                "{name} refers to {reference}, which resolves to \
+                 {resolved} and is not embedded"
+            );
+        }
+    }
+}
+
+/// The `url(...)` targets of a stylesheet, with comments and remote references
+/// left out.
+fn css_urls(text: &str) -> Vec<String> {
+    let mut without_comments = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("/*") {
+        without_comments.push_str(&rest[..start]);
+        match rest[start + 2..].find("*/") {
+            Some(end) => rest = &rest[start + 2 + end + 2..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    without_comments.push_str(rest);
+
+    let mut found = Vec::new();
+    let mut rest = without_comments.as_str();
+    while let Some(start) = rest.find("url(") {
+        rest = &rest[start + 4..];
+        let Some(end) = rest.find(')') else { break };
+        let reference = rest[..end].trim().trim_matches(['\'', '"']).to_owned();
+        rest = &rest[end + 1..];
+
+        if reference.starts_with("data:") || reference.contains("://") {
+            continue;
+        }
+        let reference = reference
+            .split(['?', '#'])
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        if !reference.is_empty() {
+            found.push(reference);
+        }
+    }
+    found
+}
+
+/// A relative reference resolved against the directory it was written in.
+fn resolve(directory: &str, reference: &str) -> String {
+    let mut parts: Vec<&str> = if directory.is_empty() {
+        Vec::new()
+    } else {
+        directory.split('/').collect()
+    };
+    for segment in reference.split('/') {
+        match segment {
+            "." | "" => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
+}
+
 #[test]
 fn the_concatenated_bundle_looks_like_the_whole_front_end() {
     let bundle = assets::get("js/deluge-all-debug.js").expect("the bundle");
@@ -241,6 +340,102 @@ fn the_concatenated_bundle_looks_like_the_whole_front_end() {
     // itself, without failing every time a file is added or removed. It came
     // down from 300 KB when the plugin interface was taken out in phase 5.
     assert!(bundle.len() > 280_000, "the bundle is suspiciously small");
+}
+
+#[test]
+fn the_bundle_carries_a_page_for_each_feature() {
+    // The three settings pages were added late and the bundle is built from a
+    // directory listing, so a file that failed to land would be invisible.
+    let bundle = assets::get("js/deluge-all-debug.js").expect("the bundle");
+    let text = std::str::from_utf8(bundle).expect("JavaScript is UTF-8");
+
+    for page in [
+        "Deluge.preferences.AutoAdd",
+        "Deluge.preferences.Blocklist",
+        "Deluge.preferences.Scheduler",
+    ] {
+        assert!(text.contains(page), "{page} is not in the bundle");
+    }
+    // And each is actually added to the window, not merely defined.
+    for page in [
+        "new Deluge.preferences.AutoAdd()",
+        "new Deluge.preferences.Blocklist()",
+        "new Deluge.preferences.Scheduler()",
+    ] {
+        assert!(text.contains(page), "{page} is never instantiated");
+    }
+}
+
+#[test]
+fn the_minified_bundle_is_shipped_and_smaller() {
+    // `ScriptSet::Normal` looks for these names; without them the page falls
+    // back to the debug bundle and nobody notices except the bandwidth.
+    for (debug, release) in [
+        ("js/deluge-all-debug.js", "js/deluge-all.js"),
+        (
+            "js/extjs/ext-extensions-debug.js",
+            "js/extjs/ext-extensions.js",
+        ),
+    ] {
+        let full = assets::get(debug).expect(debug);
+        let small = assets::get(release).expect(release);
+        assert!(
+            small.len() < full.len(),
+            "{release} is not smaller than {debug}"
+        );
+        assert!(small.len() > full.len() / 4, "{release} lost too much");
+    }
+    assert!(ScriptSet::Normal.available(), "the release set is complete");
+}
+
+#[test]
+fn the_minified_bundle_still_carries_what_the_page_needs() {
+    let bundle = assets::get("js/deluge-all.js").expect("the minified bundle");
+    let text = std::str::from_utf8(bundle).expect("JavaScript is UTF-8");
+
+    for needed in [
+        "Deluge.OptionsManager",
+        "Deluge.preferences.Scheduler",
+        "Deluge.add.Window",
+        "x-deluge-schedule",
+    ] {
+        assert!(text.contains(needed), "minifying lost {needed}");
+    }
+}
+
+#[test]
+fn no_feature_page_overrides_a_container_hook() {
+    // `Ext.Container` calls `onAdd` and `onRemove` on itself every time
+    // anything is added to or removed from the panel. A page that defines a
+    // method of either name replaces that hook, and then throws the moment it
+    // builds itself. A button handler called `onAdd` did exactly that, and
+    // nothing short of opening the page would have caught it.
+    //
+    // Scoped to the three pages written here. Two upstream windows carry the
+    // same collision harmlessly, because they never call `add` on themselves.
+    let bundle = assets::get("js/deluge-all-debug.js").expect("the bundle");
+    let text = std::str::from_utf8(bundle).expect("JavaScript is UTF-8");
+
+    for page in ["AutoAdd", "Blocklist", "Scheduler"] {
+        let marker = format!("Deluge.preferences.{page} = Ext.extend(");
+        let start = text
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{page} is not in the bundle"));
+        // Each file is contiguous in the bundle, and every one of them opens
+        // with this namespace call.
+        let end = text[start..]
+            .find("\nExt.namespace(")
+            .map(|offset| start + offset)
+            .unwrap_or(text.len());
+        let source = &text[start..end];
+
+        for hook in ["onAdd: function", "onRemove: function"] {
+            assert!(
+                !source.contains(hook),
+                "{page} defines {hook}, which overrides a container hook"
+            );
+        }
+    }
 }
 
 #[test]
@@ -300,12 +495,12 @@ fn content_types_are_right_for_the_files_that_matter() {
 // -------------------------------------------------------------------- index
 
 #[test]
-fn the_debug_script_set_is_the_one_we_ship() {
-    // Minification is not part of this build yet, so only the debug bundles
-    // exist. If that changes, this test is the reminder to revisit it.
+fn the_minified_script_set_is_the_one_we_ship() {
+    // Both sets are built now, so an ordinary page load gets the minified one
+    // and `?debug=true` still gets the readable one.
     assert!(ScriptSet::Debug.available());
-    assert!(!ScriptSet::Normal.available());
-    assert_eq!(choose_scripts(false), ScriptSet::Debug);
+    assert!(ScriptSet::Normal.available());
+    assert_eq!(choose_scripts(false), ScriptSet::Normal);
     assert_eq!(choose_scripts(true), ScriptSet::Debug);
 }
 
@@ -322,9 +517,9 @@ fn the_page_renders_with_every_script_and_stylesheet_it_needs() {
     )
     .expect("the shipped template must render");
 
-    assert!(html.contains("<title>Deluge WebUI 2.2.1</title>"));
+    assert!(html.contains("<title>RE:deluge Web UI 2.2.1</title>"));
     assert!(html.contains("js/gettext.js"));
-    assert!(html.contains("js/deluge-all-debug.js"));
+    assert!(html.contains("js/deluge-all.js"));
     assert!(html.contains("themes/css/xtheme-gray.css"));
     assert!(html.contains("Deluge.debug = false"));
     assert!(!html.contains("${"), "an unrendered marker survived");
@@ -552,4 +747,115 @@ fn no_auth_file_means_no_host_entry_rather_than_a_broken_one() {
         outcome.password_set,
         "the password does not depend on the daemon"
     );
+}
+
+// ------------------------------------------- settings that could not do anything
+
+/// No preference is offered that nothing acts on.
+///
+/// Each of these was a control in the preferences window whose setting was
+/// stored in `core.conf` or `web.conf` and then read by nobody: either the
+/// feature behind it went with the Python tree, or libtorrent 2.0 dropped the
+/// setting it mapped onto. A preference that can be changed and cannot mean
+/// anything is worse than no preference, because it reads as a bug in the
+/// thing it claims to control.
+///
+/// The configuration keys themselves stay, because the daemon answers Deluge's
+/// API and a client that asks for them must get them. Only the controls are
+/// gone.
+#[test]
+fn the_interface_offers_no_setting_that_does_nothing() {
+    // The minified bundle, because that is what ships and because the comments
+    // in the debug one say where each of these used to be and why it went.
+    let bundle = assets::get("js/deluge-all.js").expect("the minified bundle");
+    let text = std::str::from_utf8(bundle).expect("JavaScript is UTF-8");
+
+    for (name, why) in [
+        ("enc_in_policy", "encryption is never passed to libtorrent"),
+        ("enc_out_policy", "encryption is never passed to libtorrent"),
+        ("enc_level", "encryption is never passed to libtorrent"),
+        ("cache_size", "libtorrent 2.0 has no disk cache"),
+        ("cache_expiry", "libtorrent 2.0 has no disk cache"),
+        ("utpex", "libtorrent 2.0 has no peer-exchange setting"),
+        ("outgoing_ports", "never applied to the session"),
+        ("random_outgoing_ports", "never applied to the session"),
+        ("force_proxy", "libtorrent 2.0 dropped it"),
+        ("new_release_check", "there is no update service to ask"),
+        ("send_info", "nothing is sent anywhere"),
+        ("start_daemon", "the daemon is a service of its own"),
+        ("get_languages", "there is one language"),
+    ] {
+        assert!(
+            !text.contains(name),
+            "the front end still carries {name}, and {why}"
+        );
+    }
+}
+
+/// A torrent's label can be set from the interface.
+///
+/// The daemon has had labels since the plugins became features, and the
+/// sidebar has always been able to filter on one, but nothing could put a
+/// label on a torrent, so that filter was permanently empty.
+#[test]
+fn a_label_can_be_set_on_a_torrent_and_when_adding_one() {
+    let bundle = assets::get("js/deluge-all-debug.js").expect("the bundle");
+    let text = std::str::from_utf8(bundle).expect("JavaScript is UTF-8");
+
+    assert!(
+        text.contains("torrent_label"),
+        "the torrent options tab has no label field"
+    );
+    assert!(
+        text.contains("'label',"),
+        "the add dialog does not bind a label"
+    );
+    assert!(
+        text.contains("'label'") && text.contains("Deluge.Keys"),
+        "the status keys do not ask for the label"
+    );
+}
+
+/// The two settings redeluge added are reachable without editing a file.
+#[test]
+fn the_settings_redeluge_added_have_somewhere_to_be_set() {
+    let bundle = assets::get("js/deluge-all-debug.js").expect("the bundle");
+    let text = std::str::from_utf8(bundle).expect("JavaScript is UTF-8");
+
+    assert!(
+        text.contains("poll_interval"),
+        "nothing in the interface sets the poll interval"
+    );
+    assert!(
+        text.contains("daemon_fingerprints"),
+        "nothing in the interface pins a daemon certificate"
+    );
+}
+
+/// The fork is named where a person reads it, and not where a client does.
+///
+/// The daemon reports Deluge's `2.2.1` and answers Deluge's API, so every
+/// protocol-facing string stays as it was. The interface is the one place that
+/// says which program this actually is.
+#[test]
+fn the_interface_is_named_after_the_fork() {
+    let bundle = assets::get("js/deluge-all.js").expect("the minified bundle");
+    let text = std::str::from_utf8(bundle).expect("JavaScript is UTF-8");
+
+    assert!(
+        text.contains("RE:deluge"),
+        "the toolbar and the About window should name the fork"
+    );
+    assert!(
+        text.contains("github.com/Sn0wAlice/redeluge/wiki"),
+        "the Help button should open this project's wiki"
+    );
+    assert!(
+        !text.contains("dev.deluge-torrent.org"),
+        "the Help button should not open upstream's wiki"
+    );
+
+    let page = assets::get("index.html").expect("the page");
+    let page = std::str::from_utf8(page).expect("HTML is UTF-8");
+    assert!(page.contains("<title>RE:deluge Web UI"));
 }

@@ -16,6 +16,7 @@ use redeluge_daemon::events::Event;
 use redeluge_daemon::manager::Manager;
 use redeluge_daemon::rpc::{CallContext, Rpc};
 use redeluge_libtorrent::SessionSettings;
+use redeluge_rencode::Value;
 
 async fn daemon() -> (Arc<Core>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("a temporary directory");
@@ -167,4 +168,78 @@ async fn the_daemon_reports_a_version_clients_recognise() {
         version.starts_with("2."),
         "clients expect a Deluge 2 version, got {version}"
     );
+}
+
+// ------------------------------------------------- the defaults a torrent gets
+
+/// The "Add Torrent Options" preferences reach a new torrent.
+///
+/// They did not: every torrent started from a hard-coded constant, so
+/// seventeen settings could be changed in the preferences window and meant
+/// nothing. This calls the same function the three add methods and the watched
+/// directories all go through.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_torrent_starts_from_the_configured_defaults() {
+    let (core, _dir) = daemon().await;
+
+    let pair = |key: &str, value: Value| (Value::Str(key.to_owned()), value);
+    let changes = Value::Dict(vec![
+        pair(
+            "download_location",
+            Value::Str("/downloads/incoming".to_owned()),
+        ),
+        pair("add_paused", Value::Bool(true)),
+        pair("pre_allocate_storage", Value::Bool(true)),
+        pair("prioritize_first_last_pieces", Value::Bool(true)),
+        pair("sequential_download", Value::Bool(true)),
+        pair("move_completed", Value::Bool(true)),
+        pair(
+            "move_completed_path",
+            Value::Str("/downloads/done".to_owned()),
+        ),
+        pair("stop_seed_at_ratio", Value::Bool(true)),
+        pair("stop_seed_ratio", Value::Float64(3.5)),
+        pair("remove_seed_at_ratio", Value::Bool(true)),
+        pair("max_connections_per_torrent", Value::Int(42)),
+        pair("max_upload_slots_per_torrent", Value::Int(7)),
+        pair("max_download_speed_per_torrent", Value::Float64(250.0)),
+        pair("max_upload_speed_per_torrent", Value::Float64(125.0)),
+    ]);
+
+    core.call(&admin(), "core.set_config", vec![changes], Vec::new())
+        .await
+        .expect("the settings are accepted");
+
+    let options = core.torrent_defaults().await;
+
+    assert_eq!(options.save_path.as_deref(), Some("/downloads/incoming"));
+    assert!(options.paused);
+    assert_eq!(options.storage_mode, "allocate");
+    assert!(options.prioritize_first_last);
+    assert!(options.sequential_download);
+    assert!(options.move_completed);
+    assert_eq!(
+        options.move_completed_path.as_deref(),
+        Some("/downloads/done")
+    );
+    assert!(options.stop_at_ratio);
+    assert_eq!(options.stop_ratio, 3.5);
+    assert!(options.remove_at_ratio);
+    assert_eq!(options.max_connections, 42);
+    assert_eq!(options.max_upload_slots, 7);
+    assert_eq!(options.max_download_speed, 250.0);
+    assert_eq!(options.max_upload_speed, 125.0);
+}
+
+/// An empty configuration still produces something a torrent can be added with.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_defaults_are_the_documented_ones_when_nothing_is_set() {
+    let (core, _dir) = daemon().await;
+    let options = core.torrent_defaults().await;
+
+    assert!(!options.paused);
+    assert_eq!(options.storage_mode, "sparse");
+    assert_eq!(options.max_connections, -1);
+    assert_eq!(options.max_upload_speed, -1.0);
+    assert!(!options.stop_at_ratio);
 }

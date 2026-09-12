@@ -20,7 +20,12 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
                 items: [
                     {
                         id: 'tbar-deluge-text',
-                        text: _('Deluge'),
+                        // The fork's own name. It stays "Deluge" everywhere a
+                        // client reads it, the version the daemon reports and
+                        // the API included, because that is what clients
+                        // written against the Python server expect. This is
+                        // the one place a person reads it.
+                        text: _('RE:deluge'),
                         iconCls: 'x-deluge-main-panel',
                         handler: this.onAboutClick,
                     },
@@ -158,7 +163,7 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
     },
 
     onHelpClick: function () {
-        window.open('http://dev.deluge-torrent.org/wiki/UserGuide');
+        window.open('https://github.com/Sn0wAlice/redeluge/wiki', '_blank');
     },
 
     onAboutClick: function () {

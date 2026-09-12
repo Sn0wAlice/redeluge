@@ -2,7 +2,11 @@ services:
   redeluge:
     build:
       context: .
-    image: redeluge:${REDELUGE_VERSION:-2.2.1}
+      # So a locally built image is labelled like a published one. The
+      # workflow passes the commit as well; here there is not necessarily one.
+      args:
+        VERSION: ${REDELUGE_VERSION:-1.0.0}
+    image: redeluge:${REDELUGE_VERSION:-1.0.0}
     container_name: redeluge
     restart: unless-stopped
 
@@ -20,9 +24,10 @@ services:
       - ./data/downloads:/downloads
 
     ports:
-      # The Web UI authenticates with a single password and has no rate
-      # limiting, so it stays on loopback. Put a reverse proxy with TLS in front
-      # of it before exposing it to a network.
+      # The Web UI authenticates with a single password, so it stays on
+      # loopback. Guesses are rate limited and the password is scrypt, but
+      # neither is a reason to expose it: put a reverse proxy with TLS in front
+      # of it before it reaches a network.
       - "127.0.0.1:8112:8112"
       # BitTorrent peer traffic, which does need to be reachable.
       - "58946:58946/tcp"

@@ -1,0 +1,175 @@
+name: Build the container image
+
+# Builds the image from the checked-out tree and publishes it to this
+# repository's package registry, tagged with the version in Cargo.toml.
+#
+# Manual on purpose. The version is written in `[workspace.package]`, so
+# publishing is a deliberate act that follows a deliberate bump rather than
+# something a push does on its own. Nothing here invents a version: if the tag
+# already exists in the registry the run stops, because a published image that
+# changes under a tag people have pulled is worse than a failed workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Publish to ghcr.io (off for a build that only has to compile)"
+        type: boolean
+        default: true
+      latest:
+        description: "Also move the 'latest' tag to this build"
+        type: boolean
+        default: true
+      checks:
+        description: "Run the test gate first (roughly doubles the run)"
+        type: boolean
+        default: true
+      overwrite:
+        description: "Replace the image already published under this version"
+        type: boolean
+        default: false
+      platforms:
+        description: "Architectures to build"
+        type: choice
+        default: linux/amd64
+        options:
+          - linux/amd64
+          - linux/amd64,linux/arm64
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read the version from Cargo.toml
+        id: version
+        run: |
+          set -euo pipefail
+
+          # The one in [workspace.package]; every crate inherits it. Read with
+          # awk rather than a bare grep so a dependency pinned to the same
+          # string further down the file cannot be picked up instead.
+          version="$(awk '
+            /^\[workspace\.package\]/ { in_block = 1; next }
+            /^\[/                     { in_block = 0 }
+            in_block && /^version[[:space:]]*=/ {
+              gsub(/^version[[:space:]]*=[[:space:]]*"|"[[:space:]]*$/, "")
+              print
+              exit
+            }
+          ' Cargo.toml)"
+
+          if [ -z "$version" ]; then
+            echo "::error::No version in [workspace.package] of Cargo.toml"
+            exit 1
+          fi
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$version' does not look like a version"
+            exit 1
+          fi
+
+          # Registry names are lower case; the owner here is not.
+          image="ghcr.io/$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+
+          # The tag list is built here rather than with an inline conditional
+          # in the build step, so it can never come out with a blank line in
+          # it that the builder has to be trusted to ignore.
+          tags="$image:$version"
+          if [ "${{ inputs.latest }}" = "true" ]; then
+            tags="$tags"$'\n'"$image:latest"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=$image"     >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            printf '%s\n' "$tags"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building:"
+          printf '%s\n' "$tags" | sed 's/^/  /'
+
+      - name: Run the test gate
+        if: ${{ inputs.checks }}
+        run: ./docker/rust.sh
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up QEMU
+        if: ${{ contains(inputs.platforms, 'arm64') }}
+        uses: docker/setup-qemu-action@v3
+
+      - name: Log in to ghcr.io
+        if: ${{ inputs.push }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to replace a published version
+        if: ${{ inputs.push && !inputs.overwrite }}
+        env:
+          IMAGE: ${{ steps.version.outputs.image }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if docker manifest inspect "${IMAGE}:${VERSION}" > /dev/null 2>&1; then
+            echo "::error::${IMAGE}:${VERSION} is already published. Bump the version in Cargo.toml, or re-run with 'overwrite'."
+            exit 1
+          fi
+          echo "${IMAGE}:${VERSION} is free"
+
+      - name: Build and publish
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ inputs.platforms }}
+          push: ${{ inputs.push }}
+          provenance: false
+          tags: ${{ steps.version.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            REVISION=${{ github.sha }}
+          # Layer cache in the registry, so a rebuild that only changes the
+          # application does not compile libtorrent's dependencies again.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        env:
+          IMAGE: ${{ steps.version.outputs.image }}
+          VERSION: ${{ steps.version.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PUSHED: ${{ inputs.push }}
+        run: |
+          {
+            echo "## redeluge ${VERSION}"
+            echo
+            if [ "${PUSHED}" = "true" ]; then
+              echo "Published \`${IMAGE}:${VERSION}\`"
+              echo
+              echo '```bash'
+              echo "docker pull ${IMAGE}:${VERSION}"
+              echo '```'
+              echo
+              echo "Digest: \`${DIGEST}\`"
+            else
+              echo "Built without publishing."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

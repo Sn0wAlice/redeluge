@@ -8,6 +8,7 @@ use cxx::UniquePtr;
 use crate::alert::Alert;
 use crate::bridge::ffi;
 use crate::bridge::ffi::IpRange;
+use crate::bridge::HashProgress;
 use crate::settings::Setting;
 use crate::torrent::{AddTorrent, FileEntry, FlagChange, PeerInfo, TorrentStatus, TrackerEntry};
 use crate::Error;
@@ -310,6 +311,33 @@ impl Session {
         trackers: &[String],
         web_seeds: &[String],
     ) -> Result<Vec<u8>, Error> {
+        Self::create_torrent_with_progress(
+            path,
+            piece_length,
+            comment,
+            creator,
+            private,
+            trackers,
+            web_seeds,
+            &mut HashProgress::ignored(),
+        )
+    }
+
+    /// The same, reporting each piece as it is hashed.
+    ///
+    /// `progress` is borrowed for the length of the call and is driven from
+    /// the hashing loop in C++, so it runs on this thread and must not block.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_torrent_with_progress(
+        path: &str,
+        piece_length: i32,
+        comment: &str,
+        creator: &str,
+        private: bool,
+        trackers: &[String],
+        web_seeds: &[String],
+        progress: &mut HashProgress,
+    ) -> Result<Vec<u8>, Error> {
         ffi::create_torrent(
             path,
             piece_length,
@@ -318,6 +346,7 @@ impl Session {
             private,
             trackers,
             web_seeds,
+            progress,
         )
         .map(|bytes| bytes.into_iter().collect())
         .map_err(Error::from_cxx)
