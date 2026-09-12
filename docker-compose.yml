@@ -5,8 +5,8 @@ services:
       # So a locally built image is labelled like a published one. The
       # workflow passes the commit as well; here there is not necessarily one.
       args:
-        VERSION: ${REDELUGE_VERSION:-1.2.0}
-    image: redeluge:${REDELUGE_VERSION:-1.2.0}
+        VERSION: ${REDELUGE_VERSION:-1.3.0}
+    image: redeluge:${REDELUGE_VERSION:-1.3.0}
     container_name: redeluge
     restart: unless-stopped
 

@@ -60,6 +60,16 @@ pub struct Options {
     #[serde(default)]
     pub move_completed_path: String,
 
+    /// Keep these torrents out of the list until somebody asks for them.
+    ///
+    /// Not something the label does to its torrents: nothing is paused, moved
+    /// or limited by it, and every other client still sees everything. It is a
+    /// view rule, stored here because it belongs to the label rather than to
+    /// one browser, and because a person with three thousand torrents wants
+    /// the noisy label out of the way on every machine they open.
+    #[serde(default)]
+    pub hide_by_default: bool,
+
     /// Deluge's rule for labelling a torrent by its tracker. Stored and
     /// reported so a client that sets it does not lose it; nothing acts on it
     /// yet, and [`Settings::unapplied`] says so out loud.
@@ -96,6 +106,7 @@ impl Default for Options {
             apply_move_completed: false,
             move_completed: false,
             move_completed_path: String::new(),
+            hide_by_default: false,
             auto_add: false,
             auto_add_trackers: Vec::new(),
         }
@@ -286,6 +297,35 @@ mod tests {
         assert_eq!(options.move_completed_path, "/films");
         // Defaults fill in the rest rather than the label being discarded.
         assert_eq!(options.max_download_speed, -1.0);
+    }
+
+    #[test]
+    fn hiding_a_label_changes_nothing_about_its_torrents() {
+        // The point of the option: it decides what a list shows, and must not
+        // touch a single torrent. A hidden label that also paused things would
+        // be a very unpleasant surprise.
+        let options = Options {
+            hide_by_default: true,
+            ..Options::default()
+        };
+        assert!(options.to_torrent_options().is_empty());
+
+        let settings = Settings::from_config(Some(&json!({
+            "labels": {"noise": {"hide_by_default": true}, "films": {}}
+        })));
+        assert!(
+            settings
+                .options("noise")
+                .expect("the label")
+                .hide_by_default
+        );
+        assert!(
+            !settings
+                .options("films")
+                .expect("the label")
+                .hide_by_default,
+            "a label that says nothing is visible"
+        );
     }
 
     #[test]

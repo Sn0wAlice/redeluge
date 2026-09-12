@@ -7,6 +7,22 @@ redeluge numbers its own releases from 1.0.0. The version the daemon reports
 to clients stays `2.2.1`, because that is the Deluge a client expects to be
 talking to.
 
+## [1.3.0] — 2026-09-12
+
+### Added
+
+- **A label can be hidden from the torrent list by default.** Preferences,
+  Labels, under *In the torrent list*. The same thing as unticking it under
+  *Show labels* in the Label column's header menu, except that it starts that
+  way and it is stored with the label, so the next machine you open hides it
+  too. What a few hundred torrents in a label you never look at were making
+  unusable is the list of the ones you do.
+- Nothing is hidden from anything but that list. Picking the label in the
+  sidebar shows those torrents, because asking for a label outranks hiding it;
+  ticking it in the header menu shows it for the session, and a choice made
+  there is not undone by the next reconnect. The sidebar's counts, every other
+  client and the daemon itself see no difference.
+
 ## [1.2.0] — 2026-09-12
 
 ### Added

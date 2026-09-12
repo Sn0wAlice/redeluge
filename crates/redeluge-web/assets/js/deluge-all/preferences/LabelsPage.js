@@ -173,6 +173,29 @@ Deluge.preferences.Labels = Ext.extend(Ext.Panel, {
             width: 220,
         });
 
+        // Its own fieldset, because it is the one option here that does
+        // nothing to the torrents: it decides what the list shows.
+        var view = this.add({
+            xtype: 'fieldset',
+            border: false,
+            title: _('In the torrent list'),
+            autoHeight: true,
+            labelWidth: 170,
+            style: 'padding-top: 5px; margin-bottom: 0px;',
+        });
+        this.fields.hide_by_default = view.add({
+            xtype: 'checkbox',
+            hideLabel: true,
+            boxLabel: _('Hide these torrents unless asked for'),
+        });
+        view.add({
+            xtype: 'label',
+            text: _(
+                'They are still there: pick the label in the sidebar to see them, or tick it under Show labels in the Label column’s header menu.'
+            ),
+            style: 'display: block; margin: 2px 0 0 0; color: #666;',
+        });
+
         this.setOptionsEnabled(false);
         this.on('show', this.onPageShow, this);
     },
@@ -268,6 +291,7 @@ Deluge.preferences.Labels = Ext.extend(Ext.Panel, {
         if (options.apply_max) parts.push(_('bandwidth'));
         if (options.apply_queue) parts.push(_('seeding'));
         if (options.apply_move_completed) parts.push(_('move on completion'));
+        if (options.hide_by_default) parts.push(_('hidden by default'));
         return parts.length ? parts.join(', ') : _('nothing');
     },
 
@@ -456,6 +480,16 @@ Deluge.preferences.Labels = Ext.extend(Ext.Panel, {
         // The plugin keeps these two together, and the path is meaningless
         // without the switch that turns moving on.
         options['move_completed'] = options['apply_move_completed'];
+
+        // The list is showing whatever was decided when the page loaded, so
+        // turning hiding on or off here has to reach it now. Without this the
+        // checkbox appears to do nothing until the next reload.
+        if (deluge.torrents && deluge.torrents.setLabelHidden) {
+            deluge.torrents.setLabelHidden(
+                name,
+                options['hide_by_default'] === true
+            );
+        }
 
         deluge.client.label.set_options(name, options, {
             success: this.reload,

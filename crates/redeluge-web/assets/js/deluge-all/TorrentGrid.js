@@ -445,6 +445,7 @@
             Deluge.TorrentGrid.superclass.initComponent.call(this);
             deluge.events.on('torrentsRemoved', this.onTorrentsRemoved, this);
             deluge.events.on('disconnect', this.onDisconnect, this);
+            deluge.events.on('connect', this.loadHiddenLabels, this);
 
             // The header menu exists only once the view has rendered.
             this.on('render', this.installLabelHeaderMenu, this, { single: true });
@@ -570,6 +571,14 @@
         hiddenLabels: {},
 
         /**
+         * Labels the person has decided about themselves, this session.
+         *
+         * A label hidden by default that was ticked back on must not be hidden
+         * again by the next reconnect, which re-reads the register.
+         */
+        labelChoices: {},
+
+        /**
          * The same torrents, without the ones whose label is unticked.
          *
          * Filtering the data on the way in rather than filtering the store:
@@ -588,18 +597,61 @@
             }
             if (!any || !torrents) return torrents;
 
+            // Asking for a label in the sidebar outranks hiding it. Without
+            // this, clicking a label that is hidden by default would show an
+            // empty list, which looks exactly like a label that lost its
+            // torrents.
+            var asked = null;
+            if (deluge.sidebar && deluge.sidebar.getFilterStates) {
+                var states = deluge.sidebar.getFilterStates() || {};
+                if (states['label'] !== undefined) asked = states['label'];
+            }
+
             var kept = {};
             for (var id in torrents) {
                 var label = torrents[id]['label'] || '';
-                if (!hidden[label]) kept[id] = torrents[id];
+                if (!hidden[label] || label === asked) kept[id] = torrents[id];
             }
             return kept;
+        },
+
+        /**
+         * Hides the labels whose register entry says to, on connect.
+         *
+         * The rule belongs to the label rather than to this browser, which is
+         * what makes it worth storing: somebody with three thousand torrents
+         * wants the noisy label out of the way on every machine they open,
+         * not once per machine.
+         */
+        loadHiddenLabels: function () {
+            deluge.client.label.get_config({
+                success: function (config) {
+                    var labels = (config && config['labels']) || {};
+                    var changed = false;
+                    for (var name in labels) {
+                        if (this.labelChoices[name]) continue;
+                        var options = labels[name] || {};
+                        if (options['hide_by_default'] && !this.hiddenLabels[name]) {
+                            this.hiddenLabels[name] = true;
+                            changed = true;
+                        }
+                    }
+                    if (changed && this.lastTorrents) {
+                        this.update(this.lastTorrents, true);
+                    }
+                },
+                // A daemon that is not connected yet has no register to read,
+                // and this is not worth an error dialog over.
+                failure: Ext.emptyFn,
+                scope: this,
+            });
         },
 
         /**
          * Shows or hides one label, and redraws from what was last received.
          */
         setLabelHidden: function (name, hidden) {
+            this.labelChoices[name] = true;
             if (hidden) {
                 this.hiddenLabels[name] = true;
             } else {
@@ -613,6 +665,9 @@
         },
 
         showEveryLabel: function () {
+            for (var name in this.hiddenLabels) {
+                this.labelChoices[name] = true;
+            }
             this.hiddenLabels = {};
             if (this.lastTorrents) this.update(this.lastTorrents, true);
         },

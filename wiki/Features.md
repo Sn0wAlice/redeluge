@@ -86,6 +86,23 @@ They are applied when a torrent joins the label and when the label's options
 change. `auto_add` and `auto_add_trackers` are stored and reported so a client
 that sets them does not lose them, and nothing acts on them yet.
 
+### Hiding a label by default
+
+One more option, under *In the torrent list*, that does nothing to the torrents
+at all: `hide_by_default` keeps them out of the list until you ask for them.
+
+It is the same thing as unticking the label under *Show labels* in the Label
+column's header menu, except that it starts that way, and it is stored with the
+label rather than in one browser: the machine you open tomorrow hides it too.
+Useful once a label holds a few hundred torrents you never look at and the rest
+of the list is what you actually manage.
+
+Nothing is lost and nothing is stopped. Picking the label in the sidebar shows
+those torrents, because asking for a label outranks hiding it. Ticking it in
+the header menu shows it for the rest of the session. The sidebar's count still
+counts them, every other client still sees them, and the daemon still runs
+them.
+
 ### Compatibility with Radarr, Sonarr and the rest
 
 Every program built on Deluge's API asks `core.get_enabled_plugins` whether the
@@ -238,7 +255,8 @@ tick per label, plus *No Label*, and unticking one takes those torrents out of
 the view. That is a view filter, done in the browser, so it is instant and
 survives the next poll. It answers a different question from the sidebar's
 Labels list, which picks one label to look at; this one hides the ones you do
-not want to see.
+not want to see. A label can also start unticked, for everybody, which is
+[hiding a label by default](#hiding-a-label-by-default) above.
 
 ## Watched directories
 
