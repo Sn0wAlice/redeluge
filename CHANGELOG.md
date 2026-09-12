@@ -7,6 +7,41 @@ redeluge numbers its own releases from 1.0.0. The version the daemon reports
 to clients stays `2.2.1`, because that is the Deluge a client expects to be
 talking to.
 
+## [1.1.0] — 2026-09-12
+
+### Added
+
+- **A disk-space rule**, under Preferences, Downloads, and the only feature
+  here that is on out of the box. Under 1 GiB free, every torrent still writing
+  to that disk is paused; over 2 GiB free, the ones it paused are started
+  again. Both numbers are yours to change.
+- What it prevents is worth stating, because it is the failure that costs more
+  than the download: a disk fills, libtorrent fails a write, that torrent goes
+  to Error, and the next one does the same a minute later. Nothing resumes on
+  its own once there is room, so it ends with thirty torrents in Error and an
+  evening spent working out which stopped for this reason and which for
+  another. `core.get_free_space` always knew; nothing ever acted on it.
+- It reads each filesystem the session writes to separately, so a download
+  landing on a disk with room is not stopped because a different disk is full.
+  Seeding torrents are never touched, because a seed writes nothing and taking
+  it off the swarm would cost ratio for no gain. Queued and checking torrents
+  are, because a queued torrent is one the queue is about to start writing.
+- It remembers whether the queue was managing a torrent before it took it, and
+  gives that back on release: a torrent you were running by hand does not come
+  back under the queue because a disk filled up. A path it cannot measure at
+  all, an unplugged disk or an unmounted share, decides nothing either way.
+- Two thresholds rather than one, because a single one flaps: pause at 1 GiB, a
+  piece is discarded, free space crosses back by a megabyte, everything starts
+  and stops again a second later.
+- The idle rule now holds on to a download whose time is up while the disk is
+  full, instead of starting it for the fifteen seconds it takes this rule to
+  stop it again.
+- **Where you see it.** A counter in the status bar, beside the idle rule's own
+  and hidden the same way when it is holding nothing; clicking it opens the
+  settings. A line in the torrent's Status tab saying whether this is what
+  stopped it. Pressing Resume ends the hold, though a still-full disk takes it
+  back on the next pass.
+
 ## [1.0.2] — 2026-09-12
 
 ### Added

@@ -104,14 +104,18 @@ in one place, so you never have to.
 |---|---|
 | `autoadd` | Watched directories |
 | `blocklist` | The peer block list |
+| `countrydb` | The country database that gives peers their flag |
+| `disk_space` | Pausing downloads before the disk runs out |
 | `idle_pause` | Pausing downloads that get nowhere, so the queue can move |
 | `label` | The labels that exist, and what each applies |
 | `scheduler` | The weekly schedule |
 
 Each has a preferences page in the Web UI as well.
 
-Each is one dictionary. Three are off by default; `label` has nothing to turn
-off and simply starts empty. [Features](Features)
+Each is one dictionary. All are off by default except `disk_space`, which is on
+because it only ever declines to write to a disk with no room on it and undoes
+itself as soon as there is room; `label` has nothing to turn off and simply
+starts empty. [Features](Features)
 documents what goes in them. They are the only keys redeluge added; a test
 fails if any other key appears that is neither in the contract nor declared as
 an addition, which is how an invented key was caught once already.

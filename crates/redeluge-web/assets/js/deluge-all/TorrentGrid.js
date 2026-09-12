@@ -393,6 +393,7 @@
                 { name: 'idle_since', type: 'float' },
                 { name: 'idle_pause_at', type: 'float' },
                 { name: 'idle_resume_at', type: 'float' },
+                { name: 'space_paused', type: 'bool' },
             ],
         },
 

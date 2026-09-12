@@ -806,6 +806,13 @@ impl Rpc for Core {
                             if !pause {
                                 if let Some(torrent) = state.torrents.get_mut(&id) {
                                     torrent.options.idle_resume_at = 0.0;
+                                    // The disk-space hold ends here too, so it
+                                    // is not counted as held while it runs. If
+                                    // the disk is still full that rule takes it
+                                    // again on its next pass, which is the one
+                                    // case where a rule should win: there is
+                                    // nowhere to write what it would download.
+                                    torrent.options.space_paused = false;
                                 }
                             }
                             let change = FlagChange::new()
@@ -1840,7 +1847,11 @@ fn glob_directory(pattern: &str) -> Vec<Value> {
 }
 
 /// Bytes free on the filesystem holding a path.
-fn free_space(path: &str) -> i64 {
+///
+/// Also the disk-space rule's only measurement, which is why it is not private
+/// to this file: one reading, one meaning, whether it is answering a client or
+/// deciding whether to stop a download.
+pub(crate) fn free_space(path: &str) -> i64 {
     #[cfg(unix)]
     {
         use std::ffi::CString;

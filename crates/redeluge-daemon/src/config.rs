@@ -416,6 +416,10 @@ pub fn defaults(config_dir: &Path) -> Vec<(String, Json)> {
             crate::features::countrydb::Settings::default_json(),
         ),
         (
+            "disk_space".into(),
+            crate::features::diskspace::Settings::default_json(),
+        ),
+        (
             "idle_pause".into(),
             crate::features::idlepause::Settings::default_json(),
         ),

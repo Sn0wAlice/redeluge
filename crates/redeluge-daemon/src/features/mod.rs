@@ -21,6 +21,7 @@
 pub mod autoadd;
 pub mod blocklist;
 pub mod countrydb;
+pub mod diskspace;
 pub mod idlepause;
 pub mod label;
 pub mod scheduler;
@@ -39,6 +40,7 @@ pub fn spawn(core: Arc<Core>) {
     tokio::spawn(watch_directories(Arc::clone(&core)));
     tokio::spawn(follow_schedule(Arc::clone(&core)));
     tokio::spawn(rotate_idle_downloads(Arc::clone(&core)));
+    tokio::spawn(guard_disk_space(Arc::clone(&core)));
     tokio::spawn(maintain_country_database(Arc::clone(&core)));
     tokio::spawn(maintain_blocklist(core));
 }
@@ -296,11 +298,18 @@ fn sweep_idle(
     // Resume, which `core.resume_torrent` handles: inferring it from whether
     // the torrent looks paused raced with startup, where a torrent being
     // checked is not yet reported as paused and lost its hold.
+    //
+    // The exception is a disk with no room on it: a hold whose time is up is
+    // kept until there is somewhere to write, or this rule would start a
+    // download that the disk-space rule has to stop again on its next pass.
+    let low_space = state.low_space;
     let due_back: Vec<String> = state
         .torrents
         .iter()
         .filter(|(_, torrent)| torrent.options.idle_resume_at > 0.0)
-        .filter(|(_, torrent)| !settings.enabled || torrent.options.idle_resume_at <= now)
+        .filter(|(_, torrent)| {
+            !settings.enabled || (torrent.options.idle_resume_at <= now && !low_space)
+        })
         .map(|(id, _)| id.clone())
         .collect();
 
@@ -433,6 +442,191 @@ pub fn countdown_for(
         pause_at: idlepause::pause_at(idle_since, grace),
         resume_at: torrent.options.idle_resume_at,
     }
+}
+
+// ------------------------------------------------------------- disk space
+
+/// Stops downloads before the disk fills, and starts them again after.
+///
+/// Every fifteen seconds rather than every five: free space moves slowly next
+/// to a transfer rate, and each pass costs a `statvfs` per filesystem in use.
+///
+/// Three steps on purpose. The paths are collected on the session thread, the
+/// filesystems are measured off it, and only the decision goes back. Measuring
+/// inside the session thread would have put a blocking syscall in front of
+/// every torrent operation, and one unresponsive network mount would then stop
+/// the whole daemon rather than one rule.
+async fn guard_disk_space(core: Arc<Core>) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(15)).await;
+
+        let settings =
+            diskspace::Settings::from_config(setting(&core, "disk_space").await.as_ref()).sane();
+
+        let paths = match core.manager.with(save_paths_in_use).await {
+            Ok(paths) => paths,
+            Err(err) => {
+                tracing::warn!(error = %err, "the torrent manager is not answering");
+                continue;
+            }
+        };
+        if paths.is_empty() {
+            continue;
+        }
+
+        let free = tokio::task::spawn_blocking(move || {
+            paths
+                .into_iter()
+                .map(|path| {
+                    let free = crate::core::free_space(&path);
+                    (path, free)
+                })
+                .collect::<std::collections::BTreeMap<String, i64>>()
+        })
+        .await
+        .unwrap_or_default();
+
+        match core
+            .manager
+            .with(move |state| sweep_space(state, &settings, &free))
+            .await
+        {
+            Ok((released, paused)) => {
+                for id in released {
+                    tracing::info!(torrent = %id, "released: there is room again");
+                }
+                for id in paused {
+                    tracing::warn!(torrent = %id, "paused: not enough free space to keep writing");
+                }
+            }
+            Err(err) => tracing::warn!(error = %err, "the torrent manager is not answering"),
+        }
+    }
+}
+
+/// Every filesystem the session is writing to, once each.
+fn save_paths_in_use(state: &mut crate::manager::SessionState) -> Vec<String> {
+    let mut paths: Vec<String> = state
+        .session
+        .all_torrent_status()
+        .into_iter()
+        .map(|status| status.save_path)
+        .filter(|path| !path.is_empty())
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// One pass of the disk-space rule.
+///
+/// Per path rather than per daemon: a download landing on a disk with room is
+/// not the reason another disk is full, and stopping it would fix nothing.
+fn sweep_space(
+    state: &mut crate::manager::SessionState,
+    settings: &diskspace::Settings,
+    free: &std::collections::BTreeMap<String, i64>,
+) -> (Vec<String>, Vec<String>) {
+    use redeluge_libtorrent::{flags, FlagChange};
+
+    let statuses = state.session.all_torrent_status();
+    let session_paused = state.session_paused;
+
+    let mut to_release: Vec<String> = Vec::new();
+    let mut to_pause: Vec<String> = Vec::new();
+    let mut low_anywhere = false;
+
+    for status in &statuses {
+        let verdict = free
+            .get(&status.save_path)
+            .map(|free| diskspace::judge(*free, settings))
+            .unwrap_or(diskspace::Verdict::Hold);
+        let Some(torrent) = state.torrents.get(&status.info_hash) else {
+            continue;
+        };
+
+        if settings.enabled && verdict == diskspace::Verdict::Low {
+            // Recorded even when there is nothing left to pause here, because
+            // the idle rule reads it to decide whether now is the moment to
+            // start a download it has been holding.
+            low_anywhere = true;
+        }
+
+        if torrent.options.space_paused {
+            // A hold ends when there is room again, or when the rule is turned
+            // off. Never on the reading in between, and never on a reading it
+            // could not take.
+            if !settings.enabled || verdict == diskspace::Verdict::Recovered {
+                to_release.push(status.info_hash.clone());
+            }
+            continue;
+        }
+
+        if !settings.enabled || verdict != diskspace::Verdict::Low {
+            continue;
+        }
+        // A seed writes nothing, so it cannot be the reason the disk fills,
+        // and pausing it would take it off the swarm for nothing.
+        if status.is_seeding || status.is_finished {
+            continue;
+        }
+        // Queued and checking count as well as downloading: a queued torrent
+        // is one the queue is about to start writing, and leaving it to be
+        // promoted onto a full disk is the failure this exists to prevent.
+        // Anything already paused, moving or in error is left where it is.
+        match torrent.state(status, session_paused) {
+            crate::state::TorrentState::Downloading
+            | crate::state::TorrentState::Queued
+            | crate::state::TorrentState::Checking
+            | crate::state::TorrentState::Allocating => to_pause.push(status.info_hash.clone()),
+            _ => {}
+        }
+    }
+
+    state.low_space = low_anywhere;
+
+    let mut released = Vec::new();
+    for id in to_release {
+        let managed = state
+            .torrents
+            .get(&id)
+            .map(|torrent| torrent.options.space_was_managed)
+            .unwrap_or(true);
+        let change = FlagChange::new()
+            .set_to(flags::PAUSED, false)
+            .set_to(flags::AUTO_MANAGED, managed);
+        if state.session.set_flags(&id, change).is_ok() {
+            if let Some(torrent) = state.torrents.get_mut(&id) {
+                torrent.options.space_paused = false;
+                torrent.options.paused = false;
+                torrent.options.auto_managed = managed;
+            }
+            state.mark_dirty();
+            released.push(id);
+        }
+    }
+
+    let mut paused = Vec::new();
+    for id in to_pause {
+        // Auto-management has to go, or libtorrent's queue starts the torrent
+        // again within half a minute and the pause never takes.
+        let change = FlagChange::new()
+            .set_to(flags::PAUSED, true)
+            .set_to(flags::AUTO_MANAGED, false);
+        if state.session.set_flags(&id, change).is_ok() {
+            if let Some(torrent) = state.torrents.get_mut(&id) {
+                torrent.options.space_was_managed = torrent.options.auto_managed;
+                torrent.options.space_paused = true;
+                torrent.options.paused = true;
+                torrent.options.auto_managed = false;
+            }
+            state.mark_dirty();
+            state.idle_since.remove(&id);
+            paused.push(id);
+        }
+    }
+
+    (released, paused)
 }
 
 // ---------------------------------------------------------------- auto add

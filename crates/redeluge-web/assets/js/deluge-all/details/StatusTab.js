@@ -103,6 +103,18 @@ Deluge.details.StatusTab = Ext.extend(Ext.Panel, {
         return _('Not idle');
     },
 
+    /**
+     * Whether the disk-space rule is the reason this torrent is stopped.
+     *
+     * Only two answers, because the rule only has two: it is holding this
+     * torrent until there is room, or it is not holding it at all.
+     */
+    diskState: function (status) {
+        // Short on purpose: this is the last row of the last column, so a
+        // sentence that wraps is a sentence with its second line cut off.
+        return status.space_paused ? _('Waiting for room') : _('Not held');
+    },
+
     onRequestComplete: function (status) {
         seeds =
             status.total_seeds > -1
@@ -146,6 +158,7 @@ Deluge.details.StatusTab = Ext.extend(Ext.Panel, {
         };
         data.auto_managed = _(status.is_auto_managed ? 'True' : 'False');
         data.idle_state = this.idleState(status);
+        data.disk_state = this.diskState(status);
 
         var translate_tracker_status = {
             Error: _('Error'),

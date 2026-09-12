@@ -87,6 +87,23 @@ pub struct TorrentOptions {
     #[serde(default)]
     pub idle_resume_at: f64,
 
+    /// Whether the disk-space rule is the reason this torrent is paused.
+    ///
+    /// Saved with the torrent, like the idle rule's clock above and for the
+    /// same reason: a daemon that restarted while the disk was full would
+    /// otherwise have no way to tell what it had stopped, and would leave a
+    /// pile of torrents paused with nothing to say why.
+    #[serde(default)]
+    pub space_paused: bool,
+
+    /// Whether the queue was managing this torrent before that rule took it.
+    ///
+    /// The rule has to clear auto-management to make the pause stick, so it
+    /// has to remember what it cleared: a torrent somebody was running by hand
+    /// must not come back under the queue just because a disk filled up.
+    #[serde(default = "yes")]
+    pub space_was_managed: bool,
+
     /// Trackers the user added or reordered, kept because libtorrent forgets
     /// them when a torrent is removed and re-added from resume data.
     #[serde(default)]
@@ -145,6 +162,8 @@ impl Default for TorrentOptions {
             shared: false,
             super_seeding: false,
             idle_resume_at: 0.0,
+            space_paused: false,
+            space_was_managed: true,
             trackers: Vec::new(),
         }
     }
@@ -437,6 +456,8 @@ impl Torrent {
             "idle_resume_at",
             Value::Float64(self.options.idle_resume_at),
         );
+        // The other reason a torrent can be paused without anybody asking.
+        put("space_paused", Value::Bool(self.options.space_paused));
         put(
             "trackers",
             Value::List(

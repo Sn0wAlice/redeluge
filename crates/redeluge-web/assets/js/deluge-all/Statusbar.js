@@ -250,6 +250,22 @@ Deluge.Statusbar = Ext.extend(Ext.ux.StatusBar, {
                     deluge.preferences.selectPage('Queue');
                 },
             },
+            {
+                // The disk-space rule's own counter, beside the idle one and
+                // hidden the same way. Two rules can pause a torrent, and
+                // "why has everything stopped?" needs a different answer for
+                // each: the queue gave the place away, or there is no room.
+                id: 'statusbar-lowspace',
+                text: ' ',
+                cls: 'x-btn-text-icon',
+                iconCls: 'icon-pause',
+                hidden: true,
+                tooltip: _('Paused: not enough free space'),
+                handler: function () {
+                    deluge.preferences.show();
+                    deluge.preferences.selectPage('Downloads');
+                },
+            },
             '-',
             {
                 id: 'statusbar-freespace',
@@ -274,20 +290,34 @@ Deluge.Statusbar = Ext.extend(Ext.ux.StatusBar, {
      * this costs nothing.
      */
     updateIdleCount: function () {
-        var item = this.items.get('statusbar-idle');
-        if (!item) return;
+        var idle = this.items.get('statusbar-idle');
+        var space = this.items.get('statusbar-lowspace');
+        if (!idle || !space) return;
 
         var now = new Date().getTime() / 1000;
         var held = 0;
+        var stopped = 0;
         var store = deluge.torrents && deluge.torrents.getStore();
         if (store) {
             store.each(function (record) {
                 if ((Number(record.get('idle_resume_at')) || 0) > now) held++;
+                if (record.get('space_paused')) stopped++;
             });
         }
 
-        if (held > 0) {
-            item.setText(String(held));
+        this.showCount(idle, held);
+        this.showCount(space, stopped);
+    },
+
+    /**
+     * A counter that is not there at all while it would read zero.
+     *
+     * The bar is already full, and a rule that is holding nothing has nothing
+     * to say.
+     */
+    showCount: function (item, count) {
+        if (count > 0) {
+            item.setText(String(count));
             item.show();
         } else {
             item.hide();

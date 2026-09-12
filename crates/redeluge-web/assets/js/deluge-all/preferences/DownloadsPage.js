@@ -116,5 +116,120 @@ Deluge.preferences.Downloads = Ext.extend(Ext.FormPanel, {
                 boxLabel: _('Pre-allocate disk space'),
             })
         );
+
+        // The disk-space rule. Its own fieldset with its own load and apply,
+        // because it is one dictionary under `disk_space` rather than flat
+        // keys, and the options manager above only binds flat ones.
+        fieldset = this.add({
+            xtype: 'fieldset',
+            border: false,
+            title: _('Free Space'),
+            autoHeight: true,
+            labelWidth: 200,
+            style: 'padding-top: 5px; margin-bottom: 0px;',
+            width: 300,
+        });
+        fieldset.add({
+            xtype: 'label',
+            text: _(
+                'A disk that fills up puts every download into Error, one after another, and each one has to be restarted by hand. This stops them first and starts them again when there is room.'
+            ),
+            style: 'display: block; margin-bottom: 6px; color: #666;',
+        });
+
+        this.space = {};
+        this.space.enabled = fieldset.add({
+            xtype: 'checkbox',
+            hideLabel: true,
+            boxLabel: _('Pause downloads when the disk is nearly full'),
+            handler: this.onSpaceToggled,
+            scope: this,
+        });
+        this.space.min_free = fieldset.add(
+            this.spaceSpinner(_('Pause below (GiB):'))
+        );
+        this.space.resume_free = fieldset.add(
+            this.spaceSpinner(_('Resume above (GiB):'))
+        );
+
+        this.on('show', this.onPageShow, this);
+    },
+
+    /**
+     * Both thresholds are the same field, in the unit people think in.
+     */
+    spaceSpinner: function (caption) {
+        return {
+            xtype: 'spinnerfield',
+            fieldLabel: caption,
+            labelSeparator: '',
+            width: 80,
+            decimalPrecision: 1,
+            incrementValue: 0.5,
+            minValue: 0,
+            maxValue: 1024,
+        };
+    },
+
+    onPageShow: function () {
+        if (this.spaceLoaded) return;
+        this.spaceLoaded = true;
+        deluge.client.core.get_config_value('disk_space', {
+            success: function (settings) {
+                settings = settings || {};
+                this.space.enabled.setValue(settings['enabled'] !== false);
+                // Stored in bytes, shown in gibibytes, which is the unit the
+                // thresholds are actually chosen in.
+                this.space.min_free.setValue(
+                    Deluge.preferences.Downloads.toGiB(settings['min_free'], 1)
+                );
+                this.space.resume_free.setValue(
+                    Deluge.preferences.Downloads.toGiB(settings['resume_free'], 2)
+                );
+                this.onSpaceToggled();
+            },
+            failure: function () {
+                this.onSpaceToggled();
+            },
+            scope: this,
+        });
+    },
+
+    /**
+     * The thresholds mean nothing while the rule is off, so they follow it.
+     */
+    onSpaceToggled: function () {
+        var on = this.space.enabled.getValue() === true;
+        this.space.min_free.setDisabled(!on);
+        this.space.resume_free.setDisabled(!on);
+    },
+
+    onApply: function () {
+        // Nothing read yet means nothing of this rule's to write: Preferences
+        // applies every page on OK, and an unread page holds its defaults.
+        if (!this.spaceLoaded) return;
+
+        var gib = 1024 * 1024 * 1024;
+        deluge.client.core.set_config({
+            disk_space: {
+                enabled: this.space.enabled.getValue() === true,
+                min_free: Math.round(
+                    Deluge.number(this.space.min_free.getValue(), 1) * gib
+                ),
+                resume_free: Math.round(
+                    Deluge.number(this.space.resume_free.getValue(), 2) * gib
+                ),
+            },
+        });
     },
 });
+
+/**
+ * Bytes as gibibytes, to one decimal, falling back to a default the daemon
+ * would have used anyway.
+ */
+Deluge.preferences.Downloads.toGiB = function (bytes, fallback) {
+    var value = Number(bytes);
+    if (!isFinite(value) || value < 0) return fallback;
+    return Math.round((value / (1024 * 1024 * 1024)) * 10) / 10;
+};

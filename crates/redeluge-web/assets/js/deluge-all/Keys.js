@@ -56,6 +56,7 @@ Deluge.Keys = {
         'idle_since',
         'idle_pause_at',
         'idle_resume_at',
+        'space_paused',
     ],
 
     /**
@@ -137,6 +138,7 @@ Deluge.Keys = {
         'idle_since',
         'idle_pause_at',
         'idle_resume_at',
+        'space_paused',
     ],
 };
 

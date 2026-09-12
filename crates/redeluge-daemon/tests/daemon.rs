@@ -440,6 +440,7 @@ const ADDED_BY_REDELUGE: &[&str] = &[
     "autoadd",
     "blocklist",
     "countrydb",
+    "disk_space",
     "idle_pause",
     "label",
     "scheduler",
@@ -489,6 +490,21 @@ fn each_feature_is_off_until_someone_turns_it_on() {
         // and starts empty, which is the same thing as off and is why it has
         // nothing to turn on. Labels cannot be disabled in any case, because
         // every client that asks is told the Label plugin is enabled.
+        // `disk_space` is the one thing here that is on out of the box, and
+        // the rule it breaks is worth stating. Everything else waits to be
+        // asked because it does something new: reaches the network, watches a
+        // directory, changes what runs when. That one only ever declines to
+        // write to a disk with no room on it, and it undoes itself the moment
+        // there is room again. Shipping it off would mean the failure it
+        // exists to prevent happens once to everybody first.
+        if *key == "disk_space" {
+            assert_eq!(
+                config.get(key).and_then(|value| value.get("enabled")),
+                Some(&json!(true)),
+                "`disk_space` guards against a full disk and is on"
+            );
+            continue;
+        }
         if *key == "label" {
             assert_eq!(
                 config.get(key).and_then(|value| value.get("labels")),

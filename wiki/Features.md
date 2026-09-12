@@ -146,6 +146,50 @@ The countdown is computed in the browser from two timestamps rather than being
 a sentence the server wrote, so it ticks between polls instead of being as old
 as the last one.
 
+## Running out of disk space
+
+On by default, under Preferences, Downloads. Every other feature here waits to
+be asked; this one does not, because the failure it prevents happens once and
+then takes an evening to clean up.
+
+What happens without it is worth spelling out. The disk fills, libtorrent fails
+a write, that torrent goes to Error, and the next one does the same a minute
+later. Nothing resumes on its own once there is room again: you free some space
+and then restart thirty torrents by hand, having first worked out which of them
+stopped for this reason and which for another.
+
+So: under **1 GiB free**, every torrent still writing to that disk is paused.
+Over **2 GiB free**, the ones it paused are started again. Both numbers are
+yours to change.
+
+| | |
+|---|---|
+| Pause below | Free space at which downloads stop. 1 GiB by default |
+| Resume above | Free space at which they start again. Higher than the floor on purpose: one threshold would pause, release and pause again as pieces are discarded |
+
+Three things it will not touch. A torrent that is seeding, because a seed
+writes nothing and cannot be the reason a disk filled. A torrent already paused
+by you, by the queue's ratio rule or by the idle rule, which is already stopped
+and stays stopped. And a torrent on a disk that still has room, because
+stopping it would fix nothing: the rule reads each filesystem the session is
+writing to separately.
+
+It also remembers whether the queue was managing a torrent before it took it,
+and gives that back on release. A torrent you were running by hand does not
+come back under the queue because a disk filled up.
+
+A path it cannot measure at all, an unplugged disk or an unmounted share,
+decides nothing either way. Stopping everything whenever a mount blinks would
+be worse than the problem, and starting downloads again with no idea whether
+there is room would be worse still.
+
+**Where you see it.** A counter in the status bar, beside the idle rule's own
+and hidden the same way when it is holding nothing; clicking it opens these
+settings. The Status tab of a torrent says whether this is what stopped it.
+Pressing Resume yourself ends the hold, though if the disk is still full the
+rule takes it again within fifteen seconds, which is the one case where a rule
+should win: there is nowhere to put what it would download.
+
 ## Finding a torrent
 
 The search box in the toolbar sends the daemon's `keyword` filter, which looks

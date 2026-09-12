@@ -44,6 +44,10 @@ pub struct SessionState {
     /// torrent status reports the countdown and has to read the same numbers
     /// the rule is acting on.
     pub idle_since: BTreeMap<String, f64>,
+    /// Whether a filesystem the session writes to is under the disk-space
+    /// rule's floor. Written by that rule, read by the idle one, which must
+    /// not start a download it was holding while there is nowhere to put it.
+    pub low_space: bool,
     /// Which torrents the session-wide pause actually stopped.
     ///
     /// Resuming the session must start those and only those. It used to resume
@@ -248,6 +252,7 @@ impl Manager {
             counters: Vec::new(),
             resume_data: BTreeMap::new(),
             idle_since: BTreeMap::new(),
+            low_space: false,
             paused_by_session: std::collections::BTreeSet::new(),
             countries: None,
             config_dir,
