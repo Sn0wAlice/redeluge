@@ -104,11 +104,13 @@ in one place, so you never have to.
 |---|---|
 | `autoadd` | Watched directories |
 | `blocklist` | The peer block list |
+| `label` | The labels that exist, and what each applies |
 | `scheduler` | The weekly schedule |
 
 Each has a preferences page in the Web UI as well.
 
-Each is one dictionary, and all three are off by default. [Features](Features)
+Each is one dictionary. Three are off by default; `label` has nothing to turn
+off and simply starts empty. [Features](Features)
 documents what goes in them. They are the only keys redeluge added; a test
 fails if any other key appears that is neither in the contract nor declared as
 an addition, which is how an invented key was caught once already.

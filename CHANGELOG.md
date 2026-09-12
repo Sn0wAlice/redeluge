@@ -7,6 +7,71 @@ redeluge numbers its own releases from 1.0.0. The version the daemon reports
 to clients stays `2.2.1`, because that is the Deluge a client expects to be
 talking to.
 
+## [1.0.1] — 2026-09-12
+
+### Added
+
+- **The Label plugin's API, answered without a plugin.** Every program built on
+  Deluge asks `core.get_enabled_plugins` whether Label is there and refuses to
+  set a download category when it is not: Radarr says "Label plugin not
+  activated" under the Category field. This daemon reports it and answers the
+  eight `label.*` methods, forwarded through the Web UI's endpoint as well as
+  the daemon's own port, because that is what those programs connect to.
+  `daemon.get_method_list` grows by exactly those methods, which is what a
+  Deluge daemon with the plugin enabled advertises.
+- A register of labels, under the `label` key of `core.conf`. A label exists
+  whether or not a torrent carries it, which is the whole point: the label an
+  external client is about to start using is by definition empty, and a list
+  derived from the torrents that happen to exist can never contain it.
+- **A Labels page** in Preferences: add, rename, remove, and the per-label
+  rules the plugin had, each behind its own switch so that a label which
+  changes nothing about the torrents in it stays the default. Rename is three
+  existing calls rather than a new method, because the plugin had none.
+- **A Label column** in the torrent list, shown by default. The sidebar could
+  already count labels and filter on them; nothing could show which torrent
+  had which.
+- **A Label submenu** on the torrent right-click menu, listing every label with
+  the current one marked, and *No Label* to take a torrent out of one. It works
+  on a whole selection, and reads the list each time it opens rather than when
+  the page loaded, so a label another program has just created is there.
+- Two differences from the plugin, both deliberate. `label.add` on a label that
+  already exists answers `false` instead of raising, because clients add before
+  every use and swallow the error anyway. And `label.set_torrent` with a label
+  nobody created **creates it**: the add is the call most likely to have been
+  skipped or lost, and refusing means a download silently lands with no
+  category.
+
+### Fixed
+
+- **The interface asked for events about twenty times a second.**
+  `web.get_events` is a long poll: the front end asks again the instant it is
+  answered, which is right for an endpoint that waits and a busy loop for one
+  that does not. This server answered empty straight away, so a single open tab
+  made roughly six hundred requests a minute at a daemon that had nothing to
+  say. The answer is held now until an event arrives or twenty-five seconds
+  pass. Measured on an idle tab: 592 requests in thirty seconds before, 28 in
+  sixty seconds after.
+- **The progress bar was drawn two fifths of its width, with the percentage cut
+  off inside it.** The buffered grid view set each cell's style *after* calling
+  the renderer rather than before, and the metadata object is one object reused
+  across the row, so every renderer saw the previous column's style. The
+  progress bar came out as wide as the Size column beside it. The stock
+  `Ext.grid.GridView` has always done it the other way round; only this
+  vendored subclass did not.
+- **A change to anything but the script bundle did not reach a browser.** Asset
+  URLs carried the length of the JavaScript bundle, and that same key went on
+  the stylesheets, the icons and the other script bundle too, so a fix confined
+  to any of those left every URL identical and browsers kept the previous
+  build's copy for the hour the cache header allows. Found the hard way: the
+  progress-bar fix above was in the image, served, and not running. The key is
+  now a digest over every embedded asset.
+- **"Active" counted torrents that were not doing anything.** It matched on
+  state, so every finished torrent sat in the one category meant for what is
+  worth watching. Active is not a state but a question about right now, and
+  Deluge asks it as "download or upload rate above zero": a seeding torrent
+  nobody is downloading from is idle. The count and the filter use the same
+  rule, so they agree.
+
 ## [1.0.0] — 2026-09-12
 
 **This is where Deluge became redeluge.**

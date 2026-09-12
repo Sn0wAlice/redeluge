@@ -859,3 +859,116 @@ fn the_interface_is_named_after_the_fork() {
     let page = std::str::from_utf8(page).expect("HTML is UTF-8");
     assert!(page.contains("<title>RE:deluge Web UI"));
 }
+
+/// The asset URLs change when any asset does, not just the script bundle.
+///
+/// They used to carry the size of the JavaScript bundle, and that same key
+/// went on every URL. A change confined to a stylesheet, an icon or the other
+/// script bundle left every URL identical, so browsers kept the previous
+/// build's copy for the hour the cache header allows and the change appeared
+/// to do nothing. It cost an afternoon once: a fix was shipped, served, and
+/// invisible.
+#[test]
+fn the_asset_urls_are_keyed_on_every_asset() {
+    let page = render_index(
+        &String::from_utf8_lossy(assets::get("index.html").expect("the page")),
+        "/",
+        "2.2.1",
+        "gray",
+        &json!({}),
+        false,
+    )
+    .expect("the page renders");
+
+    // Both script bundles and the stylesheets carry the same key, and it is
+    // not any one of their lengths.
+    let key = page
+        .split("?v=")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("an asset URL carries a key");
+
+    assert!(
+        key.starts_with("2.2.1-"),
+        "the key should start with the version, got {key}"
+    );
+
+    for length in [
+        assets::get("js/deluge-all-debug.js").map(<[u8]>::len),
+        assets::get("js/deluge-all.js").map(<[u8]>::len),
+        assets::get("js/extjs/ext-extensions.js").map(<[u8]>::len),
+        assets::get("css/deluge.css").map(<[u8]>::len),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        assert_ne!(
+            key,
+            format!("2.2.1-{length}"),
+            "the key is one asset's length, so a change to any other is invisible"
+        );
+    }
+
+    // Every versioned URL on the page carries the same key.
+    let keys: std::collections::BTreeSet<&str> = page
+        .match_indices("?v=")
+        .map(|(at, _)| {
+            page[at + 3..]
+                .split('"')
+                .next()
+                .expect("a quoted attribute")
+        })
+        .collect();
+    assert_eq!(
+        keys.len(),
+        1,
+        "the page carries more than one key: {keys:?}"
+    );
+}
+
+/// The interface can see and manage labels.
+///
+/// The daemon has had labels since the plugins became features, but for a
+/// while nothing in the interface could set one, and then nothing could show
+/// which torrent had which: the sidebar counted them and the grid had no
+/// column. A label you cannot see is one you cannot tell from no label.
+#[test]
+fn labels_are_visible_and_manageable_in_the_interface() {
+    let bundle = assets::get("js/deluge-all.js").expect("the minified bundle");
+    let text = std::str::from_utf8(bundle).expect("JavaScript is UTF-8");
+
+    assert!(
+        text.contains("dataIndex: 'label'") || text.contains("dataIndex:'label'"),
+        "the torrent list has no Label column"
+    );
+    assert!(
+        text.contains("Deluge.preferences.Labels"),
+        "there is no page for managing labels"
+    );
+    for method in ["label.add", "label.remove", "label.set_options"] {
+        assert!(text.contains(method), "the page does not call {method}");
+    }
+}
+
+/// A torrent's label can be changed from the list, not only from a tab.
+///
+/// Changing which label a torrent is in was two clicks into the details panel
+/// and an Apply button. It belongs where every other per-torrent action is.
+#[test]
+fn the_torrent_menu_can_change_a_label() {
+    let bundle = assets::get("js/deluge-all.js").expect("the minified bundle");
+    let text = std::str::from_utf8(bundle).expect("JavaScript is UTF-8");
+
+    assert!(
+        text.contains("torrentLabelMenu"),
+        "the context menu has no Label submenu"
+    );
+    assert!(
+        text.contains("refreshLabelMenu"),
+        "the submenu is never filled in"
+    );
+    assert!(
+        text.contains("label.set_torrent"),
+        "picking a label does not set it"
+    );
+}

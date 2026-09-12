@@ -45,8 +45,9 @@ never in the status code, because that is what the shipped front end expects.
 | `system.listMethods` | the Web UI server | 1 |
 | `web.*` | the Web UI server | 23 |
 | `webutils.*` | the Web UI server, aliases of two `web.*` methods | 2 |
-| `core.*` | forwarded to the daemon | 66 |
+| `core.*` | forwarded to the daemon | 70 |
 | `daemon.*` | forwarded to the daemon | 4 |
+| `label.*` | forwarded to the daemon | 8 |
 
 Ask the server itself for the list:
 
@@ -56,8 +57,12 @@ curl -s -H 'Content-Type: application/json' \
   http://127.0.0.1:8112/json
 ```
 
-The plugin-management methods Deluge had are gone, because there is no plugin
-system. `web.get_plugins` still answers, truthfully, with nothing.
+There is no plugin system, and the Web UI's own plugin-management methods are
+gone with it. One plugin's *API* is answered all the same: `core.get_enabled_plugins`
+says `["Label"]` and the eight `label.*` methods work, because labels are part
+of this daemon and every program built on Deluge's API asks for the plugin
+before it will let you set a category. See
+[Features](Features) for the details.
 
 ## Logging in
 
@@ -243,9 +248,13 @@ text.
 
 ## Known differences from Deluge
 
-- **The plugin-management methods are gone**, ten of them. `web.get_plugins`
-  and `web.get_plugin_info` answer with nothing rather than erroring, so a
-  client that asks on connect does not break.
+- **The plugin-management methods are gone**, ten of them. `web.get_plugin_info`
+  answers with nothing rather than erroring, so a client that asks on connect
+  does not break. `web.get_plugins` reports the Label plugin, which is the one
+  whose API this daemon answers.
+- **`label.*` is answered without a plugin behind it.** Labels are part of the
+  daemon, so they cannot be turned off; `core.enable_plugin` answers `true` for
+  `Label` and `false` for anything else rather than pretending.
 - **Tracker icons are gone**, with the `/tracker/<host>` route that served
   them. See above.
 - **`web.start_daemon` refuses.** The daemon is a service of its own under

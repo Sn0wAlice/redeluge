@@ -436,7 +436,7 @@ fn the_daemon_claims_exactly_the_contracts_methods() {
 /// Listing them here rather than leaving the check loose is what keeps the next
 /// invented key visible: a typo in `defaults()` shipped once already, and a test
 /// against the contract is how it was found.
-const ADDED_BY_REDELUGE: &[&str] = &["autoadd", "blocklist", "scheduler"];
+const ADDED_BY_REDELUGE: &[&str] = &["autoadd", "blocklist", "label", "scheduler"];
 
 #[test]
 fn no_configuration_key_was_invented_without_saying_so() {
@@ -478,6 +478,18 @@ fn each_feature_is_off_until_someone_turns_it_on() {
     let config = Config::load(dir.path()).unwrap();
 
     for key in ADDED_BY_REDELUGE {
+        // `label` is a register, not a switch: it holds the labels that exist
+        // and starts empty, which is the same thing as off and is why it has
+        // nothing to turn on. Labels cannot be disabled in any case, because
+        // every client that asks is told the Label plugin is enabled.
+        if *key == "label" {
+            assert_eq!(
+                config.get(key).and_then(|value| value.get("labels")),
+                Some(&json!({})),
+                "`label` should start with no labels in it"
+            );
+            continue;
+        }
         assert_eq!(
             config.get(key).and_then(|value| value.get("enabled")),
             Some(&json!(false)),

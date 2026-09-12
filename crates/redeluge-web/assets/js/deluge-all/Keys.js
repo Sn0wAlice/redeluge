@@ -51,6 +51,8 @@ Deluge.Keys = {
         'total_remaining',
         'completed_time',
         'time_since_transfer',
+        'label',
+        'owner',
     ],
 
     /**

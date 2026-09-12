@@ -41,6 +41,7 @@ fn state(config_dir: &std::path::Path) -> SharedState {
         daemon: RwLock::new(None),
         client_settings: Default::default(),
         events: Mutex::new(Default::default()),
+        events_ready: tokio::sync::Notify::new(),
         web_config: RwLock::new(redeluge_web::config::ConfigFile {
             path: config_dir.join("web.conf"),
             version: serde_json::Map::new(),
@@ -1002,4 +1003,125 @@ async fn the_server_binding_still_cannot_be_changed_from_the_browser() {
     let (body, _) = call(&app, "web.get_config", json!([]), Some(&session)).await;
     assert_ne!(body["result"]["port"], json!(9999));
     assert_eq!(body["result"]["https"], json!(false));
+}
+
+// ------------------------------------------------------------------- events
+
+#[actix_web::test]
+async fn asking_for_events_waits_rather_than_answering_empty_at_once() {
+    // The front end asks again the instant it is answered. Answering empty
+    // straight away turned that into about twenty requests a second for as
+    // long as a tab was open; holding the answer is what makes the same loop
+    // correct.
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path());
+    let app = booted!(state);
+    let session = logged_in(&app).await;
+
+    let started = std::time::Instant::now();
+    // The wait is twenty-five seconds, so this is expected to time out. What
+    // is being asserted is that it did not come back at once.
+    let answered = tokio::time::timeout(
+        Duration::from_secs(3),
+        call(&app, "web.get_events", json!([]), Some(&session)),
+    )
+    .await
+    .is_ok();
+
+    assert!(
+        !answered && started.elapsed() >= Duration::from_secs(2),
+        "the poll came back after {:?}, which is a busy loop",
+        started.elapsed()
+    );
+}
+
+#[actix_web::test]
+async fn an_event_ends_the_wait_instead_of_sitting_in_the_queue() {
+    // Holding the answer must not delay an event: the whole point is that the
+    // browser hears about one as soon as the daemon reports it.
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path());
+    let app = booted!(state);
+    let session = logged_in(&app).await;
+
+    call(
+        &app,
+        "web.register_event_listener",
+        json!(["TorrentAddedEvent"]),
+        Some(&session),
+    )
+    .await;
+
+    let pusher = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        pusher
+            .events
+            .lock()
+            .await
+            .push("TorrentAddedEvent".to_owned(), vec![json!("abc")]);
+        pusher.events_ready.notify_waiters();
+    });
+
+    let started = std::time::Instant::now();
+    let (body, _) = call(&app, "web.get_events", json!([]), Some(&session)).await;
+
+    assert_eq!(
+        body["result"],
+        json!([["TorrentAddedEvent", ["abc"]]]),
+        "the event should have come back"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the event waited {:?} instead of ending the poll",
+        started.elapsed()
+    );
+}
+
+// -------------------------------------------------------------- the Label plugin
+
+#[actix_web::test]
+async fn the_label_namespace_reaches_the_daemon() {
+    // Radarr, Sonarr and the rest talk to this server, not to the daemon's own
+    // port. A namespace the Web UI does not forward is a namespace they cannot
+    // call, whatever the daemon answers.
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path());
+    let app = booted!(state);
+    let session = logged_in(&app).await;
+
+    for method in [
+        "label.get_labels",
+        "label.add",
+        "label.remove",
+        "label.set_torrent",
+        "label.get_config",
+        "label.set_config",
+        "label.get_options",
+        "label.set_options",
+    ] {
+        let (body, _) = call(&app, method, json!([]), Some(&session)).await;
+        // No daemon is connected in this test, so the answer is a daemon
+        // error. What must not happen is "Unknown method", which is the Web UI
+        // refusing to pass it on.
+        let message = body["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            !message.contains("Unknown method"),
+            "{method} was not forwarded: {message}"
+        );
+    }
+}
+
+#[actix_web::test]
+async fn the_web_ui_agrees_that_the_label_plugin_is_enabled() {
+    // A client that asks what is enabled and then calls `label.*` has to get
+    // an answer that agrees with what happens next.
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path());
+    let app = booted!(state);
+    let session = logged_in(&app).await;
+
+    let (body, _) = call(&app, "web.get_plugins", json!([]), Some(&session)).await;
+    assert_eq!(body["result"]["enabled_plugins"], json!(["Label"]));
+    assert_eq!(body["result"]["available_plugins"], json!(["Label"]));
 }

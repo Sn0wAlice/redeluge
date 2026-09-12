@@ -402,11 +402,18 @@ pub fn defaults(config_dir: &Path) -> Vec<(String, Json)> {
         ("ssl_torrents_certs".into(), path("ssl_torrents_certs")),
         // The four plugins that became features. Each is one key holding one
         // dictionary, so a client configures them through core.set_config like
-        // anything else and no new RPC method exists to learn. Labels are not
-        // here: a label is a torrent option, not a setting.
+        // anything else. Labels are the exception that also keeps an RPC
+        // namespace: which label a torrent carries is a torrent option, but
+        // the register of labels that exist has to be a setting, because a
+        // label with nothing in it yet is the one an external client is about
+        // to start using.
         (
             "autoadd".into(),
             crate::features::autoadd::Settings::default_json(),
+        ),
+        (
+            "label".into(),
+            crate::features::label::Settings::default_json(),
         ),
         (
             "blocklist".into(),

@@ -53,13 +53,34 @@ impl ScriptSet {
 /// What makes one build's asset URLs different from another's.
 ///
 /// The reported version is the same `2.2.1` for every build, so it cannot be
-/// the key on its own: the bundle's own size is added, which changes whenever
-/// the front end does.
+/// the key on its own. A digest over every embedded asset is, and it has to be
+/// every one: this used to be the size of the JavaScript bundle alone, and the
+/// same key then went on the URL of the stylesheets, the icons and the other
+/// script bundle too. A fix confined to any of those left every URL unchanged,
+/// so browsers kept serving the previous build's copy for the hour the cache
+/// allows, and the fix appeared not to work.
 fn cache_key(version: &str) -> String {
-    let size = assets::get("js/deluge-all-debug.js")
-        .map(|bytes| bytes.len())
-        .unwrap_or(0);
-    format!("{version}-{size}")
+    use std::sync::OnceLock;
+
+    static DIGEST: OnceLock<String> = OnceLock::new();
+    let digest = DIGEST.get_or_init(|| {
+        // Order matters, and `assets::files()` is a hash map, so the names are
+        // sorted first: the same build must produce the same key every time.
+        let mut names: Vec<&&str> = assets::files().keys().collect();
+        names.sort_unstable();
+
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for name in names {
+            let bytes = assets::get(name).unwrap_or_default();
+            for byte in name.as_bytes().iter().chain(bytes) {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(0x100_0000_01b3);
+            }
+        }
+        format!("{hash:016x}")
+    });
+
+    format!("{version}-{digest}")
 }
 
 /// Picks the best script set that was actually embedded.

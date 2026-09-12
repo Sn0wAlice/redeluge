@@ -111,8 +111,11 @@ Deluge.preferences.PreferencesWindow = Ext.extend(Ext.Window, {
         this.addPage(new Deluge.preferences.Daemon());
         this.addPage(new Deluge.preferences.Queue());
         this.addPage(new Deluge.preferences.Proxy());
-        // The four plugins that became features. Labels need no page: they are
-        // a torrent option and appear in the sidebar on their own.
+        // The four plugins that became features. Labels have a page because a
+        // label has to be able to exist before anything is put in it: which
+        // torrent carries which label is set on the torrent, but the register
+        // of labels is a setting like any other.
+        this.addPage(new Deluge.preferences.Labels());
         this.addPage(new Deluge.preferences.AutoAdd());
         this.addPage(new Deluge.preferences.Blocklist());
         this.addPage(new Deluge.preferences.Scheduler());

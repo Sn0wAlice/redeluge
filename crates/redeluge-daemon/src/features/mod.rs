@@ -8,15 +8,19 @@
 //! `core.conf`, so `core.get_config` and `core.set_config` are the whole
 //! interface and every existing client already speaks it.
 //!
-//! Labels are the exception to the file layout: they are a torrent option and
-//! a status field, so they live in `torrent.rs` and `core.rs` with the other
-//! options rather than here.
+//! Labels are split between two places, for a reason. Which label a torrent
+//! carries is a torrent option, so it lives in `torrent.rs` and `core.rs` with
+//! the other options. Which labels *exist*, and what each one does to the
+//! torrents in it, is in `label.rs` here: a label with nothing in it yet still
+//! has to be listable, because that is the one an external client is about to
+//! start using.
 //!
 //! Each module keeps its decisions pure and testable. This file is where those
 //! decisions meet a running session, on a timer.
 
 pub mod autoadd;
 pub mod blocklist;
+pub mod label;
 pub mod scheduler;
 
 use std::path::Path;

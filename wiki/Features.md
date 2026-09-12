@@ -39,11 +39,24 @@ want, and send the result back.
 
 ## Labels
 
-**In the Web UI**, a label is a text field: in the Add dialog, under Options,
-and afterwards in a torrent's own Options tab. Type a name and apply. The
-Labels list appears in the sidebar as soon as one torrent carries one, and
-filters like any other category. There is no page in Preferences because there
-is nothing global to configure.
+Two halves, and it is worth knowing which is which. *Which label a torrent
+carries* is a torrent option, set on the torrent. *Which labels exist* is a
+register kept under the `label` key of `core.conf`, because a label has to be
+able to exist before anything is in it.
+
+**In the Web UI**: Preferences, Labels manages the register, with Add, Rename
+and Remove and the per-label rules. A torrent is put in a label three ways:
+right-click it in the list and pick one under *Label*, which is the quickest
+and works on a whole selection at once; in the Add dialog under Options; or in
+the torrent's own Options tab. The Label column of the list shows which, and
+the sidebar's Labels list filters on them.
+
+The right-click menu reads the labels each time it opens rather than when the
+page loaded, so a label another program has just created is already there.
+
+**From another program**, this answers the Label plugin's own API. See
+[Compatibility with Radarr, Sonarr and the rest](#compatibility-with-radarr-sonarr-and-the-rest)
+below.
 
 A label is a torrent option like any other:
 
@@ -57,8 +70,47 @@ Read it back from the status key `label`, filter on it in
 `core.get_torrents_status`, and see the counts in `core.get_filter_tree`, which
 now carries a `label` category next to state, tracker and owner.
 
-Unlike the plugin, a label carries no options of its own. It names a group; the
-per-torrent options do the rest.
+### What a label applies
+
+A label can impose settings on the torrents in it, which is what the plugin's
+own options did. Three groups, each behind its own switch, so a label that
+names a group and changes nothing is the default rather than an accident:
+
+| Switch | What it then applies |
+|---|---|
+| `apply_max` | `max_download_speed`, `max_upload_speed`, `max_connections`, `max_upload_slots`, `prioritize_first_last` |
+| `apply_queue` | `is_auto_managed`, `stop_at_ratio`, `stop_ratio`, `remove_at_ratio` |
+| `apply_move_completed` | `move_completed`, `move_completed_path` |
+
+They are applied when a torrent joins the label and when the label's options
+change. `auto_add` and `auto_add_trackers` are stored and reported so a client
+that sets them does not lose them, and nothing acts on them yet.
+
+### Compatibility with Radarr, Sonarr and the rest
+
+Every program built on Deluge's API asks `core.get_enabled_plugins` whether the
+Label plugin is there, and refuses to set a download category when it is not:
+Radarr says *Label plugin not activated* under the Category field. This daemon
+answers `["Label"]`, and answers the plugin's methods:
+
+| Method | |
+|---|---|
+| `label.get_labels` | Every label, sorted |
+| `label.add` | Adds one; answers `false` if it was already there rather than raising |
+| `label.remove` | Removes it, and takes it off the torrents that carried it |
+| `label.set_torrent` | Puts a torrent in a label |
+| `label.get_options`, `label.set_options` | The rules above |
+| `label.get_config`, `label.set_config` | The whole register |
+
+They go through the Web UI's `/json` as well as the daemon's own port, which is
+what these programs actually connect to.
+
+Two deliberate differences from the plugin. `label.add` on a label that exists
+answers `false` instead of raising, because clients add before every use and
+swallow the error anyway. And `label.set_torrent` with a label nobody created
+**creates it** rather than refusing: the add is the call most likely to have
+been skipped or lost, and refusing means a download silently lands with no
+category.
 
 ## Watched directories
 

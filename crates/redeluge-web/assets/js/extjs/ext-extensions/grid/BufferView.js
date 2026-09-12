@@ -183,8 +183,25 @@ Ext.ux.grid.BufferView = Ext.extend(Ext.grid.GridView, {
                             ? 'x-grid3-cell-last '
                             : '';
                     p.attr = p.cellAttr = '';
-                    p.value = c.renderer(r.data[c.name], p, r, rowIndex, i, ds);
+                    // Before the renderer, not after. The Ext JS original set
+                    // the style afterwards, which left every renderer looking
+                    // at the *previous* column's style, because `p` is one
+                    // object reused down the row. A renderer that sizes
+                    // something to its column then got the wrong width: the
+                    // progress bar came out as wide as the Size column beside
+                    // it, about two fifths of its cell, with the percentage cut
+                    // off inside it. The stock `Ext.grid.GridView` does it in
+                    // this order; only this buffered subclass did not.
                     p.style = c.style;
+                    p.value = c.renderer.call(
+                        c.scope,
+                        r.data[c.name],
+                        p,
+                        r,
+                        rowIndex,
+                        i,
+                        ds
+                    );
                     if (p.value === undefined || p.value === '') {
                         p.value = '&#160;';
                     }

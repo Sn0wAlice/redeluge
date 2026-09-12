@@ -28,9 +28,40 @@ use crate::torrent::{Torrent, TorrentOptions};
 /// The daemon's version, as reported to clients.
 ///
 /// Deluge's own version rather than this crate's: clients compare it against
-/// what they know how to speak, and telling them "1.0.0" makes every one of
-/// them refuse to connect.
+/// what they know how to speak, and telling them redeluge's own number makes
+/// every one of them refuse to connect. Not written out here, so a release
+/// does not have to remember to edit a comment.
 pub const REPORTED_VERSION: &str = "2.2.1";
+
+/// The one plugin this daemon answers for, by the name Deluge gave it.
+pub const EMULATED_PLUGIN: &str = "Label";
+
+/// The methods that exist because of it.
+///
+/// Deluge's plugins register their own RPC methods, so a daemon with the Label
+/// plugin enabled advertises these on top of the core's own. They are not in
+/// `contract/rpc-api.json` because that was extracted from the core, and they
+/// are listed here rather than derived so that adding one is a deliberate act
+/// with a test to match.
+///
+/// Why they exist at all: every program built on Deluge's API asks
+/// `core.get_enabled_plugins` whether Label is there and then calls these.
+/// Radarr and Sonarr will not let you set a download category without it, and
+/// say "Label plugin not activated" instead.
+pub const PLUGIN_METHODS: &[&str] = &[
+    "core.disable_plugin",
+    "core.enable_plugin",
+    "core.get_available_plugins",
+    "core.get_enabled_plugins",
+    "label.add",
+    "label.get_config",
+    "label.get_labels",
+    "label.get_options",
+    "label.remove",
+    "label.set_config",
+    "label.set_options",
+    "label.set_torrent",
+];
 
 /// Everything a call can reach.
 pub struct Core {
@@ -180,6 +211,145 @@ impl Core {
             Event::SessionResumed
         });
         Ok(())
+    }
+
+    // ------------------------------------------------------------- labels
+
+    /// The register of labels, out of `core.conf`.
+    async fn labels(&self) -> crate::features::label::Settings {
+        let config = self.config.lock().await;
+        crate::features::label::Settings::from_config(config.get("label"))
+    }
+
+    /// Writes the register back.
+    async fn store_labels(
+        &self,
+        labels: &crate::features::label::Settings,
+    ) -> Result<(), RpcError> {
+        let mut config = self.config.lock().await;
+        config
+            .set("label", labels.to_json())
+            .map_err(|err| RpcError::new("InvalidConfigError", err.to_string()))?;
+        let _ = config.save();
+        Ok(())
+    }
+
+    /// Puts a torrent in a label, creating the label if it is new.
+    ///
+    /// Creating it is a deliberate divergence from the plugin, which raised on
+    /// an unknown label. Every program that drives this adds the label and
+    /// then sets it, and the add is the call most likely to have been skipped,
+    /// retried out of order, or lost against a daemon that restarted. Refusing
+    /// here means a torrent silently lands with no category; creating it means
+    /// the label exists, which is what was asked for either way.
+    pub async fn assign_label(&self, torrent_id: &str, label: &str) -> Result<(), RpcError> {
+        let label = normalise_label(label);
+
+        let options = if label.is_empty() {
+            None
+        } else {
+            let mut labels = self.labels().await;
+            if labels.add(&label) {
+                self.store_labels(&labels).await?;
+                tracing::info!(%label, "label created because a torrent was put in it");
+            }
+            labels.options(&label).cloned()
+        };
+
+        let id = torrent_id.to_owned();
+        let wanted = label.clone();
+        let known = self
+            .manager
+            .with(move |state| {
+                let Some(torrent) = state.torrents.get_mut(&id) else {
+                    return false;
+                };
+                torrent.options.label = wanted;
+                state.mark_dirty();
+                true
+            })
+            .await
+            .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+
+        if !known {
+            return Err(RpcError::new(
+                "InvalidTorrentError",
+                format!("no such torrent: {torrent_id}"),
+            ));
+        }
+
+        if let Some(options) = options {
+            let changes = options.to_torrent_options();
+            if !changes.is_empty() {
+                self.apply_torrent_options(
+                    vec![torrent_id.to_owned()],
+                    Value::Dict(
+                        changes
+                            .into_iter()
+                            .map(|(key, value)| (Value::Str(key), json_to_value(&value)))
+                            .collect(),
+                    ),
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Takes a label off every torrent that carries it.
+    async fn clear_label(&self, label: &str) -> usize {
+        let wanted = label.to_owned();
+        self.manager
+            .with(move |state| {
+                let mut cleared = 0;
+                for torrent in state.torrents.values_mut() {
+                    if torrent.options.label == wanted {
+                        torrent.options.label.clear();
+                        cleared += 1;
+                    }
+                }
+                if cleared > 0 {
+                    state.mark_dirty();
+                }
+                cleared
+            })
+            .await
+            .unwrap_or(0)
+    }
+
+    /// Imposes a label's options on everything already in it.
+    async fn apply_label_options(&self, label: &str, options: &crate::features::label::Options) {
+        let changes = options.to_torrent_options();
+        if changes.is_empty() {
+            return;
+        }
+
+        let wanted = label.to_owned();
+        let ids = self
+            .manager
+            .with(move |state| {
+                state
+                    .torrents
+                    .values()
+                    .filter(|torrent| torrent.options.label == wanted)
+                    .map(|torrent| torrent.id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .unwrap_or_default();
+
+        if ids.is_empty() {
+            return;
+        }
+        let dict = Value::Dict(
+            changes
+                .into_iter()
+                .map(|(key, value)| (Value::Str(key), json_to_value(&value)))
+                .collect(),
+        );
+        if let Err(err) = self.apply_torrent_options(ids, dict).await {
+            tracing::warn!(%label, error = %err.message, "could not apply a label's options");
+        }
     }
 
     /// The options a new torrent starts from, out of the configuration.
@@ -438,6 +608,20 @@ fn filtered(status: BTreeMap<String, Value>, keys: &Option<Vec<String>>) -> Vec<
 #[async_trait]
 impl Rpc for Core {
     fn auth_level(&self, method: &str) -> Option<AuthLevel> {
+        // The plugin's methods are not in the contract, which was extracted
+        // from the daemon core. They take the level the plugin gave them,
+        // which is the ordinary one: reading a label list is not privileged,
+        // and changing one is no more privileged than changing any other
+        // torrent option.
+        if PLUGIN_METHODS.contains(&method) {
+            return Some(
+                if method.starts_with("label.get") || method == "core.get_enabled_plugins" {
+                    AuthLevel::ReadOnly
+                } else {
+                    AuthLevel::Normal
+                },
+            );
+        }
         // core.get_auth_levels_mappings is level 0 in the Python daemon, which
         // makes it reachable before a client has proved anything. Raised here,
         // as the phase 0 report said it should be.
@@ -455,6 +639,11 @@ impl Rpc for Core {
             .methods_for(Transport::Daemon)
             .map(|entry| entry.name.clone())
             .collect();
+        // A Deluge daemon advertises its plugins' methods too, and this one
+        // answers the Label plugin's. Leaving them out would be the same lie
+        // in the other direction: a client that reads the list would not find
+        // what it can call.
+        methods.extend(PLUGIN_METHODS.iter().map(|name| (*name).to_owned()));
         methods.sort();
         methods
     }
@@ -1158,6 +1347,123 @@ impl Rpc for Core {
             }
 
             "core.get_filter_tree" => self.filter_tree().await,
+
+            // ------------------------------------------------ the Label plugin
+            //
+            // Deluge's plugin surface, answered by the feature that replaced
+            // it. See PLUGIN_METHODS for why this is here at all.
+            "core.get_enabled_plugins" | "core.get_available_plugins" => {
+                Ok(Value::List(vec![Value::Str(EMULATED_PLUGIN.to_owned())]))
+            }
+            "core.enable_plugin" | "core.disable_plugin" => {
+                let wanted = string_arg(&args, 0, "a plugin name")?;
+                if !wanted.eq_ignore_ascii_case(EMULATED_PLUGIN) {
+                    // Truthful rather than silent: there is no plugin system,
+                    // so nothing else can ever be turned on.
+                    return Ok(Value::Bool(false));
+                }
+                // Labels are part of the daemon; they cannot be turned off.
+                Ok(Value::Bool(method == "core.enable_plugin"))
+            }
+
+            "label.get_labels" => {
+                let labels = self.labels().await;
+                Ok(Value::List(
+                    labels.names().into_iter().map(Value::Str).collect(),
+                ))
+            }
+            "label.add" => {
+                let id = normalise_label(&string_arg(&args, 0, "a label")?);
+                if id.is_empty() {
+                    return Err(RpcError::invalid_argument("a label cannot be empty"));
+                }
+                let mut labels = self.labels().await;
+                if !labels.add(&id) {
+                    // The plugin raised here. Clients add before every use and
+                    // swallow the error, so the outcome is the same either
+                    // way; this one says what happened without an exception.
+                    return Ok(Value::Bool(false));
+                }
+                self.store_labels(&labels).await?;
+                tracing::info!(label = %id, "label added");
+                Ok(Value::Bool(true))
+            }
+            "label.remove" => {
+                let id = normalise_label(&string_arg(&args, 0, "a label")?);
+                let mut labels = self.labels().await;
+                if !labels.remove(&id) {
+                    return Ok(Value::Bool(false));
+                }
+                self.store_labels(&labels).await?;
+                // Torrents keep their label as an option, so removing the
+                // label from the register without clearing them would leave
+                // torrents in a group that no longer exists.
+                let cleared = self.clear_label(&id).await;
+                tracing::info!(label = %id, torrents = cleared, "label removed");
+                Ok(Value::Bool(true))
+            }
+            "label.get_options" => {
+                let id = normalise_label(&string_arg(&args, 0, "a label")?);
+                let labels = self.labels().await;
+                let Some(options) = labels.options(&id) else {
+                    return Err(RpcError::invalid_argument(format!("no such label: {id}")));
+                };
+                Ok(json_to_value(
+                    &serde_json::to_value(options).unwrap_or(serde_json::Value::Null),
+                ))
+            }
+            "label.set_options" => {
+                let id = normalise_label(&string_arg(&args, 0, "a label")?);
+                let Some(given) = args.get(1) else {
+                    return Err(RpcError::invalid_argument("options are required"));
+                };
+                let mut labels = self.labels().await;
+                if !labels.contains(&id) {
+                    return Err(RpcError::invalid_argument(format!("no such label: {id}")));
+                }
+
+                // Merged over what is stored, because a client that sets one
+                // option sends one option.
+                let mut merged =
+                    serde_json::to_value(labels.options(&id).cloned().unwrap_or_default())
+                        .unwrap_or_else(|_| serde_json::json!({}));
+                if let (Some(target), serde_json::Value::Object(changes)) =
+                    (merged.as_object_mut(), value_to_json(given))
+                {
+                    for (key, value) in changes {
+                        target.insert(key, value);
+                    }
+                }
+                let options: crate::features::label::Options = serde_json::from_value(merged)
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+
+                labels.labels.insert(id.clone(), options.clone());
+                self.store_labels(&labels).await?;
+
+                // Applied to what already carries the label, which is what the
+                // plugin did: the options are the label's, not the torrent's.
+                self.apply_label_options(&id, &options).await;
+                Ok(Value::None)
+            }
+            "label.set_torrent" => {
+                let torrent_id = string_arg(&args, 0, "a torrent id")?;
+                let id = normalise_label(&string_arg(&args, 1, "a label")?);
+                self.assign_label(&torrent_id, &id).await?;
+                Ok(Value::None)
+            }
+            "label.get_config" => {
+                let labels = self.labels().await;
+                Ok(json_to_value(&labels.to_json()))
+            }
+            "label.set_config" => {
+                let Some(given) = args.first() else {
+                    return Err(RpcError::invalid_argument("a dictionary is required"));
+                };
+                let settings =
+                    crate::features::label::Settings::from_config(Some(&value_to_json(given)));
+                self.store_labels(&settings).await?;
+                Ok(Value::None)
+            }
 
             "core.get_session_state" => {
                 let hashes = self
@@ -1979,6 +2285,7 @@ impl Core {
                             status.current_tracker.clone(),
                             torrent.options.owner.clone(),
                             torrent.options.label.clone(),
+                            status.download_payload_rate > 0 || status.upload_payload_rate > 0,
                         ))
                     })
                     .collect::<Vec<_>>()
@@ -1993,9 +2300,14 @@ impl Core {
         let mut by_label: BTreeMap<String, i64> = BTreeMap::new();
         let mut active = 0i64;
 
-        for (state, tracker, owner, label) in statuses {
+        for (state, tracker, owner, label, transferring) in statuses {
             *by_state.entry(state).or_insert(0) += 1;
-            if matches!(state, TorrentState::Downloading | TorrentState::Seeding) {
+            // Active means moving bytes, not "not paused". A seeding torrent
+            // nobody is downloading from is idle, and counting it here put
+            // every finished torrent in a category meant for the ones worth
+            // watching. This is Deluge's own rule, and the filter below uses
+            // the same one, so the count and the list agree.
+            if transferring {
                 active += 1;
             }
             let host = tracker_host_of(&tracker);
@@ -2234,11 +2546,12 @@ fn matches_filter(status: &BTreeMap<String, Value>, filter: &[(String, Vec<Strin
         if wanted.iter().any(|value| value == "All") {
             return true;
         }
+        // "Active" is not a state, it is a question about right now: is this
+        // torrent moving any bytes? A seeding torrent with no peers is not,
+        // however finished it is. Deluge asks it this way too.
         if key == "state" && wanted.iter().any(|value| value == "Active") {
-            return matches!(
-                status.get("state").and_then(Value::as_str),
-                Some("Downloading") | Some("Seeding")
-            );
+            let rate = |name: &str| status.get(name).and_then(Value::as_i64).unwrap_or_default();
+            return rate("download_payload_rate") > 0 || rate("upload_payload_rate") > 0;
         }
         // The quick search. Deluge looks in more than the name, so that
         // "error" or the name of a tracker finds what you meant, and every
@@ -2293,4 +2606,64 @@ fn matches_keyword(status: &BTreeMap<String, Value>, term: &str) -> bool {
             .and_then(Value::as_str)
             .is_some_and(|value| value.to_lowercase().contains(term))
     })
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    fn status(state: &str, down: i64, up: i64) -> BTreeMap<String, Value> {
+        let mut out = BTreeMap::new();
+        out.insert("state".to_owned(), Value::Str(state.to_owned()));
+        out.insert("download_payload_rate".to_owned(), Value::Int(down));
+        out.insert("upload_payload_rate".to_owned(), Value::Int(up));
+        out.insert("name".to_owned(), Value::Str("a torrent".to_owned()));
+        out
+    }
+
+    fn by_state(value: &str) -> Vec<(String, Vec<String>)> {
+        vec![("state".to_owned(), vec![value.to_owned()])]
+    }
+
+    #[test]
+    fn active_means_moving_bytes_rather_than_being_unpaused() {
+        // A finished torrent that nobody is downloading from is not active,
+        // however much of it is seeded. Counting it put every completed
+        // torrent in the one category meant for what is worth watching.
+        assert!(!matches_filter(
+            &status("Seeding", 0, 0),
+            &by_state("Active")
+        ));
+        assert!(matches_filter(
+            &status("Seeding", 0, 4096),
+            &by_state("Active")
+        ));
+        assert!(matches_filter(
+            &status("Downloading", 8192, 0),
+            &by_state("Active")
+        ));
+        // Paused cannot be active whatever the rates say, and they will be
+        // zero, but the rule does not need a special case for it.
+        assert!(!matches_filter(
+            &status("Paused", 0, 0),
+            &by_state("Active")
+        ));
+    }
+
+    #[test]
+    fn a_state_filter_is_still_the_state() {
+        assert!(matches_filter(
+            &status("Seeding", 0, 0),
+            &by_state("Seeding")
+        ));
+        assert!(!matches_filter(
+            &status("Seeding", 0, 0),
+            &by_state("Downloading")
+        ));
+    }
+
+    #[test]
+    fn all_means_no_filter_on_that_field() {
+        assert!(matches_filter(&status("Paused", 0, 0), &by_state("All")));
+    }
 }

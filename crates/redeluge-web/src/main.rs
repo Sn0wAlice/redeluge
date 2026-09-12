@@ -20,7 +20,8 @@ use tokio::sync::{Mutex, RwLock};
 /// The version the Web UI reports, matching what the daemon tells clients.
 ///
 /// Not this crate's own version: clients compare it against the Deluge they
-/// know how to speak, and a page titled 1.0.0 is a page that looks broken.
+/// know how to speak, and a page titled with redeluge's own number is a page
+/// that looks broken.
 /// Keep "dev" out of it, or the Web UI asks for unbundled source assets.
 const DELUGE_COMPATIBLE_VERSION: &str = "2.2.1";
 
@@ -151,6 +152,7 @@ async fn main() -> std::io::Result<()> {
         daemon: RwLock::new(None),
         client_settings: ClientSettings::default(),
         events: Mutex::new(EventQueue::default()),
+        events_ready: tokio::sync::Notify::new(),
         web_config: RwLock::new(web_config),
     });
 

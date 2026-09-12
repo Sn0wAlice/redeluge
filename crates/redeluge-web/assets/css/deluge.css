@@ -544,6 +544,14 @@ dl.singleline dd {
     background-image: url('../icons/move.png') !important;
 }
 
+/* The menu that puts a torrent in a label. Deluge's own icon for a filter
+   category, which is what a label is. A menu item whose icon class has no rule
+   does not fall back to no icon: it leaves the icon column blank and the text
+   indented past it. */
+.icon-label {
+    background-image: url('../icons/all.png') !important;
+}
+
 .icon-help {
     background-image: url('../icons/help.png') !important;
 }

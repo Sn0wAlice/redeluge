@@ -27,6 +27,92 @@ deluge.menus = {
         });
     },
 
+    /**
+     * Puts the selected torrents in a label, or takes them out of one.
+     *
+     * `label.set_torrent` rather than `core.set_torrent_options`, because it is
+     * the Label plugin's own call: it creates the label if it has gone missing
+     * and applies whatever rules the label carries, which setting the option
+     * directly would skip.
+     */
+    onLabelPicked: function (item) {
+        var ids = deluge.torrents.getSelectedIds();
+        if (!ids.length) return;
+
+        var label = item.initialConfig.labelName || '';
+        var left = ids.length;
+        Ext.each(ids, function (id) {
+            deluge.client.label.set_torrent(id, label, {
+                success: function () {
+                    if (--left === 0) deluge.ui.update();
+                },
+                failure: function () {
+                    if (--left === 0) deluge.ui.update();
+                },
+            });
+        });
+    },
+
+    /**
+     * Rebuilds the Label submenu from the labels that exist.
+     *
+     * Read every time the menu opens rather than cached: another program adds
+     * labels through the same API, and a list that is one page-load old is the
+     * list that does not have the one you just made.
+     */
+    refreshLabelMenu: function () {
+        var menu = deluge.menus.label;
+        if (!menu) return;
+
+        deluge.client.label.get_labels({
+            success: function (labels) {
+                menu.removeAll(true);
+
+                // Only marked when one torrent is selected: with several, the
+                // menu sets them all and there is no single current label to
+                // show as chosen.
+                var current = null;
+                var records = deluge.torrents.getSelections() || [];
+                if (records.length === 1) {
+                    current = records[0].get('label') || '';
+                }
+
+                menu.add({
+                    text: _('No Label'),
+                    labelName: '',
+                    checked: current === '',
+                    group: 'torrent-label',
+                    handler: deluge.menus.onLabelPicked,
+                    scope: deluge.menus,
+                });
+
+                if (labels && labels.length) {
+                    menu.add('-');
+                    Ext.each(labels, function (name) {
+                        menu.add({
+                            text: name,
+                            labelName: name,
+                            checked: current === name,
+                            group: 'torrent-label',
+                            handler: deluge.menus.onLabelPicked,
+                            scope: deluge.menus,
+                        });
+                    });
+                } else {
+                    menu.add('-');
+                    menu.add({
+                        text: _('No labels yet, add one in Preferences'),
+                        disabled: true,
+                    });
+                }
+            },
+            failure: function () {
+                menu.removeAll(true);
+                menu.add({ text: _('Labels are unavailable'), disabled: true });
+            },
+        });
+    },
+
     onTorrentActionShow: function (item, e) {
         var ids = deluge.torrents.getSelectedIds();
         var action = item.initialConfig.torrentAction;
@@ -46,6 +132,14 @@ deluge.menus = {
         }
     },
 };
+
+/**
+ * The labels a torrent can be put in, filled in when the menu opens.
+ */
+deluge.menus.label = new Ext.menu.Menu({
+    id: 'torrentLabelMenu',
+    items: [],
+});
 
 deluge.menus.torrent = new Ext.menu.Menu({
     id: 'torrentMenu',
@@ -357,6 +451,11 @@ deluge.menus.torrent = new Ext.menu.Menu({
             iconCls: 'icon-move',
             handler: deluge.menus.onTorrentActionShow,
             scope: deluge.menus,
+        },
+        {
+            text: _('Label'),
+            iconCls: 'icon-label',
+            menu: deluge.menus.label,
         },
     ],
 });

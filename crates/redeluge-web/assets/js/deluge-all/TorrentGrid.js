@@ -225,6 +225,17 @@
                 dataIndex: 'download_location',
             },
             {
+                // Beside Owner, the other thing that puts torrents in groups.
+                // Shown by default: a label you cannot see is one you cannot
+                // tell apart from no label at all, and the sidebar's Labels
+                // list only says how many, not which.
+                header: _('Label'),
+                width: 90,
+                sortable: true,
+                renderer: fplain,
+                dataIndex: 'label',
+            },
+            {
                 header: _('Owner'),
                 width: 80,
                 sortable: true,
@@ -338,6 +349,8 @@
                 { name: 'max_upload_speed', type: 'int' },
                 { name: 'seeds_peers_ratio', type: 'float' },
                 { name: 'time_since_transfer', type: 'int' },
+                { name: 'label' },
+                { name: 'owner' },
             ],
         },
 
@@ -396,6 +409,10 @@
                 if (!selection.isSelected(rowIndex)) {
                     selection.selectRow(rowIndex);
                 }
+                // Read the labels now rather than when the interface loaded:
+                // another program adds them through the same API, and the one
+                // you want is often the one just created.
+                deluge.menus.refreshLabelMenu();
                 deluge.menus.torrent.showAt(e.getPoint());
             });
         },

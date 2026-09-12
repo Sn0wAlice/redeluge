@@ -97,15 +97,152 @@ async fn the_listener_and_the_core_together_cover_the_contract() {
     let (core, _dir) = daemon().await;
     let advertised: Vec<String> = core.method_list();
 
-    let contract: Vec<String> = Contract::get()
+    // The contract plus the plugin this daemon answers for, and nothing else.
+    // A Deluge daemon advertises its plugins' methods as well as the core's,
+    // so the list growing by exactly the Label plugin's is correct; growing by
+    // anything else would mean an invented method, which is what this guards.
+    let mut expected: Vec<String> = Contract::get()
         .methods_for(Transport::Daemon)
         .map(|method| method.name.clone())
         .collect();
+    expected.extend(
+        redeluge_daemon::core::PLUGIN_METHODS
+            .iter()
+            .map(|name| (*name).to_owned()),
+    );
+    expected.sort();
 
     assert_eq!(
-        advertised, contract,
-        "daemon.get_method_list does not match the contract"
+        advertised, expected,
+        "daemon.get_method_list is not the contract plus the Label plugin"
     );
+}
+
+/// Every method the Label plugin contributed is answerable.
+///
+/// Radarr, Sonarr and the rest ask `core.get_enabled_plugins` and then call
+/// these. A method that is advertised and raises `NotImplementedError` is
+/// worse than one that was never advertised.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_plugin_method_is_answerable() {
+    let (core, _dir) = daemon().await;
+    let context = admin();
+
+    let mut missing = Vec::new();
+    for name in redeluge_daemon::core::PLUGIN_METHODS {
+        let outcome = core.call(&context, name, Vec::new(), Vec::new()).await;
+        if let Err(error) = outcome {
+            if error.exception == "NotImplementedError" {
+                missing.push((*name).to_owned());
+            }
+        }
+    }
+
+    assert!(missing.is_empty(), "not implemented: {missing:?}");
+}
+
+/// The plugin reports itself as enabled, which is the check every client makes.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_label_plugin_reports_itself_as_enabled() {
+    let (core, _dir) = daemon().await;
+
+    for method in ["core.get_enabled_plugins", "core.get_available_plugins"] {
+        let answer = core
+            .call(&admin(), method, Vec::new(), Vec::new())
+            .await
+            .expect("answered");
+        assert_eq!(
+            answer,
+            Value::List(vec![Value::Str("Label".to_owned())]),
+            "{method} should report the Label plugin"
+        );
+    }
+
+    // Nothing else can be turned on, and it says so rather than pretending.
+    let answer = core
+        .call(
+            &admin(),
+            "core.enable_plugin",
+            vec![Value::Str("Execute".to_owned())],
+            Vec::new(),
+        )
+        .await
+        .expect("answered");
+    assert_eq!(answer, Value::Bool(false));
+}
+
+/// A label survives having nothing in it, which is the whole point of storing
+/// the register.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_label_exists_before_any_torrent_carries_it() {
+    let (core, _dir) = daemon().await;
+    let context = admin();
+
+    let added = core
+        .call(
+            &context,
+            "label.add",
+            vec![Value::Str("radarr".to_owned())],
+            Vec::new(),
+        )
+        .await
+        .expect("answered");
+    assert_eq!(added, Value::Bool(true));
+
+    let labels = core
+        .call(&context, "label.get_labels", Vec::new(), Vec::new())
+        .await
+        .expect("answered");
+    assert_eq!(labels, Value::List(vec![Value::Str("radarr".to_owned())]));
+
+    // Adding it again is not an error: clients add before every use.
+    let again = core
+        .call(
+            &context,
+            "label.add",
+            vec![Value::Str("radarr".to_owned())],
+            Vec::new(),
+        )
+        .await
+        .expect("answered");
+    assert_eq!(again, Value::Bool(false));
+
+    let removed = core
+        .call(
+            &context,
+            "label.remove",
+            vec![Value::Str("radarr".to_owned())],
+            Vec::new(),
+        )
+        .await
+        .expect("answered");
+    assert_eq!(removed, Value::Bool(true));
+    let labels = core
+        .call(&context, "label.get_labels", Vec::new(), Vec::new())
+        .await
+        .expect("answered");
+    assert_eq!(labels, Value::List(Vec::new()));
+}
+
+/// A label name is cleaned the same way wherever it arrives from.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_label_is_normalised_on_the_way_in() {
+    let (core, _dir) = daemon().await;
+
+    core.call(
+        &admin(),
+        "label.add",
+        vec![Value::Str("  My Films! ".to_owned())],
+        Vec::new(),
+    )
+    .await
+    .expect("answered");
+
+    let labels = core
+        .call(&admin(), "label.get_labels", Vec::new(), Vec::new())
+        .await
+        .expect("answered");
+    assert_eq!(labels, Value::List(vec![Value::Str("myfilms".to_owned())]));
 }
 
 #[tokio::test(flavor = "multi_thread")]

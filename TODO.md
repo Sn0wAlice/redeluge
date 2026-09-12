@@ -232,6 +232,49 @@ scrolling. It reports nothing now.
 - [x] **An unnamed filter row.** Torrents with no label formed a group with a
       blank name and a count beside it.
 
+## The third display pass
+
+Three things reported from a real install, all measured rather than guessed.
+
+- [x] **Six hundred requests a minute for events.** `web.get_events` is a long
+      poll and this server answered it immediately, so the front end's
+      ask-again-on-answer loop spun as fast as the round trip allowed. The
+      answer is held now, up to twenty-five seconds, and an event still ends
+      the wait at once. 592 requests in thirty seconds became 28 in sixty.
+- [x] **The progress bar and its text.** The buffered grid view assigned the
+      cell style after calling the renderer, and the metadata object is reused
+      down the row, so every renderer read the previous column's width. The bar
+      was as wide as the Size column and the percentage was clipped inside it.
+- [x] **A fix that was shipped, served, and invisible.** Asset URLs were keyed
+      on the JavaScript bundle's length alone, and the same key went on every
+      asset, so a change to a stylesheet or to the other script bundle changed
+      no URL at all. Found the hard way: the progress-bar fix was in the image
+      and the browser kept running the old one. Keyed on every asset now.
+- [x] **Seeding torrents in the Active filter.** I had the complaint backwards
+      and tested the wrong thing: they were appearing and should not. Active is
+      not a state, it is a question about right now, and Deluge asks it as
+      "download or upload rate above zero". A seeding torrent with no peers is
+      idle. The count and the filter both ask it that way now.
+
+## Labels, finished
+
+- [x] **The Label plugin's API.** Radarr and the rest ask
+      `core.get_enabled_plugins` and will not let you set a category without
+      it. The daemon reports `Label` and answers the eight `label.*` methods;
+      the Web UI forwards that namespace, because those programs connect to it
+      rather than to the daemon's port. `daemon.get_method_list` grows by
+      exactly those methods, which is what a Deluge daemon with the plugin
+      enabled advertises, and a test pins the list.
+- [x] **A register of labels.** A label now exists whether or not a torrent
+      carries it. Deriving the list from the torrents could never answer the
+      question those programs ask, because the label they are about to use is
+      the empty one.
+- [x] **A Labels page**, with add, rename and remove, and the per-label rules
+      behind their own switches. Rename is three existing calls rather than a
+      new method: the plugin had none, and inventing one would put this
+      daemon's API out of step with Deluge's.
+- [x] **A Label column** in the torrent list.
+
 ## Loose ends, whenever
 
 - [x] **The Alpine image: dropped, with a reason.** Alpine does ship

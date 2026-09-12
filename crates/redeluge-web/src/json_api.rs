@@ -173,13 +173,13 @@ async fn dispatch(
         // thin client written against the Python server may use either.
         "web.get_languages" | "webutils.get_languages" => Ok(json!([])),
 
-        // The plugin system is gone and so is the interface for it: nothing in
-        // the shipped front end calls these any more. They stay because they
-        // are in the contract, and a thin client that asks gets the truthful
-        // answer rather than an unknown-method error.
+        // There is no plugin system, and the interface for one is gone. What
+        // is left is the Label plugin's name, because the daemon answers its
+        // methods: a client that asks what is enabled and then calls `label.*`
+        // must get an answer that agrees with what happens next.
         "web.get_plugins" => Ok(json!({
-            "enabled_plugins": [],
-            "available_plugins": [],
+            "enabled_plugins": ["Label"],
+            "available_plugins": ["Label"],
         })),
         "web.get_plugin_info" => Ok(json!({})),
         "web.get_plugin_resources" => Err(ApiError::local("no plugin system")),
@@ -208,8 +208,15 @@ async fn dispatch(
         )),
         "web.stop_daemon" => web_stop_daemon(call, state).await,
 
-        // Everything in the daemon's namespaces goes to the daemon.
-        method if method.starts_with("core.") || method.starts_with("daemon.") => {
+        // Everything in the daemon's namespaces goes to the daemon, and
+        // `label.*` is one of them: Radarr, Sonarr and the rest reach this
+        // server rather than the daemon's own port, so a namespace that is not
+        // forwarded here is a namespace they cannot call.
+        method
+            if method.starts_with("core.")
+                || method.starts_with("daemon.")
+                || method.starts_with("label.") =>
+        {
             forward(method, &call.params, state).await
         }
 
@@ -484,6 +491,8 @@ fn spawn_event_pump(client: redeluge_rpc::Client, state: SharedState) {
                 Ok(event) => {
                     let args = event.args.iter().map(rencode_to_json).collect();
                     state.events.lock().await.push(event.name, args);
+                    // Wakes whoever is holding a `web.get_events` open.
+                    state.events_ready.notify_waiters();
                 }
                 // Lagging means the browser stopped polling; the queue bound
                 // has already discarded the oldest, so carrying on is correct.
@@ -819,8 +828,39 @@ async fn web_register_event(call: &JsonRequest, state: &SharedState, register: b
     Ok(Json::Null)
 }
 
+/// How long `web.get_events` waits for something to report.
+///
+/// Comfortably inside the browser's own request timeout, which is thirty
+/// seconds in the Ext JS the front end is built on: a poll that the browser
+/// gives up on first is a poll that looks like a failure.
+const EVENT_HOLD: std::time::Duration = std::time::Duration::from_secs(25);
+
+/// The events that have arrived since the last poll.
+///
+/// A long poll. The front end asks again the instant it is answered, which is
+/// the right shape for an endpoint that blocks and a busy loop for one that
+/// does not: answering empty straight away produced about twenty requests a
+/// second, for as long as a tab was open, on a daemon that had nothing to say.
+///
+/// So the answer is held until an event arrives or the hold expires. An event
+/// still reaches the browser as soon as the daemon reports it.
 async fn web_get_events(state: &SharedState) -> ApiResult {
-    let events = state.events.lock().await.drain();
+    // Registered before the queue is looked at, so an event that arrives
+    // between the two is not missed: `notify_waiters` only wakes what is
+    // already waiting.
+    let woken = state.events_ready.notified();
+    tokio::pin!(woken);
+    woken.as_mut().enable();
+
+    let mut events = state.events.lock().await.drain();
+    if events.is_empty() {
+        // Whether this returns because an event arrived or because the hold
+        // ran out, the answer is the same: whatever is queued, which may be
+        // nothing.
+        let _ = tokio::time::timeout(EVENT_HOLD, woken).await;
+        events = state.events.lock().await.drain();
+    }
+
     Ok(Json::Array(
         events
             .into_iter()

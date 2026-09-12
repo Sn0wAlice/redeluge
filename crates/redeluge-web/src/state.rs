@@ -50,6 +50,14 @@ pub struct AppState {
     pub client_settings: ClientSettings,
     /// Events the browser asked to be told about, and those that have arrived.
     pub events: Mutex<EventQueue>,
+    /// Woken whenever an event reaches the queue.
+    ///
+    /// `web.get_events` is a long poll: the browser asks, and the answer is
+    /// held until there is something to say. Without this it answered empty
+    /// straight away and the front end, which re-asks the moment it is
+    /// answered, went round about twenty times a second for as long as the tab
+    /// was open.
+    pub events_ready: tokio::sync::Notify,
     /// Raw `web.conf`, so unknown keys survive a read/write cycle.
     pub web_config: RwLock<ConfigFile>,
 }
