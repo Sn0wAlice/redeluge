@@ -69,22 +69,6 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
                     },
                     new Ext.Toolbar.Separator(),
                     {
-                        id: 'up',
-                        cls: 'x-btn-text-icon',
-                        disabled: true,
-                        text: _('Up'),
-                        iconCls: 'icon-up',
-                        handler: this.onTorrentAction,
-                    },
-                    {
-                        id: 'down',
-                        disabled: true,
-                        text: _('Down'),
-                        iconCls: 'icon-down',
-                        handler: this.onTorrentAction,
-                    },
-                    new Ext.Toolbar.Separator(),
-                    {
                         id: 'preferences',
                         text: _('Preferences'),
                         iconCls: 'x-deluge-preferences',
@@ -168,16 +152,12 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
         Deluge.Toolbar.superclass.constructor.call(this, config);
     },
 
-    connectedButtons: [
-        'add',
-        'remove',
-        'pause',
-        'resume',
-        'up',
-        'down',
-        'activity',
-        'peers',
-    ],
+    // Queue position is not here: it is four items deep in a torrent's own
+    // right-click menu, under Queue, which is where it belongs. It applies to
+    // one torrent at a time, only to the ones the queue is managing, and it is
+    // the sort of thing somebody does twice a month — none of which earns two
+    // permanent buttons beside Pause and Resume.
+    connectedButtons: ['add', 'remove', 'pause', 'resume', 'activity', 'peers'],
 
     initComponent: function () {
         Deluge.Toolbar.superclass.initComponent.call(this);
@@ -282,14 +262,6 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
             case 'pause':
             case 'resume':
                 deluge.client.core[item.id + '_torrent'](ids, {
-                    success: function () {
-                        deluge.ui.update();
-                    },
-                });
-                break;
-            case 'up':
-            case 'down':
-                deluge.client.core['queue_' + item.id](ids, {
                     success: function () {
                         deluge.ui.update();
                     },

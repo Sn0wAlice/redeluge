@@ -34,7 +34,7 @@ Ext.ns('Deluge');
  */
 Deluge.PeersWindow = Ext.extend(Ext.Window, {
     title: _('Peers'),
-    width: 760,
+    width: 860,
     height: 460,
     layout: 'fit',
     closeAction: 'hide',
@@ -118,7 +118,7 @@ Deluge.PeersWindow = Ext.extend(Ext.Window, {
                 {
                     header: _('Client'),
                     dataIndex: 'client',
-                    width: 140,
+                    width: 150,
                     renderer: Ext.util.Format.htmlEncode,
                 },
                 {
