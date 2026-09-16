@@ -280,7 +280,7 @@ So the daemon keeps a running account, by address, and the window reads it:
 |---|---|
 | Took / Gave | Bytes this daemon sent to the address, and bytes it sent back |
 | Gave back | The second over the first. A dash when it never took anything — "asked for nothing" and "asked and gave nothing" are different facts |
-| Torrents | How many of your torrents it has been seen in |
+| Torrents | How many of your torrents it has been seen in. Pick the row and the panel below names them |
 | Cross-seeds | How many of your *contents* it carries on more than one of your torrents |
 
 Totals are accumulated by difference, never copied: libtorrent's per-connection
@@ -326,8 +326,12 @@ connections that will not exist next time.
 It is a record of what this machine saw on its own link. Nothing about it is
 sent anywhere, and no rule in this daemon acts on it.
 
+A torrent removed since is still listed, by its infohash: what a peer moved is
+no less true for the torrent being gone.
+
 Over the API: `redeluge.get_peers`, biggest taker first, optionally with a
-limit. The `peers` key of `core.conf` holds `enabled` and `ttl_days`.
+limit. Each entry's `torrents` is the list itself — hash, name and whether that
+torrent is one the peer also carries elsewhere — not a count. The `peers` key of `core.conf` holds `enabled` and `ttl_days`.
 
 ## What the daemon did on its own
 

@@ -1567,17 +1567,58 @@ impl Rpc for Core {
                     .map(|limit| limit as usize)
                     .unwrap_or(500);
 
-                let rows = {
+                let rows: Vec<(String, crate::peers::Record)> = {
                     let Ok(ledger) = self.manager.peers().lock() else {
                         return Ok(Value::List(Vec::new()));
                     };
                     ledger
                         .takers(limit)
                         .into_iter()
-                        .map(|(address, record)| peer_value(address, record))
+                        .map(|(address, record)| (address.clone(), record.clone()))
                         .collect()
                 };
-                Ok(Value::List(rows))
+
+                // The ledger holds infohashes, because a name can change and a
+                // torrent can be removed while the record of what it moved
+                // stays true. Names are looked up here, once for the whole
+                // answer: a peer seen in a torrent that has since been removed
+                // keeps its line and loses only the name.
+                let wanted: std::collections::BTreeSet<String> = rows
+                    .iter()
+                    .flat_map(|(_, record)| record.torrents.iter().cloned())
+                    .collect();
+                let names = self
+                    .manager
+                    .with(move |state| {
+                        wanted
+                            .into_iter()
+                            .map(|id| {
+                                // `display_name`, the same answer the torrent
+                                // list gives. Reading `options.name` alone was
+                                // wrong: it is only set for a magnet or a
+                                // torrent somebody renamed, so every torrent
+                                // added from a file looked like one that had
+                                // been removed.
+                                let name = state
+                                    .torrents
+                                    .get(&id)
+                                    .map(|torrent| match state.session.torrent_status(&id) {
+                                        Ok(status) => torrent.display_name(&status),
+                                        Err(_) => torrent.options.name.clone().unwrap_or_default(),
+                                    })
+                                    .unwrap_or_default();
+                                (id, name)
+                            })
+                            .collect::<BTreeMap<String, String>>()
+                    })
+                    .await
+                    .unwrap_or_default();
+
+                Ok(Value::List(
+                    rows.iter()
+                        .map(|(address, record)| peer_value(address, record, &names))
+                        .collect(),
+                ))
             }
 
             "label.get_config" => {
@@ -2697,7 +2738,38 @@ fn action_value(action: &crate::activity::Action) -> Value {
 ///
 /// The ratio is left to the caller: a peer that has taken nothing has no
 /// ratio, and a zero sent here would invite a division that answers infinity.
-fn peer_value(address: &str, record: &crate::peers::Record) -> Value {
+fn peer_value(
+    address: &str,
+    record: &crate::peers::Record,
+    names: &BTreeMap<String, String>,
+) -> Value {
+    // Which of this peer's torrents are one of ours that it also carries
+    // elsewhere: the torrents of a content it holds on more than one of ours.
+    let crossed: std::collections::BTreeSet<&String> = record
+        .contents
+        .values()
+        .filter(|torrents| torrents.len() > 1)
+        .flatten()
+        .collect();
+
+    let torrents: Vec<Value> = record
+        .torrents
+        .iter()
+        .map(|id| {
+            Value::Dict(vec![
+                (Value::Str("hash".into()), Value::Str(id.clone())),
+                (
+                    Value::Str("name".into()),
+                    Value::Str(names.get(id).cloned().unwrap_or_default()),
+                ),
+                (
+                    Value::Str("cross_seed".into()),
+                    Value::Bool(crossed.contains(id)),
+                ),
+            ])
+        })
+        .collect();
+
     Value::Dict(vec![
         (Value::Str("address".into()), Value::Str(address.to_owned())),
         (
@@ -2714,10 +2786,10 @@ fn peer_value(address: &str, record: &crate::peers::Record) -> Value {
             Value::Str("last_seen".into()),
             Value::Float64(record.last_seen),
         ),
-        (
-            Value::Str("torrents".into()),
-            Value::Int(record.torrents.len() as i64),
-        ),
+        // The torrents themselves, not just how many: "three" is a fact
+        // nobody can act on, and the interface is a click away from wanting
+        // to know which three.
+        (Value::Str("torrents".into()), Value::List(torrents)),
         (
             Value::Str("cross_seeds".into()),
             Value::Int(record.cross_seeds() as i64),

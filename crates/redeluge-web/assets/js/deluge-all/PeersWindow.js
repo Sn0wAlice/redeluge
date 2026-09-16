@@ -35,7 +35,7 @@ Ext.ns('Deluge');
 Deluge.PeersWindow = Ext.extend(Ext.Window, {
     title: _('Peers'),
     width: 860,
-    height: 460,
+    height: 560,
     layout: 'fit',
     closeAction: 'hide',
     constrainHeader: true,
@@ -57,6 +57,9 @@ Deluge.PeersWindow = Ext.extend(Ext.Window, {
                 { name: 'received', type: 'int' },
                 { name: 'ratio', type: 'float' },
                 { name: 'torrents', type: 'int' },
+                // The torrents themselves, for the panel below the grid. No
+                // type: it is a list of objects, not a value to sort on.
+                { name: 'shared' },
                 { name: 'cross_seeds', type: 'int' },
                 { name: 'last_seen', type: 'float' },
             ],
@@ -82,10 +85,22 @@ Deluge.PeersWindow = Ext.extend(Ext.Window, {
         this.ttl.on('spin', this.onSwitched, this);
         this.ttl.on('blur', this.onSwitched, this);
 
-        this.grid = this.add({
-            xtype: 'grid',
+        this.detail = new Ext.Panel({
+            region: 'south',
+            height: 120,
+            split: true,
+            minHeight: 60,
+            border: false,
+            autoScroll: true,
+            bodyStyle: 'padding: 6px 8px;',
+            html: this.emptyDetail(),
+        });
+
+        this.grid = new Ext.grid.GridPanel({
+            region: 'center',
             store: this.store,
             border: false,
+            sm: new Ext.grid.RowSelectionModel({ singleSelect: true }),
             // On the grid rather than as a second item of this window: the
             // layout is `fit`, which draws one thing.
             tbar: [
@@ -157,6 +172,18 @@ Deluge.PeersWindow = Ext.extend(Ext.Window, {
                 },
             ],
         });
+        this.grid.getSelectionModel().on('rowselect', this.onPeerSelected, this);
+
+        // Border layout rather than fit: the grid answers "who", the panel
+        // under it answers "in which of my torrents", and the second question
+        // is always asked immediately after the first.
+        this.add(
+            new Ext.Panel({
+                layout: 'border',
+                border: false,
+                items: [this.grid, this.detail],
+            })
+        );
 
         this.addButton(_('Close'), this.onClose, this);
 
@@ -233,19 +260,90 @@ Deluge.PeersWindow = Ext.extend(Ext.Window, {
                         // -1 for "it never took anything", which sorts below
                         // every real ratio and draws as a dash.
                         sent > 0 ? received / sent : -1,
-                        peer['torrents'],
+                        (peer['torrents'] || []).length,
+                        peer['torrents'] || [],
                         peer['cross_seeds'],
                         peer['last_seen'],
                     ]);
                 });
+                var chosen = this.grid.getSelectionModel().getSelected();
                 this.store.loadData(rows);
+                // The reload drops the selection, and a detail panel about a
+                // peer that is no longer highlighted is worse than none.
+                var index = chosen
+                    ? this.store.find('address', chosen.get('address'))
+                    : -1;
+                if (index > -1) {
+                    this.grid.getSelectionModel().selectRow(index);
+                } else if (this.detail.body) {
+                    this.detail.body.update(this.emptyDetail());
+                }
             },
             failure: function () {
                 if (!this.isVisible()) return;
                 this.store.removeAll();
+                if (this.detail.body) this.detail.body.update(this.emptyDetail());
             },
             scope: this,
         });
+    },
+
+    emptyDetail: function () {
+        return (
+            '<span style="color: #888;">' +
+            Ext.util.Format.htmlEncode(
+                _('Pick a peer to see which of your torrents it was seen in.')
+            ) +
+            '</span>'
+        );
+    },
+
+    /**
+     * Which of your torrents this peer has been seen in.
+     *
+     * The count in the grid says how many and nothing else; this says which,
+     * because that is the next thing anybody asks. A torrent removed since is
+     * still listed, by its infohash: what it moved is no less true for the
+     * torrent being gone.
+     */
+    onPeerSelected: function (model, index, record) {
+        var shared = record.get('shared') || [];
+        if (!shared.length) {
+            this.detail.body.update(this.emptyDetail());
+            return;
+        }
+
+        var rows = [];
+        Ext.each(shared, function (entry) {
+            var name = entry['name'] || entry['hash'] || '';
+            var line = Ext.util.Format.htmlEncode(name);
+            if (!entry['name']) {
+                line =
+                    '<span style="color: #888;">' +
+                    line +
+                    ' ' +
+                    Ext.util.Format.htmlEncode(_('(removed)')) +
+                    '</span>';
+            }
+            if (entry['cross_seed']) {
+                line +=
+                    ' <span style="color: #888;">' +
+                    Ext.util.Format.htmlEncode(
+                        _('- also on another of your torrents')
+                    ) +
+                    '</span>';
+            }
+            rows.push('<div>' + line + '</div>');
+        });
+
+        this.detail.body.update(
+            '<div style="margin-bottom: 4px;"><b>' +
+                Ext.util.Format.htmlEncode(record.get('address')) +
+                '</b> ' +
+                Ext.util.Format.htmlEncode(_('was seen in:')) +
+                '</div>' +
+                rows.join('')
+        );
     },
 
     /**

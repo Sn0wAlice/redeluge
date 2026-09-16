@@ -44,6 +44,9 @@ talking to.
   So contents are matched on the file list — names and sizes to the byte, in a
   fixed order — which is near enough for grouping and is never used to delete
   anything.
+- Picking a peer names the torrents it was seen in, under the grid, marking
+  the ones it also carries on another of yours. The count alone is a fact
+  nobody can act on, and the next question is always which.
 - `redeluge.get_peers` reads the ledger back, biggest taker first.
 
 ### Fixed
