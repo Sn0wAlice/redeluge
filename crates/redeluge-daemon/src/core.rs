@@ -70,7 +70,7 @@ pub const PLUGIN_METHODS: &[&str] = &[
 /// method list knows exactly what it has found, and no future Deluge method
 /// can collide with one of these. They are advertised for the same reason the
 /// Label plugin's are — a list that does not say what can be called misleads.
-pub const REDELUGE_METHODS: &[&str] = &["redeluge.get_recent_actions"];
+pub const REDELUGE_METHODS: &[&str] = &["redeluge.get_recent_actions", "redeluge.get_peers"];
 
 /// Everything a call can reach.
 pub struct Core {
@@ -1557,6 +1557,29 @@ impl Rpc for Core {
                 Ok(Value::List(actions.iter().map(action_value).collect()))
             }
 
+            // What each peer has done, biggest taker first. See `peers.rs`
+            // for why a running total cannot come from libtorrent.
+            "redeluge.get_peers" => {
+                let limit = args
+                    .first()
+                    .and_then(Value::as_i64)
+                    .filter(|limit| *limit > 0)
+                    .map(|limit| limit as usize)
+                    .unwrap_or(500);
+
+                let rows = {
+                    let Ok(ledger) = self.manager.peers().lock() else {
+                        return Ok(Value::List(Vec::new()));
+                    };
+                    ledger
+                        .takers(limit)
+                        .into_iter()
+                        .map(|(address, record)| peer_value(address, record))
+                        .collect()
+                };
+                Ok(Value::List(rows))
+            }
+
             "label.get_config" => {
                 let labels = self.labels().await;
                 Ok(json_to_value(&labels.to_json()))
@@ -2666,6 +2689,38 @@ fn action_value(action: &crate::activity::Action) -> Value {
         (
             Value::Str("detail".into()),
             Value::Str(action.detail.clone()),
+        ),
+    ])
+}
+
+/// One peer's account, as a client reads it.
+///
+/// The ratio is left to the caller: a peer that has taken nothing has no
+/// ratio, and a zero sent here would invite a division that answers infinity.
+fn peer_value(address: &str, record: &crate::peers::Record) -> Value {
+    Value::Dict(vec![
+        (Value::Str("address".into()), Value::Str(address.to_owned())),
+        (
+            Value::Str("client".into()),
+            Value::Str(record.client.clone()),
+        ),
+        (Value::Str("sent".into()), Value::Int(record.sent)),
+        (Value::Str("received".into()), Value::Int(record.received)),
+        (
+            Value::Str("first_seen".into()),
+            Value::Float64(record.first_seen),
+        ),
+        (
+            Value::Str("last_seen".into()),
+            Value::Float64(record.last_seen),
+        ),
+        (
+            Value::Str("torrents".into()),
+            Value::Int(record.torrents.len() as i64),
+        ),
+        (
+            Value::Str("cross_seeds".into()),
+            Value::Int(record.cross_seeds() as i64),
         ),
     ])
 }

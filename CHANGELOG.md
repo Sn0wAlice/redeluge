@@ -7,6 +7,51 @@ redeluge numbers its own releases from 1.0.0. The version the daemon reports
 to clients stays `2.2.1`, because that is the Deluge a client expects to be
 talking to.
 
+## [1.5.0] — 2026-09-16
+
+### Added
+
+- **A running account of what each peer has done**, in a *Peers* window in the
+  toolbar, off until you turn it on there. The Peers tab shows the connections
+  open right now at the speeds of the moment, which cannot answer the question
+  people actually have about an address: what has it ever given back? A peer
+  that takes forty gibibytes over a week and sends nothing looks idle in every
+  snapshot, because it is idle in every snapshot — libtorrent's own counters
+  belong to a connection and die with it.
+- Totals are accumulated by difference, never copied: a sample smaller than the
+  last one is a reconnection and the whole of it is new. Sampled every fifteen
+  seconds, and only for torrents that have peers.
+- What sampling cannot see is a connection that begins and ends between two
+  samples: nothing reports a peer's totals as it disconnects, so there is no
+  other mechanism to use. The bias is harmless — a peer too brief to sample is
+  a peer too brief to have taken anything worth the name — and it is documented
+  rather than glossed over.
+- Kept in `state/peers.json`, so it survives a restart, for thirty days by
+  default and at most twenty thousand addresses, the oldest going first. The
+  per-connection counters are dropped on the way out, because they describe
+  connections that will not exist next time. Nothing about it is sent anywhere
+  and no rule acts on it.
+- **A Cross-seeds column**: how many of your contents an address carries on
+  more than one of your torrents. Not an accusation, and the documentation says
+  so: a peer seeding the same release to two trackers uploads real bytes to
+  both, most private trackers allow it, and it is what this daemon's own
+  tracker rules help you do. It is the quickest way to confirm your own
+  cross-seeding is working. Announcing a fake upload figure — the actual way
+  ratios are cheated — is invisible from inside a swarm and is the tracker's to
+  detect, not a peer's.
+- Two torrents of the same content have different infohashes as a matter of
+  course, because a tracker stamps its own `source` into the info dictionary.
+  So contents are matched on the file list — names and sizes to the byte, in a
+  fixed order — which is near enough for grouping and is never used to delete
+  anything.
+- `redeluge.get_peers` reads the ledger back, biggest taker first.
+
+### Fixed
+
+- **Per-peer byte totals were not carried across the FFI at all.** The bridge
+  reported each peer's instantaneous speeds and nothing cumulative, so the one
+  number that says what a peer is worth was unavailable to everything above it.
+
 ## [1.4.0] — 2026-09-16
 
 ### Added

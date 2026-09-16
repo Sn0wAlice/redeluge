@@ -193,6 +193,14 @@ pub struct Torrent {
     pub tracker_status: String,
     /// Where a move is going, while one is in progress.
     pub moving_to: Option<String>,
+    /// What this torrent carries, as a fingerprint of its file list.
+    ///
+    /// The same content published on two trackers has two infohashes — the
+    /// tracker adds a `source` field, or the piece size differs — so the
+    /// infohash cannot say they are the same download. The file list can:
+    /// see [`content_fingerprint`]. Computed once, when the metadata is there,
+    /// and kept because it cannot change afterwards.
+    pub content_id: Option<String>,
 }
 
 impl Torrent {
@@ -204,6 +212,7 @@ impl Torrent {
             status_message: "OK".to_owned(),
             tracker_status: String::new(),
             moving_to: None,
+            content_id: None,
         }
     }
 
@@ -594,6 +603,60 @@ pub struct PeerCountry {
 /// sidebar's group for torrents that have none.
 ///
 /// Shared, because the filter tree and the torrent status both need the
+/// A fingerprint of what a torrent carries, from its file list.
+///
+/// Two torrents of the same content have different infohashes as a matter of
+/// course: a private tracker stamps its own `source` into the info dictionary,
+/// which changes the hash without changing a byte of the data. So the infohash
+/// cannot answer "are these the same download". This can, near enough: the
+/// file names and their sizes to the byte, in a fixed order.
+///
+/// Near enough, and not proof — which is why nothing in this daemon deletes
+/// anything on the strength of it. Two unrelated files can share a name and a
+/// size; it is unlikely and it is possible. What it is good for is grouping:
+/// showing that a peer carries the same content on two of your trackers, or
+/// that you are storing the same download twice.
+///
+/// The order the files come in is not part of it, because it is not part of
+/// the content: libtorrent reports them in the torrent's own order and two
+/// torrents of the same files can list them differently.
+pub fn content_fingerprint(files: &[redeluge_libtorrent::FileEntry]) -> String {
+    if files.is_empty() {
+        return String::new();
+    }
+
+    // Names rather than paths: the same release inside a differently named
+    // folder is the same release, and the folder is the part a tracker is most
+    // likely to have renamed.
+    let mut parts: Vec<(String, i64)> = files
+        .iter()
+        .map(|file| {
+            let name = file
+                .path
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(&file.path)
+                .to_lowercase();
+            (name, file.size)
+        })
+        .collect();
+    parts.sort();
+
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut total: i64 = 0;
+    for (name, size) in &parts {
+        total = total.saturating_add(*size);
+        for byte in name.as_bytes().iter().chain(&size.to_le_bytes()) {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100_0000_01b3);
+        }
+    }
+
+    // The total as well as the parts, so that two different file lists have to
+    // collide in both to collide at all.
+    format!("{hash:016x}{total:x}")
+}
+
 /// Whether the tracker has said this torrent no longer exists.
 ///
 /// A private tracker that has pruned a torrent answers every announce with the
@@ -871,6 +934,60 @@ mod file_tests {
         assert_eq!(progress[1], Value::Float64(0.0));
         assert_eq!(priorities.len(), 2);
         assert_eq!(priorities[0], Value::Int(4));
+    }
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::content_fingerprint;
+    use redeluge_libtorrent::FileEntry;
+
+    fn file(path: &str, size: i64) -> FileEntry {
+        FileEntry {
+            index: 0,
+            path: path.to_owned(),
+            size,
+            offset: 0,
+        }
+    }
+
+    #[test]
+    fn the_same_files_in_a_differently_named_folder_are_the_same_content() {
+        // What a cross-seed looks like: one tracker's copy inside its own
+        // folder, another's inside a folder named for the tracker.
+        let one = vec![
+            file("Some.Release/video.mkv", 1_500_000_000),
+            file("Some.Release/readme.nfo", 4_096),
+        ];
+        let other = vec![
+            file("Some.Release-TRACKER/readme.nfo", 4_096),
+            file("Some.Release-TRACKER/video.mkv", 1_500_000_000),
+        ];
+        assert_eq!(content_fingerprint(&one), content_fingerprint(&other));
+    }
+
+    #[test]
+    fn one_byte_of_difference_is_a_different_content() {
+        let one = vec![file("video.mkv", 1_500_000_000)];
+        let other = vec![file("video.mkv", 1_500_000_001)];
+        assert_ne!(content_fingerprint(&one), content_fingerprint(&other));
+
+        // And so is a different name at the same size.
+        let renamed = vec![file("other.mkv", 1_500_000_000)];
+        assert_ne!(content_fingerprint(&one), content_fingerprint(&renamed));
+    }
+
+    #[test]
+    fn a_torrent_with_no_metadata_yet_has_no_fingerprint() {
+        // A magnet before its metadata arrives has no file list, and an empty
+        // fingerprint must not match another empty one.
+        assert!(content_fingerprint(&[]).is_empty());
+    }
+
+    #[test]
+    fn the_same_list_always_answers_the_same_thing() {
+        let files = vec![file("a/one.bin", 10), file("a/two.bin", 20)];
+        assert_eq!(content_fingerprint(&files), content_fingerprint(&files));
     }
 }
 

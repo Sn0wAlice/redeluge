@@ -122,6 +122,13 @@ pub mod ffi {
         /// are already ahead of is nothing to us, and a peer at 3% can be the
         /// only one with the piece we are waiting on.
         useful_pieces: i32,
+        /// Bytes sent to and received from this peer on this connection.
+        ///
+        /// Per connection, not for all time: both reset to zero when a peer
+        /// disconnects and comes back. Anything that wants a running total has
+        /// to notice that and add the difference itself.
+        total_upload: i64,
+        total_download: i64,
     }
 
     /// One tracker in a torrent's announce list.

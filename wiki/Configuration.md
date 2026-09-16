@@ -108,12 +108,14 @@ in one place, so you never have to.
 | `disk_space` | Pausing downloads before the disk runs out |
 | `idle_pause` | Pausing downloads that get nowhere, so the queue can move |
 | `label` | The labels that exist, and what each applies |
+| `peers` | Whether to keep a history of what each peer has done, and for how long |
 | `scheduler` | The weekly schedule |
 | `tracker` | Per-tracker rules: label, move or remove the torrents of one tracker |
 | `webhook` | Where to post when a torrent finishes, arrives or breaks |
 
 Each has a preferences page in the Web UI as well, except `tracker`, which is
-reached by right-clicking a tracker in the sidebar and choosing *Settings*.
+reached by right-clicking a tracker in the sidebar and choosing *Settings*, and
+`peers`, which is set in the Peers window itself.
 
 Each is one dictionary. All are off by default except `disk_space`, which is on
 because it only ever declines to write to a disk with no room on it and undoes

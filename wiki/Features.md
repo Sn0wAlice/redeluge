@@ -264,6 +264,71 @@ client sees anything unusual about them. Over the API it is a filter like the
 rest — `core.get_torrents_status({"state": "Unregistered"}, ["name"])` — and
 `core.get_filter_tree` counts it beside the states.
 
+## What each peer has done
+
+Off by default, turned on from the **Peers** window in the toolbar.
+
+The Peers *tab* shows the connections open right now, at the speeds of the
+moment. That cannot answer the question people actually have about an address:
+*what has it ever given back?* A peer that takes forty gibibytes over a week
+and sends nothing looks idle in every snapshot, because it is idle in every
+snapshot. libtorrent's own counters belong to a connection and die with it.
+
+So the daemon keeps a running account, by address, and the window reads it:
+
+| Column | |
+|---|---|
+| Took / Gave | Bytes this daemon sent to the address, and bytes it sent back |
+| Gave back | The second over the first. A dash when it never took anything — "asked for nothing" and "asked and gave nothing" are different facts |
+| Torrents | How many of your torrents it has been seen in |
+| Cross-seeds | How many of your *contents* it carries on more than one of your torrents |
+
+Totals are accumulated by difference, never copied: libtorrent's per-connection
+counters reset when a peer reconnects, so a sample smaller than the last one is
+a new connection and the whole of it is new. Sampled every fifteen seconds, and
+only for torrents that have peers.
+
+Sampling has one blind spot worth knowing about: a connection that begins and
+ends between two samples is not counted at all. Nothing reports a peer's totals
+as it disconnects, so there is no other mechanism available. The bias is in the
+harmless direction — a peer too brief to be sampled is a peer too brief to have
+taken anything worth the name, and the ones this exists to find are the ones
+that stay for hours. Over a local link, where a whole file can move in under a
+second, it misses nearly everything; that is a fact about local links, not
+about swarms.
+
+### About that Cross-seeds column
+
+It is not an accusation, and it is worth saying so plainly. A peer seeding the
+same release to two trackers uploads real bytes to both swarms; the ratio it
+earns on each is ratio it actually earned. Most private trackers allow it, and
+it is exactly what this daemon's own tracker rules help you do. The column is
+there because it is interesting, and because it is the quickest way to confirm
+that your own cross-seeding is working.
+
+It is also worth knowing what it cannot see. Announcing a fake upload figure to
+a tracker — the actual way ratios are cheated — is invisible from inside a
+swarm: the client doing it never talks to you. That detection belongs to the
+tracker, which can compare what one member claims to have uploaded against what
+everybody else claims to have downloaded. Nothing here can do it.
+
+And an address is not a person: a VPN exit, a seedbox or a carrier-grade NAT
+puts many people behind one.
+
+### What it keeps
+
+The last thirty days by default, changed in the window itself, and at most
+twenty thousand addresses — the oldest go first when that is reached. Kept in
+`state/peers.json` beside the torrent list, so it survives a restart; the
+per-connection counters are dropped on the way out, because they describe
+connections that will not exist next time.
+
+It is a record of what this machine saw on its own link. Nothing about it is
+sent anywhere, and no rule in this daemon acts on it.
+
+Over the API: `redeluge.get_peers`, biggest taker first, optionally with a
+limit. The `peers` key of `core.conf` holds `enabled` and `ttl_days`.
+
 ## What the daemon did on its own
 
 Six things here act without being asked: the share-ratio rule, the idle rule,

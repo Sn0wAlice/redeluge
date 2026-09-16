@@ -443,6 +443,7 @@ const ADDED_BY_REDELUGE: &[&str] = &[
     "disk_space",
     "idle_pause",
     "label",
+    "peers",
     "scheduler",
     "tracker",
     "webhook",

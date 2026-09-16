@@ -46,6 +46,7 @@ pub fn spawn(core: Arc<Core>) {
     tokio::spawn(rotate_idle_downloads(Arc::clone(&core)));
     tokio::spawn(guard_disk_space(Arc::clone(&core)));
     tokio::spawn(apply_tracker_rules(Arc::clone(&core)));
+    tokio::spawn(keep_the_peer_ledger(Arc::clone(&core)));
     tokio::spawn(announce_torrents(Arc::clone(&core)));
     tokio::spawn(watch_for_a_test_message(Arc::clone(&core)));
     tokio::spawn(maintain_country_database(Arc::clone(&core)));
@@ -702,6 +703,147 @@ fn sweep_space(
     }
 
     (released, paused)
+}
+
+// ------------------------------------------------------------ peer ledger
+
+/// Keeps a running account of what each peer has done.
+///
+/// libtorrent's per-peer counters belong to a connection and die with it, so
+/// nothing in a torrent client can answer "what has that address ever given
+/// back" — every visit looks unremarkable on its own. This samples them and
+/// adds the differences, so the answer accumulates.
+///
+/// Off unless asked for. It costs a peer list per torrent per pass and a
+/// record per address, which nobody should pay for a question they never ask.
+async fn keep_the_peer_ledger(core: Arc<Core>) {
+    // How often the sample is taken. Short enough that a peer that connects,
+    // takes what it wants and leaves is caught at least once; long enough that
+    // a library of a few hundred torrents is not asked about its peers
+    // constantly.
+    const EVERY: Duration = Duration::from_secs(15);
+    // The ledger is written on the way out, and on this timer as well: a
+    // daemon that is killed rather than stopped should lose minutes, not days.
+    const SAVE_EVERY: Duration = Duration::from_secs(300);
+
+    let mut last_save = std::time::Instant::now();
+
+    loop {
+        tokio::time::sleep(EVERY).await;
+
+        let settings =
+            crate::peers::Settings::from_config(setting(&core, "peers").await.as_ref()).sane();
+        if !settings.enabled {
+            continue;
+        }
+
+        let now = now();
+        let ttl = settings.ttl_seconds();
+        let save = last_save.elapsed() >= SAVE_EVERY;
+        if save {
+            last_save = std::time::Instant::now();
+        }
+
+        let outcome = core
+            .manager
+            .with(move |state| sample_peers(state, now, ttl, save))
+            .await;
+
+        match outcome {
+            Ok((seen, forgotten)) => {
+                if forgotten > 0 {
+                    tracing::debug!(forgotten, "peers dropped from the ledger");
+                }
+                tracing::trace!(seen, "peers sampled");
+            }
+            Err(err) => tracing::warn!(error = %err, "the torrent manager is not answering"),
+        }
+    }
+}
+
+/// One pass of the sampler: every peer of every torrent that has any.
+///
+/// Done inside the session thread, because that is where the peer lists are,
+/// and in one pass rather than one call per torrent: the cost of this feature
+/// is dominated by how often it crosses that boundary.
+fn sample_peers(
+    state: &mut crate::manager::SessionState,
+    now: f64,
+    ttl: f64,
+    save: bool,
+) -> (usize, usize) {
+    let statuses = state.session.all_torrent_status();
+
+    // Gathered first, then folded in, so the ledger's lock is taken once and
+    // not once per torrent.
+    let mut observations: Vec<crate::peers::Observation> = Vec::new();
+
+    for status in &statuses {
+        // Nothing to ask about, and the call is not free.
+        if status.num_peers <= 0 {
+            continue;
+        }
+        let Ok(peers) = state.session.peers(&status.info_hash) else {
+            continue;
+        };
+        if peers.is_empty() {
+            continue;
+        }
+
+        // The fingerprint of what this torrent carries, computed the first
+        // time it is wanted and kept: the file list cannot change once the
+        // metadata is there, and this is the one call in the pass that has to
+        // go and fetch something.
+        let content = match state.torrents.get(&status.info_hash) {
+            Some(torrent) => match &torrent.content_id {
+                Some(id) => id.clone(),
+                None => {
+                    let files = state.session.files(&status.info_hash).unwrap_or_default();
+                    let id = crate::torrent::content_fingerprint(&files);
+                    if let Some(torrent) = state.torrents.get_mut(&status.info_hash) {
+                        // Stored even when empty: an empty answer means the
+                        // metadata is not there yet, and asking again next
+                        // pass is the point.
+                        if !id.is_empty() {
+                            torrent.content_id = Some(id.clone());
+                        }
+                    }
+                    id
+                }
+            },
+            None => continue,
+        };
+
+        for peer in peers {
+            observations.push(crate::peers::Observation {
+                address: peer.ip.clone(),
+                client: peer.client.clone(),
+                torrent: status.info_hash.clone(),
+                content: content.clone(),
+                // Ours is what we sent them: libtorrent's `total_upload` is
+                // the upload of this connection, which is us to them.
+                sent: peer.total_upload,
+                received: peer.total_download,
+            });
+        }
+    }
+
+    let seen = observations.len();
+    let Ok(mut ledger) = state.peers.lock() else {
+        return (0, 0);
+    };
+    for observation in &observations {
+        ledger.observe(observation, now);
+    }
+    let forgotten = ledger.forget_old(now, ttl);
+    let should_save = save;
+    drop(ledger);
+
+    if should_save {
+        state.save_peers();
+    }
+
+    (seen, forgotten)
 }
 
 // ------------------------------------------------------------ tracker rules

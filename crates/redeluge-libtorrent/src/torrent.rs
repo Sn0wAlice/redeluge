@@ -321,6 +321,12 @@ pub struct PeerInfo {
     pub encrypted: bool,
     /// How many pieces this peer has that we do not.
     pub useful_pieces: i32,
+    /// Bytes sent to and received from this peer, on this connection only.
+    ///
+    /// Both reset when the peer reconnects, so a running total has to be kept
+    /// by whoever wants one: see the daemon's peer ledger.
+    pub total_upload: i64,
+    pub total_download: i64,
 }
 
 impl From<ffi::PeerInfo> for PeerInfo {
@@ -338,6 +344,8 @@ impl From<ffi::PeerInfo> for PeerInfo {
             utp: raw.utp,
             encrypted: raw.encrypted,
             useful_pieces: raw.useful_pieces,
+            total_upload: raw.total_upload,
+            total_download: raw.total_download,
         }
     }
 }

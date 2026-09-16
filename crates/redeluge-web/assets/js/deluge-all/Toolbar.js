@@ -103,6 +103,17 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
                         scope: this,
                     },
                     {
+                        // What each peer has done, which is a different
+                        // question from what the daemon has done and so a
+                        // different window.
+                        id: 'peers',
+                        disabled: true,
+                        text: _('Peers'),
+                        iconCls: 'x-deluge-peer',
+                        handler: this.onPeersClick,
+                        scope: this,
+                    },
+                    {
                         id: 'connectionman',
                         text: _('Connection Manager'),
                         iconCls: 'x-deluge-connection-manager',
@@ -165,6 +176,7 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
         'up',
         'down',
         'activity',
+        'peers',
     ],
 
     initComponent: function () {
@@ -234,6 +246,13 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
             deluge.activityWindow = new Deluge.ActivityWindow();
         }
         deluge.activityWindow.show();
+    },
+
+    onPeersClick: function () {
+        if (!deluge.peersWindow) {
+            deluge.peersWindow = new Deluge.PeersWindow();
+        }
+        deluge.peersWindow.show();
     },
 
     onHelpClick: function () {

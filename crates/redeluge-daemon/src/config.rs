@@ -433,6 +433,7 @@ pub fn defaults(config_dir: &Path) -> Vec<(String, Json)> {
             "blocklist".into(),
             crate::features::blocklist::Settings::default_json(),
         ),
+        ("peers".into(), crate::peers::Settings::default_json()),
         (
             "scheduler".into(),
             crate::features::scheduler::Settings::default_json(),

@@ -61,6 +61,12 @@ pub struct SessionState {
     /// thread and the ones on the async side write to the same history, or it
     /// would answer "why is this paused" for half the reasons.
     pub activity: std::sync::Arc<crate::activity::Log>,
+    /// What each peer has done, across connections and restarts.
+    ///
+    /// Written by the sampler on the async side and saved from this thread on
+    /// the way out, which is the only moment the connection counters have to
+    /// be forgotten.
+    pub peers: std::sync::Arc<std::sync::Mutex<crate::peers::Ledger>>,
     /// Where peer countries come from, when the operator provided a database.
     countries: Option<crate::geoip::CountryLookup>,
     config_dir: PathBuf,
@@ -95,6 +101,21 @@ impl SessionState {
 
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
+    }
+
+    /// Writes the peer ledger out.
+    ///
+    /// The per-connection counters go first: they describe connections that
+    /// will not exist next time, and a stored counter that the next sample
+    /// cannot beat would swallow that peer's next few gibibytes.
+    pub fn save_peers(&mut self) {
+        let Ok(mut ledger) = self.peers.lock() else {
+            return;
+        };
+        ledger.forget_connections();
+        if let Err(err) = ledger.save(&self.config_dir) {
+            tracing::warn!(error = %err, "could not write the peer ledger");
+        }
     }
 
     /// Drops everything on disk that belongs to one torrent.
@@ -233,6 +254,7 @@ pub struct Manager {
     jobs: mpsc::Sender<Job>,
     events: tokio::sync::broadcast::Sender<Event>,
     activity: std::sync::Arc<crate::activity::Log>,
+    peers: std::sync::Arc<std::sync::Mutex<crate::peers::Ledger>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -259,6 +281,11 @@ impl Manager {
         let session = Session::new(&settings)?;
         let (jobs, inbox) = mpsc::channel::<Job>();
         let activity = std::sync::Arc::new(crate::activity::Log::default());
+        // Read before the session runs, because the first sample has to know
+        // what was already there or it would start everybody at zero.
+        let peers = std::sync::Arc::new(std::sync::Mutex::new(crate::peers::Ledger::load(
+            &config_dir,
+        )));
 
         let state = SessionState {
             session,
@@ -271,6 +298,7 @@ impl Manager {
             low_space: false,
             paused_by_session: std::collections::BTreeSet::new(),
             activity: std::sync::Arc::clone(&activity),
+            peers: std::sync::Arc::clone(&peers),
             countries: None,
             config_dir,
             dirty: false,
@@ -280,6 +308,7 @@ impl Manager {
             jobs,
             events: events.clone(),
             activity,
+            peers,
         };
 
         std::thread::Builder::new()
@@ -320,6 +349,11 @@ impl Manager {
     /// What the daemon has done on its own.
     pub fn activity(&self) -> &std::sync::Arc<crate::activity::Log> {
         &self.activity
+    }
+
+    /// What each peer has done.
+    pub fn peers(&self) -> &std::sync::Arc<std::sync::Mutex<crate::peers::Ledger>> {
+        &self.peers
     }
 
     fn emit(&self, event: Event) {
@@ -455,6 +489,7 @@ fn stop(state: &mut SessionState) {
     tracing::info!("torrent manager stopping");
     let _ = state.save_state();
     let _ = state.save_resume_data();
+    state.save_peers();
 }
 
 /// Pauses or removes torrents that have reached their share ratio.

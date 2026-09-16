@@ -421,6 +421,12 @@ rust::Vec<PeerInfo> Session::peers(rust::Str info_hash) const {
     }
     entry.useful_pieces = useful;
 
+    // What this connection has actually moved, which is the only honest
+    // measure of what a peer is worth: the speeds above are a snapshot, and a
+    // peer that took forty gibibytes and gave nothing back looks idle in both.
+    entry.total_upload = static_cast<int64_t>(peer.total_upload);
+    entry.total_download = static_cast<int64_t>(peer.total_download);
+
     out.push_back(std::move(entry));
   }
   return out;
