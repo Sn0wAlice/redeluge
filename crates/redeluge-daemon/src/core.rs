@@ -1566,13 +1566,20 @@ impl Rpc for Core {
                     .filter(|limit| *limit > 0)
                     .map(|limit| limit as usize)
                     .unwrap_or(500);
+                // Narrows the ledger before the limit, so a search finds a
+                // peer that is not one of the biggest takers.
+                let query = args
+                    .get(1)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
 
                 let rows: Vec<(String, crate::peers::Record)> = {
                     let Ok(ledger) = self.manager.peers().lock() else {
                         return Ok(Value::List(Vec::new()));
                     };
                     ledger
-                        .takers(limit)
+                        .takers(limit, &query)
                         .into_iter()
                         .map(|(address, record)| (address.clone(), record.clone()))
                         .collect()

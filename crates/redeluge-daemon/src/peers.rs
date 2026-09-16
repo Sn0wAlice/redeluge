@@ -300,8 +300,19 @@ impl Ledger {
     }
 
     /// The addresses that have taken the most, most first.
-    pub fn takers(&self, limit: usize) -> Vec<(&String, &Record)> {
-        let mut rows: Vec<(&String, &Record)> = self.peers.iter().collect();
+    ///
+    /// `query` narrows by address or client before the limit is applied, and
+    /// that order matters: the interface only ever asks for a few hundred of
+    /// what may be twenty thousand records, so a search the caller applied
+    /// afterwards would be a search of the biggest takers rather than of the
+    /// ledger. Empty matches everything.
+    pub fn takers(&self, limit: usize, query: &str) -> Vec<(&String, &Record)> {
+        let query = query.trim().to_lowercase();
+        let mut rows: Vec<(&String, &Record)> = self
+            .peers
+            .iter()
+            .filter(|(address, record)| matches(address, record, &query))
+            .collect();
         rows.sort_by_key(|row| std::cmp::Reverse(row.1.sent));
         rows.into_iter().take(limit).collect()
     }
@@ -313,12 +324,23 @@ impl Ledger {
         config_dir.join("state").join("peers.json")
     }
 
+    /// The half-written file a save goes through.
+    fn temporary_path(config_dir: &Path) -> PathBuf {
+        Self::path(config_dir).with_extension("json.tmp")
+    }
+
     /// Reads it back, or starts empty.
     ///
     /// A file that cannot be read is a warning and an empty ledger, never a
     /// refusal to start: this is a record of what peers did, and no torrent
     /// depends on it.
     pub fn load(config_dir: &Path) -> Self {
+        // Anything left of a previous save goes now. It is either a crash
+        // leftover or about to be overwritten, and it is a second copy of
+        // every address this daemon has seen: leaving one behind means
+        // deleting the ledger does not delete the ledger.
+        let _ = std::fs::remove_file(Self::temporary_path(config_dir));
+
         let path = Self::path(config_dir);
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
@@ -348,10 +370,31 @@ impl Ledger {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let temporary = path.with_extension("json.tmp");
+        let temporary = Self::temporary_path(config_dir);
         std::fs::write(&temporary, serde_json::to_vec(self)?)?;
-        std::fs::rename(&temporary, &path)
+
+        // A failed rename must not leave the copy behind, for the same reason
+        // the load above sweeps one: it is the whole ledger, under a name
+        // nothing will ever read or clean up.
+        if let Err(err) = std::fs::rename(&temporary, &path) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(err);
+        }
+        Ok(())
     }
+}
+
+/// Whether a record answers a search.
+///
+/// The address and the client, which are the two things about a peer anybody
+/// knows well enough to type. Case-insensitive, and a substring rather than a
+/// prefix: `.14.` is a reasonable thing to look for in an address, and
+/// `qbit` in a client.
+fn matches(address: &str, record: &Record, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    address.to_lowercase().contains(query) || record.client.to_lowercase().contains(query)
 }
 
 /// How much a counter advanced since the last sample.
@@ -371,6 +414,7 @@ mod tests {
     use super::*;
 
     fn seen(address: &str, torrent: &str, sent: i64, received: i64) -> Observation {
+        // `client` is overwritten by the tests that care about it.
         Observation {
             address: address.to_owned(),
             client: "qBittorrent 4.6".to_owned(),
@@ -462,6 +506,39 @@ mod tests {
     }
 
     #[test]
+    fn a_search_looks_through_the_ledger_rather_than_through_the_answer() {
+        // The order that matters: filter, then cut to the limit. Cutting first
+        // would search the biggest takers only, and the peer somebody is
+        // looking for is usually not one of those.
+        let mut ledger = Ledger::default();
+        for index in 0..10 {
+            let mut seen = seen(&format!("10.0.0.{index}"), "abc", (index as i64) * 100, 0);
+            seen.client = if index == 0 {
+                "Transmission 4.0".to_owned()
+            } else {
+                "qBittorrent 4.6".to_owned()
+            };
+            ledger.observe(&seen, 1.0);
+        }
+
+        // 10.0.0.0 took the least, so it is nowhere near the top three.
+        let top = ledger.takers(3, "");
+        assert_eq!(top.len(), 3);
+        assert!(!top.iter().any(|(address, _)| *address == "10.0.0.0"));
+
+        // And it is still found by its client, and by part of its address.
+        let found = ledger.takers(3, "transmission");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "10.0.0.0");
+        assert_eq!(ledger.takers(50, "0.0.7").len(), 1);
+
+        // Case does not matter, and nothing matches nothing.
+        assert_eq!(ledger.takers(50, "QBITTORRENT").len(), 9);
+        assert!(ledger.takers(50, "no such peer").is_empty());
+        assert_eq!(ledger.takers(50, "   ").len(), 10, "blank is not a search");
+    }
+
+    #[test]
     fn an_address_nobody_has_seen_for_the_limit_is_forgotten() {
         let mut ledger = Ledger::default();
         ledger.observe(&seen("1.2.3.4", "abc", 10, 10), 0.0);
@@ -486,6 +563,32 @@ mod tests {
 
         ledger.observe(&seen("1.2.3.4", "abc", 500, 0), 2.0);
         assert_eq!(ledger.peers["1.2.3.4"].sent, 1_000);
+    }
+
+    #[test]
+    fn a_half_written_file_is_not_left_lying_about() {
+        // It holds every address the ledger does. Deleting peers.json and
+        // finding the addresses still on disk under another name would make a
+        // nonsense of the thing forgetting at all.
+        let dir = std::env::temp_dir().join(format!("redeluge-peers-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("state")).expect("the scratch directory");
+
+        let stale = Ledger::temporary_path(&dir);
+        std::fs::write(&stale, b"half a ledger").expect("the leftover");
+        assert!(stale.is_file());
+
+        let ledger = Ledger::load(&dir);
+        assert!(!stale.exists(), "a leftover survived a load");
+        assert!(ledger.peers.is_empty());
+
+        // And a save leaves only the file it means to.
+        let mut ledger = Ledger::default();
+        ledger.observe(&seen("1.2.3.4", "abc", 1, 2), 1.0);
+        ledger.save(&dir).expect("the save");
+        assert!(Ledger::path(&dir).is_file());
+        assert!(!stale.exists());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -359,8 +359,13 @@ sent anywhere, and no rule in this daemon acts on it.
 A torrent removed since is still listed, by its infohash: what a peer moved is
 no less true for the torrent being gone.
 
+The toolbar has a box that narrows the list by address or client, and every
+column sorts. The search is answered by the daemon, not applied to what is on
+screen: the window holds the five hundred biggest takers, and the peer you are
+looking for is usually not one of those.
+
 Over the API: `redeluge.get_peers`, biggest taker first, optionally with a
-limit. Each entry's `torrents` is the list itself — hash, name and whether that
+limit and a search to narrow by address or client before that limit. Each entry's `torrents` is the list itself — hash, name and whether that
 torrent is one the peer also carries elsewhere — not a count. The `peers` key of `core.conf` holds `enabled` and `ttl_days`.
 
 ## What the daemon did on its own

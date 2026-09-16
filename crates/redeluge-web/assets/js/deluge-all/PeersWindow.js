@@ -50,6 +50,9 @@ Deluge.PeersWindow = Ext.extend(Ext.Window, {
         Deluge.PeersWindow.superclass.initComponent.call(this);
 
         this.store = new Ext.data.ArrayStore({
+            // What the daemon answers in, so the first thing on screen is the
+            // biggest taker; the header clicks take it from there.
+            sortInfo: { field: 'sent', direction: 'DESC' },
             fields: [
                 { name: 'address', type: 'string' },
                 { name: 'client', type: 'string' },
@@ -104,6 +107,27 @@ Deluge.PeersWindow = Ext.extend(Ext.Window, {
             // On the grid rather than as a second item of this window: the
             // layout is `fit`, which draws one thing.
             tbar: [
+                {
+                    // Sent to the daemon rather than applied here: the window
+                    // holds the five hundred biggest takers, and the peer
+                    // somebody is looking for is usually not one of those.
+                    xtype: 'textfield',
+                    width: 150,
+                    emptyText: _('Address or client'),
+                    enableKeyEvents: true,
+                    listeners: {
+                        keyup: {
+                            fn: this.onSearchKey,
+                            scope: this,
+                            // A request per keystroke would be one per letter.
+                            buffer: 400,
+                        },
+                    },
+                    ref: '../../search',
+                },
+                ' ',
+                '-',
+                ' ',
                 this.enabled,
                 '  ',
                 '-',
@@ -125,49 +149,62 @@ Deluge.PeersWindow = Ext.extend(Ext.Window, {
                 emptyText: _('No peers recorded yet.'),
                 deferEmptyText: false,
             },
+            listeners: {
+                // The empty text is fixed at render, and "no peers recorded
+                // yet" is a lie once something has been typed in the box.
+                viewready: { fn: this.rememberEmptyText, scope: this },
+            },
             columns: [
                 {
                     header: _('Address'),
+                    sortable: true,
                     dataIndex: 'address',
                     width: 140,
                     renderer: Ext.util.Format.htmlEncode,
                 },
                 {
                     header: _('Client'),
+                    sortable: true,
                     dataIndex: 'client',
                     width: 150,
                     renderer: Ext.util.Format.htmlEncode,
                 },
                 {
                     header: _('Took'),
+                    sortable: true,
                     dataIndex: 'sent',
                     width: 90,
                     renderer: fsize,
                 },
                 {
                     header: _('Gave'),
+                    sortable: true,
                     dataIndex: 'received',
                     width: 90,
                     renderer: fsize,
                 },
                 {
                     header: _('Gave back'),
+                    sortable: true,
                     dataIndex: 'ratio',
                     width: 80,
                     renderer: this.renderRatio,
                 },
                 {
                     header: _('Torrents'),
+                    sortable: true,
                     dataIndex: 'torrents',
                     width: 70,
                 },
                 {
                     header: _('Cross-seeds'),
+                    sortable: true,
                     dataIndex: 'cross_seeds',
                     width: 95,
                 },
                 {
                     header: _('Last seen'),
+                    sortable: true,
                     dataIndex: 'last_seen',
                     width: 130,
                     renderer: this.renderLastSeen,
@@ -246,8 +283,29 @@ Deluge.PeersWindow = Ext.extend(Ext.Window, {
         });
     },
 
+    rememberEmptyText: function () {
+        this.emptyWithout = this.grid.getView().emptyText;
+    },
+
+    setEmptyText: function () {
+        var view = this.grid.getView();
+        if (!view || !this.emptyWithout) return;
+        view.emptyText = this.query
+            ? Ext.util.Format.htmlEncode(
+                  String.format(_('No peer matches "{0}".'), this.query)
+              )
+            : this.emptyWithout;
+    },
+
+    onSearchKey: function (field) {
+        var wanted = field.getValue() || '';
+        if (wanted === this.query) return;
+        this.query = wanted;
+        this.load();
+    },
+
     load: function () {
-        deluge.client.redeluge.get_peers(500, {
+        deluge.client.redeluge.get_peers(500, this.query || '', {
             success: function (peers) {
                 if (!this.isVisible()) return;
                 var rows = [];
@@ -269,6 +327,7 @@ Deluge.PeersWindow = Ext.extend(Ext.Window, {
                     ]);
                 });
                 var chosen = this.grid.getSelectionModel().getSelected();
+                this.setEmptyText();
                 this.store.loadData(rows);
                 // The reload drops the selection, and a detail panel about a
                 // peer that is no longer highlighted is worse than none.

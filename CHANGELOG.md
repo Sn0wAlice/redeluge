@@ -7,6 +7,31 @@ redeluge numbers its own releases from 1.0.0. The version the daemon reports
 to clients stays `2.2.1`, because that is the Deluge a client expects to be
 talking to.
 
+## [1.5.1] — 2026-09-16
+
+### Added
+
+- **The Peers window can be searched and sorted.** A box in its toolbar narrows
+  by address or client — case-insensitive, anywhere in the string, so `.14.` or
+  `qbit` both work — and every column now sorts.
+- The search is answered by the daemon rather than applied to what the window
+  already holds, and the order matters: the window asks for the five hundred
+  biggest takers, and the peer somebody is looking for is usually not one of
+  those. `redeluge.get_peers` takes the search as a second argument and narrows
+  the ledger before the limit.
+- A search that finds nothing says which search found nothing, instead of
+  claiming no peers have been recorded.
+
+### Fixed
+
+- **A half-written peer ledger could be left on disk.** The save goes through a
+  temporary file and renames it, which is right, but nothing removed that file
+  if the rename never happened — and it holds every address the ledger does, so
+  deleting `peers.json` left the addresses on disk under another name. A failed
+  save now takes its temporary file with it, and a load sweeps any it finds.
+  Seen once here, cause not established: the rename works on the mount it
+  happened on, and the ledger it was supposed to write survived the restart.
+
 ## [1.5.0] — 2026-09-16
 
 ### Added
