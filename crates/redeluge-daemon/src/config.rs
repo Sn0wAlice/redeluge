@@ -406,7 +406,9 @@ pub fn defaults(config_dir: &Path) -> Vec<(String, Json)> {
         // namespace: which label a torrent carries is a torrent option, but
         // the register of labels that exist has to be a setting, because a
         // label with nothing in it yet is the one an external client is about
-        // to start using.
+        // to start using. `tracker` was never a plugin: it is the same idea
+        // applied to the grouping the sidebar already had, so a rule can be
+        // set on a tracker instead of on each torrent that arrives from it.
         (
             "autoadd".into(),
             crate::features::autoadd::Settings::default_json(),
@@ -434,6 +436,10 @@ pub fn defaults(config_dir: &Path) -> Vec<(String, Json)> {
         (
             "scheduler".into(),
             crate::features::scheduler::Settings::default_json(),
+        ),
+        (
+            "tracker".into(),
+            crate::features::tracker::Settings::default_json(),
         ),
         (
             "webhook".into(),

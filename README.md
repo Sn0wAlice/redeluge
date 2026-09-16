@@ -91,6 +91,43 @@ redeluge, and [TODO.md](TODO.md) is what is outstanding.
 - [Homepage](https://deluge-torrent.org) and [forum](https://forum.deluge-torrent.org) for upstream Deluge
 - Upstream [user guide](https://dev.deluge-torrent.org/wiki/UserGuide), most of which still applies
 
+## Legal
+
+BitTorrent is a file transfer protocol. It is lawful, it is ordinary, and it is
+how a great deal of legitimate software is distributed: Linux and BSD images,
+the Internet Archive's collections, game patches, scientific datasets, and any
+large file whose publisher would rather not pay for the bandwidth alone.
+redeluge is a client for that protocol, in the same sense that a web browser is
+a client for HTTP.
+
+What this program is, precisely:
+
+- A general-purpose BitTorrent client. It moves the files you tell it to move.
+- It ships with no content, no torrents, no trackers, no magnet links and no
+  index or search of any kind. It cannot find anything for you; you supply
+  every torrent it works on.
+- It does not host, index, store or distribute anyone else's material, and
+  neither does this repository.
+
+What you do with it is yours to answer for. Downloading or sharing material you
+have no right to download or share is unlawful in most countries, and nothing
+here is an encouragement to do it: the author does not condone copyright
+infringement and has no interest in it. Copyright law, and what counts as fair
+dealing or private copying under it, differs from one jurisdiction to the next.
+Knowing which rules apply to you, and obeying them, is your responsibility and
+not this program's.
+
+This is free software, provided with **no warranty of any kind**, express or
+implied, to the extent permitted by law: see sections 15 and 16 of
+[LICENSE](LICENSE). Nobody who wrote it is liable for what it is used for, what
+it does to your files, or what your network operator, your tracker or your
+jurisdiction makes of your use of it.
+
+If you believe specific material is being shared unlawfully, the people to
+approach are whoever is hosting or distributing that material. There is nothing
+of it here: this repository contains source code, and the project has no
+servers, no swarm, no user data and no way to act on any particular file.
+
 ## Licence
 
 GPL-3.0-or-later, with Deluge's OpenSSL linking exception, unchanged from

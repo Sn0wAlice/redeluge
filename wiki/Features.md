@@ -129,6 +129,101 @@ swallow the error anyway. And `label.set_torrent` with a label nobody created
 been skipped or lost, and refusing means a download silently lands with no
 category.
 
+## Tracker rules
+
+Right-click a tracker in the sidebar and choose *Settings*. A tracker is not
+something you create, the way a label is: it is whatever the torrents you added
+announce to, and the sidebar has been grouping them by it all along. This is a
+place to say what should happen to that group, once, instead of setting it on
+every torrent that arrives from it.
+
+Three rules, each off for every tracker until you turn it on for one by name.
+They are applied in the order below, which is the order that matters when a
+torrent qualifies for more than one: a torrent is filed under the right name
+before it is moved, and moved before it is taken away.
+
+### Label them
+
+| Option | |
+|---|---|
+| `auto_label` | Put these torrents in a label |
+| `label` | Which label. It is created if it does not exist, and whatever that label applies is applied |
+| `label_on_add` | When the torrent arrives, if it has no label yet. On by default: a rule that names a label and says nothing about when means the obvious thing |
+| `label_when_done` | When it has finished, replacing whatever label it has |
+| `label_after_hours` | How long to wait after it finished, for that second one |
+
+Arrival never overwrites: a torrent you filed by hand stays where you put it.
+Completion does, because that is what it is for — moving a torrent from the
+label it downloaded under to the one it is kept under.
+
+### Move them
+
+| Option | |
+|---|---|
+| `auto_move` | Move the files once the torrent has finished |
+| `move_path` | Where to. A move to where they already are is not a move |
+| `move_after_hours` | How long to wait after it finished |
+
+The destination disk is measured before anything is copied, and it is not
+always the disk the files are on now: a folder inside the download folder can
+be a mount point for another drive, which is exactly the case that fills a disk
+up. If the move would leave under a gibibyte free at the destination, it is not
+started, the log says so once, and it is reconsidered on the next pass — so
+freeing space is all it takes. A move within one filesystem is a rename that
+writes nothing, and is never refused.
+
+### Remove them
+
+| Option | |
+|---|---|
+| `auto_remove` | Remove a finished torrent once its wait is up |
+| `remove_after_hours` | How long to wait after it finished downloading. `0` means the next sweep, about a minute |
+| `remove_data` | Delete the downloaded files as well. Off, so the rule as first turned on removes the torrent and leaves the download alone |
+
+A tracker that asks for a day of seeding can be given a day and then clean up
+after itself, while the tracker beside it in the list is not touched. The
+removal is the same removal `core.remove_torrent` performs, announced to every
+connected client the same way, so an interface showing the torrent lets go of
+it rather than holding a row that no longer exists.
+
+### What "finished" means, and the one case it does not cover
+
+Every wait is measured from the moment the download finished, which is the time
+libtorrent recorded and keeps in the resume data, so it survives a restart of
+the daemon. Nothing is ever considered before the torrent is finished, and a
+torrent still being moved is left alone until it lands.
+
+libtorrent has no such time for a torrent it never saw finish, which is what
+adding a torrent over files that were already on disk looks like. The two
+kinds of rule answer that differently, on purpose:
+
+- **Labelling and moving** fall back to the time the torrent was added. Both
+  are undoable, and a rule that silently skipped every imported torrent would
+  be a rule that looks broken.
+- **Removing** does not. Deleting on a wait measured from a time nobody knows
+  is the one way this could take something unexpectedly, so a torrent with no
+  completion time is never removed by a tracker's rule.
+
+The daemon looks over the library once a minute.
+
+### Setting them without the interface
+
+It is one key, like the rest:
+
+```bash
+curl -s -b cookies.txt -H 'Content-Type: application/json' \
+  -d '{"method":"core.set_config","params":[{"tracker":{"trackers":{
+        "example.org":{"auto_remove":true,"remove_after_hours":48,"remove_data":true,
+                       "auto_move":true,"move_path":"/archive","move_after_hours":1,
+                       "auto_label":true,"label":"films","label_when_done":true}}}}],"id":1}' \
+  http://127.0.0.1:8112/json
+```
+
+The key is the tracker host as the sidebar groups it — `example.org`, not the
+announce URL — because that is the row the rule is set on. Remember that a key
+is replaced whole: send every tracker you want to keep a rule for, not just the
+one you are changing. The Web UI reads the current value and merges for you.
+
 ## Pausing idle downloads
 
 Off by default, under Preferences, Queue. A download that holds a place in the

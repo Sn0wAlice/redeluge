@@ -84,6 +84,72 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
             ],
         });
         this.relayEvents(this.list, ['selectionchange']);
+
+        // Right-clicking a tracker opens what the daemon does with that
+        // tracker's torrents. Only this list: the states are a fixed
+        // vocabulary with nothing to configure, and a label's options are in
+        // Preferences, where the list of labels is managed anyway.
+        if (this.filterType == 'tracker_host') {
+            this.list.on('contextmenu', this.onContextMenu, this);
+        }
+    },
+
+    /**
+     * The menu for one tracker row.
+     *
+     * The row is not selected on the way, deliberately: selecting one filters
+     * the torrent list, and a right-click that quietly changed what the list
+     * is showing would be a side effect nobody asked for.
+     */
+    onContextMenu: function (view, index, node, e) {
+        // The browser's own menu over a sidebar row offers nothing useful, and
+        // it is in the way whether or not this row has a menu of its own.
+        e.stopEvent();
+
+        var record = this.getStore().getAt(index);
+        if (!record) return;
+
+        // `All` is every tracker at once, and the empty row is the torrents
+        // that have no tracker. Neither is something a rule can be set on.
+        var host = record.id;
+        if (!host || host == 'All') return;
+
+        this.menuHost = host;
+
+        if (!this.menu) {
+            this.menu = new Ext.menu.Menu({
+                items: [
+                    {
+                        text: _('Settings...'),
+                        iconCls: 'x-deluge-preferences',
+                        handler: this.onSettingsClick,
+                        scope: this,
+                    },
+                ],
+            });
+        }
+        this.menu.showAt(e.getXY());
+    },
+
+    // The menu is not one of this panel's items, so it is not taken with it.
+    // The sidebar drops every panel on a disconnect, which happens as often as
+    // somebody's network does.
+    onDestroy: function () {
+        if (this.menu) {
+            this.menu.destroy();
+            this.menu = null;
+        }
+        Deluge.FilterPanel.superclass.onDestroy.call(this);
+    },
+
+    onSettingsClick: function () {
+        if (!this.menuHost) return;
+        // Built when it is first wanted rather than with the interface: most
+        // sessions never open it.
+        if (!deluge.trackerSettings) {
+            deluge.trackerSettings = new Deluge.TrackerSettingsWindow();
+        }
+        deluge.trackerSettings.show(this.menuHost);
     },
 
     /**

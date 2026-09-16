@@ -444,6 +444,7 @@ const ADDED_BY_REDELUGE: &[&str] = &[
     "idle_pause",
     "label",
     "scheduler",
+    "tracker",
     "webhook",
 ];
 
@@ -511,6 +512,22 @@ fn each_feature_is_off_until_someone_turns_it_on() {
                 config.get(key).and_then(|value| value.get("labels")),
                 Some(&json!({})),
                 "`label` should start with no labels in it"
+            );
+            continue;
+        }
+        // A register too, and the one that removes torrents: it starts with no
+        // tracker in it, and an entry that is added has every rule off until
+        // somebody sets one.
+        if *key == "tracker" {
+            assert_eq!(
+                config.get(key).and_then(|value| value.get("trackers")),
+                Some(&json!({})),
+                "`tracker` should start with no rules in it"
+            );
+            assert!(
+                !redeluge_daemon::features::tracker::Settings::from_config(config.get(key))
+                    .any_rule(),
+                "`tracker` should ask for nothing out of the box"
             );
             continue;
         }

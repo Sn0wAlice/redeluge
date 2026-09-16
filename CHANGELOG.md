@@ -7,6 +7,55 @@ redeluge numbers its own releases from 1.0.0. The version the daemon reports
 to clients stays `2.2.1`, because that is the Deluge a client expects to be
 talking to.
 
+## [1.4.0] — 2026-09-16
+
+### Added
+
+- **A tracker can be given rules of its own.** Right-click a tracker in the
+  sidebar and choose *Settings*. A tracker is not something you create, the way
+  a label is: it is whatever the torrents you added announce to, and the
+  sidebar has been grouping them by it all along. This is somewhere to say what
+  should happen to that group, once, rather than on every torrent that arrives
+  from it. Stored under the `tracker` key of `core.conf`, so `core.get_config`
+  and `core.set_config` configure it like every other feature and no RPC method
+  was added.
+- **Label them.** A torrent from this tracker gets the label when it arrives,
+  when it finishes, or a set number of hours after it finishes, and the label
+  is created if it is not there yet. Arrival never overwrites a label you set
+  by hand; completion does, which is how a torrent moves from the label it
+  downloaded under to the one it is kept under.
+- **Move them.** The files go somewhere else a set number of hours after the
+  download finished — and the destination disk is measured first, because it is
+  not always the disk the files are on now: a folder inside the download folder
+  can be a mount point for another drive, which is exactly the case that fills
+  one up. A move that would leave under a gibibyte free at the destination is
+  not started, is logged once, and is reconsidered on the next pass, so freeing
+  space is all it takes. A move within one filesystem is a rename that writes
+  nothing and is never refused.
+- **Remove them**, a set number of hours after they finished downloading, with
+  or without their files. What a tracker asking for a day or a week of seeding
+  used to make a chore, and what a disk fills up with when nobody does the
+  chore. The files are kept unless that tracker's entry says otherwise, so the
+  rule as first turned on does what `remove_at_ratio` does: the torrent goes,
+  the download stays.
+- Every wait is measured from the completion time libtorrent recorded, which is
+  kept in the resume data and survives a restart. Nothing is considered before
+  a torrent is finished, and one that is still being moved is left alone until
+  it lands. A torrent libtorrent never saw finish — one added over files that
+  were already on disk — has no such time: labelling and moving fall back to
+  when it was added, and removing does not happen at all, because deleting on a
+  wait measured from a time nobody knows is the one way this could take
+  something unexpectedly.
+- The removal is the one `core.remove_torrent` performs and is announced the
+  same way, so every connected client lets go of the torrent instead of holding
+  a row for something that no longer exists.
+
+### Changed
+
+- The README now says what this program is and is not: a BitTorrent client
+  that ships with no content, no trackers and no search, the responsibility for
+  what is done with it, and the warranty that free software does not come with.
+
 ## [1.3.1] — 2026-09-12
 
 ### Changed

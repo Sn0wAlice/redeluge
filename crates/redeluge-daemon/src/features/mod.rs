@@ -25,6 +25,7 @@ pub mod diskspace;
 pub mod idlepause;
 pub mod label;
 pub mod scheduler;
+pub mod tracker;
 pub mod webhook;
 
 use std::path::Path;
@@ -35,6 +36,7 @@ use redeluge_libtorrent::{AddTorrent, Setting};
 use serde_json::Value as Json;
 
 use crate::core::Core;
+use crate::events::Event;
 
 /// Starts the timers. Called once, after the daemon is up.
 pub fn spawn(core: Arc<Core>) {
@@ -42,6 +44,7 @@ pub fn spawn(core: Arc<Core>) {
     tokio::spawn(follow_schedule(Arc::clone(&core)));
     tokio::spawn(rotate_idle_downloads(Arc::clone(&core)));
     tokio::spawn(guard_disk_space(Arc::clone(&core)));
+    tokio::spawn(apply_tracker_rules(Arc::clone(&core)));
     tokio::spawn(announce_torrents(Arc::clone(&core)));
     tokio::spawn(watch_for_a_test_message(Arc::clone(&core)));
     tokio::spawn(maintain_country_database(Arc::clone(&core)));
@@ -77,6 +80,30 @@ pub fn without_nulls(value: &Json) -> Json {
 /// would otherwise write the same line to the log every few seconds and bury
 /// everything else.
 pub fn warn_malformed(feature: &str, error: &str) {
+    if !first_time(feature, error) {
+        return;
+    }
+    tracing::warn!(
+        feature,
+        error,
+        "the configuration is malformed, ignoring it"
+    );
+}
+
+/// Reports something this cannot do, once per distinct complaint.
+///
+/// The same guard, for the rules that are re-decided on a timer: a move that
+/// is refused because the destination is full is refused again a minute later,
+/// and every minute after that until somebody frees the space.
+pub fn warn_once(subject: &str, detail: &str) {
+    if !first_time(subject, detail) {
+        return;
+    }
+    tracing::warn!(subject, detail, "a rule could not be carried out");
+}
+
+/// Whether this complaint about this subject is a new one.
+fn first_time(subject: &str, detail: &str) -> bool {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
@@ -84,17 +111,13 @@ pub fn warn_malformed(feature: &str, error: &str) {
     let reported = REPORTED.get_or_init(Default::default);
 
     let Ok(mut reported) = reported.lock() else {
-        return;
+        return false;
     };
-    if reported.get(feature).map(String::as_str) == Some(error) {
-        return;
+    if reported.get(subject).map(String::as_str) == Some(detail) {
+        return false;
     }
-    reported.insert(feature.to_owned(), error.to_owned());
-    tracing::warn!(
-        feature,
-        error,
-        "the configuration is malformed, ignoring it"
-    );
+    reported.insert(subject.to_owned(), detail.to_owned());
+    true
 }
 
 /// Seconds since the Unix epoch, as the configuration stores them.
@@ -632,6 +655,328 @@ fn sweep_space(
     (released, paused)
 }
 
+// ------------------------------------------------------------ tracker rules
+
+/// Applies each tracker's rules to the torrents that announce to it.
+///
+/// Three rules, in the order that matters when a torrent qualifies for more
+/// than one: label it, move it, then remove it. Labelling first so a torrent
+/// is filed correctly while it still exists; removing last for the same
+/// reason. A torrent whose move is starting in this pass is not removed in it,
+/// because the removal would land in the middle of the move.
+///
+/// The removal is the one rule in the daemon that deletes something nobody
+/// pressed a button for, so it is written to be boring and to be refused
+/// easily: off unless a named tracker has it on, only ever a torrent
+/// libtorrent calls finished, measured from a completion time libtorrent
+/// recorded, and the files kept unless that tracker's entry says otherwise.
+///
+/// A minute between passes. The delays are in hours, so a sweep any more eager
+/// than that would only be work; a sweep any lazier would make a delay of zero
+/// look broken.
+async fn apply_tracker_rules(core: Arc<Core>) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+
+        let settings =
+            tracker::Settings::from_config(setting(&core, "tracker").await.as_ref()).sane();
+        // Nothing configured is the normal case, and what is behind this check
+        // is a status sweep of the whole library.
+        if !settings.any_rule() {
+            continue;
+        }
+
+        let now = now();
+        let work = match core
+            .manager
+            .with(move |state| decide_tracker_work(state, &settings, now))
+            .await
+        {
+            Ok(work) => work,
+            Err(err) => {
+                tracing::warn!(error = %err, "the torrent manager is not answering");
+                continue;
+            }
+        };
+
+        for (id, host, label) in work.labels {
+            // The same call `label.set_torrent` makes, so the label is created
+            // if it has gone missing and whatever it applies is applied.
+            match core.assign_label(&id, &label).await {
+                Ok(()) => tracing::info!(torrent = %id, tracker = %host, %label,
+                    "labelled by the tracker's rule"),
+                Err(err) => tracing::warn!(torrent = %id, %label, error = %err.message,
+                    "could not label a torrent its tracker's rule names"),
+            }
+        }
+
+        for candidate in work.moves {
+            start_tracker_move(&core, &candidate).await;
+        }
+
+        for (id, host, with_data) in work.removals {
+            remove_for_tracker(&core, &id, &host, with_data).await;
+        }
+    }
+}
+
+/// What one pass of the tracker rules has decided.
+#[derive(Default)]
+struct TrackerWork {
+    /// `(torrent, tracker, label)`
+    labels: Vec<(String, String, String)>,
+    moves: Vec<TrackerMove>,
+    /// `(torrent, tracker, delete the files too)`
+    removals: Vec<(String, String, bool)>,
+}
+
+/// A move a tracker's rule asks for, before anybody has looked at the disk.
+struct TrackerMove {
+    id: String,
+    host: String,
+    from: String,
+    to: String,
+    /// What will have to fit at the destination.
+    size: i64,
+}
+
+/// One pass over the library: what each tracker's rules have to say about it.
+///
+/// Decided here and carried out by the caller, so the session thread is not
+/// held while a disk is measured or a label is written to the configuration.
+fn decide_tracker_work(
+    state: &mut crate::manager::SessionState,
+    settings: &tracker::Settings,
+    now: f64,
+) -> TrackerWork {
+    let mut work = TrackerWork::default();
+
+    for status in state.session.all_torrent_status() {
+        let Some(torrent) = state.torrents.get(&status.info_hash) else {
+            continue;
+        };
+
+        // The sidebar's grouping, so a rule applies to the row somebody set it
+        // on. The two have to be the same function or the rule silently never
+        // matches.
+        let trackers = state
+            .session
+            .trackers(&status.info_hash)
+            .unwrap_or_default();
+        let announced = crate::torrent::current_tracker(&status.current_tracker, &trackers);
+        let host = crate::torrent::tracker_host(&announced);
+
+        let Some(options) = settings.options(&host) else {
+            continue;
+        };
+        let id = status.info_hash.clone();
+
+        // When the rules that can be undone consider this finished, and when
+        // the one that cannot does. They differ, and `finished_at` says why.
+        let finished = tracker::finished_at(status.completed_time, status.added_time, false);
+        let finished_strictly =
+            tracker::finished_at(status.completed_time, status.added_time, true);
+
+        // ------------------------------------------------------------ label
+        if options.labels() {
+            // Normalised here rather than compared raw: `assign_label` stores
+            // the normal form, so comparing against what was typed would find
+            // them different every minute and relabel for ever.
+            let wanted = crate::core::normalise_label(&options.label);
+            let on_arrival = options.label_on_add && torrent.options.label.is_empty();
+            let on_completion = options.label_when_done
+                && status.is_finished
+                && tracker::due(finished, now, options.label_after_hours);
+
+            if (on_arrival || on_completion)
+                && torrent.options.label != wanted
+                && !wanted.is_empty()
+            {
+                work.labels.push((id.clone(), host.clone(), wanted));
+            }
+        }
+
+        // ------------------------------------------------------------- move
+        let mut moving = status.moving_storage;
+        if options.moves()
+            && status.is_finished
+            && !status.moving_storage
+            && tracker::due(finished, now, options.move_after_hours)
+            && status.save_path.trim_end_matches('/') != options.move_path.trim_end_matches('/')
+        {
+            moving = true;
+            work.moves.push(TrackerMove {
+                id: id.clone(),
+                host: host.clone(),
+                from: status.save_path.clone(),
+                to: options.move_path.clone(),
+                // What the files will take at the other end. `total_wanted` is
+                // the files that were asked for; `total_done` covers a torrent
+                // that has more on disk than it now wants.
+                size: status.total_wanted.max(status.total_done),
+            });
+        }
+
+        // ----------------------------------------------------------- remove
+        // Not while it is being moved, in this pass or already: removing a
+        // torrent out from under libtorrent's own file copy is the one way to
+        // end up with half of it in each place.
+        if options.removes()
+            && status.is_finished
+            && !moving
+            && tracker::due(finished_strictly, now, options.remove_after_hours)
+        {
+            work.removals.push((id, host, options.remove_data));
+        }
+    }
+
+    work
+}
+
+/// Starts a move a tracker's rule asked for, if the destination has room.
+///
+/// The disk is measured here rather than in the pass above, so the session
+/// thread is not held for a `statvfs` per torrent.
+async fn start_tracker_move(core: &Core, candidate: &TrackerMove) {
+    let destination = std::path::Path::new(&candidate.to);
+    let source = std::path::Path::new(&candidate.from);
+
+    let free = free_space_at(destination);
+    let same = on_the_same_filesystem(source, destination);
+
+    if !tracker::room_to_move(free, candidate.size, same) {
+        // Once per torrent and destination: this is re-decided every minute,
+        // and a disk that is full stays full for longer than that.
+        warn_once(
+            &format!("tracker move {} -> {}", candidate.id, candidate.to),
+            &format!(
+                "not moving it: {} free at the destination, {} needed with a gibibyte to spare",
+                free, candidate.size
+            ),
+        );
+        return;
+    }
+
+    let id = candidate.id.clone();
+    let to = candidate.to.clone();
+    let started = core
+        .manager
+        .with(move |state| {
+            let outcome = state.session.move_storage(&id, &to);
+            if outcome.is_ok() {
+                // What makes the status say "Moving" until libtorrent answers
+                // with the alert that updates the save path.
+                if let Some(torrent) = state.torrents.get_mut(&id) {
+                    torrent.moving_to = Some(to);
+                }
+            }
+            outcome
+        })
+        .await;
+
+    match started {
+        Ok(Ok(())) => tracing::info!(torrent = %candidate.id, tracker = %candidate.host,
+            destination = %candidate.to, "moving: the tracker's rule for finished torrents"),
+        Ok(Err(err)) => tracing::warn!(torrent = %candidate.id, error = %err,
+            "could not move a torrent its tracker's rule is due to move"),
+        Err(err) => tracing::warn!(error = %err, "the torrent manager is not answering"),
+    }
+}
+
+/// Removes a torrent a tracker's rule is done with.
+async fn remove_for_tracker(core: &Core, id: &str, host: &str, with_data: bool) {
+    // Announced before and after, like `core.remove_torrent`, because a client
+    // holding the torrent's details has to be told to let go of them before
+    // they stop existing.
+    core.manager.announce(Event::PreTorrentRemoved {
+        torrent_id: id.to_owned(),
+    });
+
+    let removed = {
+        let id = id.to_owned();
+        core.manager
+            .with(move |state| {
+                let outcome = state.session.remove_torrent(&id, with_data);
+                state.torrents.remove(&id);
+                state.forget(&id);
+                state.mark_dirty();
+                let _ = state.save_state();
+                outcome
+            })
+            .await
+    };
+
+    match removed {
+        Ok(Ok(())) => {
+            tracing::info!(torrent = %id, tracker = %host, data = with_data,
+                "removed: the tracker's rule for finished torrents");
+            core.manager.announce(Event::TorrentRemoved {
+                torrent_id: id.to_owned(),
+            });
+        }
+        Ok(Err(err)) => tracing::warn!(torrent = %id, error = %err,
+            "could not remove a torrent its tracker's rule is due to remove"),
+        Err(err) => tracing::warn!(error = %err, "the torrent manager is not answering"),
+    }
+}
+
+/// Free space on the filesystem a path is on, or would be created on.
+///
+/// The destination of a move usually does not exist yet, and `statvfs` on a
+/// path that is not there answers nothing at all. What is being asked is which
+/// filesystem the files will land on, and the nearest directory that does
+/// exist is on it.
+fn free_space_at(path: &Path) -> i64 {
+    match nearest_existing(path) {
+        Some(existing) => crate::core::free_space(&existing.to_string_lossy()),
+        None => -1,
+    }
+}
+
+/// Whether a move between these two is a rename rather than a copy.
+///
+/// The case somebody runs into first: the rule points at a subdirectory of
+/// where the files already are, nothing is written, and refusing it for want
+/// of a spare copy's worth of room would be nonsense. The opposite case is the
+/// one the rule exists for, and it looks identical from the path alone: that
+/// subdirectory is a mount point for another disk.
+fn on_the_same_filesystem(source: &Path, destination: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let device = |path: &Path| {
+            nearest_existing(path)
+                .and_then(|existing| std::fs::metadata(existing).ok())
+                .map(|meta| meta.dev())
+        };
+        match (device(source), device(destination)) {
+            (Some(one), Some(other)) => one == other,
+            // Unknown is not "the same": the answer only ever waives the space
+            // check, so being wrong has to cost a refused move, not a full disk.
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (source, destination);
+        false
+    }
+}
+
+/// The path itself, or the nearest of its parents that exists.
+fn nearest_existing(path: &Path) -> Option<&Path> {
+    let mut current = path;
+    loop {
+        if current.exists() {
+            return Some(current);
+        }
+        current = current.parent()?;
+        if current.as_os_str().is_empty() {
+            return None;
+        }
+    }
+}
+
 // ----------------------------------------------------------- notifications
 
 /// Posts a message somewhere when a torrent finishes, arrives or breaks.
@@ -639,7 +984,6 @@ fn sweep_space(
 /// Driven by the same event stream every client subscribes to, so there is one
 /// idea of what "finished" means rather than a second one written for this.
 async fn announce_torrents(core: Arc<Core>) {
-    use crate::events::Event;
     use tokio::sync::broadcast::error::RecvError;
 
     let mut events = core.manager.subscribe();
