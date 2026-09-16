@@ -49,6 +49,12 @@ talking to.
   nobody can act on, and the next question is always which.
 - `redeluge.get_peers` reads the ledger back, biggest taker first.
 
+- **The tracker settings window says what the rule would do before you arm
+  it**, under the buttons and updated as you type: how many torrents are here,
+  how many have finished, how many the rule would remove or move, when the
+  first of them would go, and how much would be freed if the files go too. A
+  rule that would act on the next sweep says so in those words.
+
 ### Fixed
 
 - **Per-peer byte totals were not carried across the FFI at all.** The bridge

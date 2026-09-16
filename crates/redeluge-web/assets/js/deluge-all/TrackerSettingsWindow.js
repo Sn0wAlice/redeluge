@@ -30,8 +30,8 @@ Ext.ns('Deluge');
  */
 Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
     title: _('Tracker Settings'),
-    width: 470,
-    height: 580,
+    width: 520,
+    height: 620,
     layout: 'fit',
     buttonAlign: 'right',
     closeAction: 'hide',
@@ -41,6 +41,15 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
     minHeight: 260,
 
     initComponent: function () {
+        // What the form in front of you would do, kept beside the OK button
+        // rather than inside the scrolling form: the one moment it matters is
+        // the moment before somebody presses OK on a rule that deletes things.
+        // Set before the superclass runs, which is when a panel turns `bbar`
+        // into a toolbar; adding it afterwards would make it a second item of
+        // a `fit` layout, which draws one thing.
+        this.preview = new Ext.Toolbar.TextItem({ text: '' });
+        this.bbar = [this.preview];
+
         Deluge.TrackerSettingsWindow.superclass.initComponent.call(this);
 
         this.addButton(_('Cancel'), this.onCancel, this);
@@ -69,6 +78,7 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
         this.defaults = {};
         this.groups = [];
         Ext.each(Deluge.TrackerSettingsWindow.RULES, this.addRule, this);
+
     },
 
     /**
@@ -109,6 +119,17 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
                 if (config.xtype === 'checkbox') {
                     config.handler = this.onSwitched;
                     config.scope = this;
+                }
+                if (config.xtype === 'spinnerfield') {
+                    config.listeners = {
+                        spin: { fn: this.describe, scope: this },
+                        change: { fn: this.describe, scope: this },
+                    };
+                }
+                if (config.xtype === 'textfield') {
+                    config.listeners = {
+                        change: { fn: this.describe, scope: this },
+                    };
                 }
 
                 var field = set.add(config);
@@ -169,8 +190,11 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
 
         // Blank while the configuration is on its way, rather than the
         // previous tracker's rules sitting there looking like this one's.
+        this.torrents = null;
         this.setOptions({});
+        this.setPreview(_('Looking at what is here...'));
         this.load();
+        this.loadTorrents();
     },
 
     /**
@@ -191,6 +215,224 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
             },
             scope: this,
         });
+    },
+
+    /**
+     * The torrents this tracker has, so the window can say what it would do.
+     *
+     * One call, when the window opens. The rules are about torrents that have
+     * finished, and nothing finishes while somebody fills in a form.
+     */
+    loadTorrents: function () {
+        var host = this.host;
+        deluge.client.core.get_torrents_status(
+            { tracker_host: host },
+            [
+                'name',
+                'is_finished',
+                'completed_time',
+                'time_added',
+                'total_wanted',
+                'save_path',
+                'label',
+            ],
+            {
+                success: function (torrents) {
+                    if (!this.isVisible() || this.host !== host) return;
+                    this.torrents = [];
+                    for (var id in torrents || {}) {
+                        this.torrents.push(torrents[id]);
+                    }
+                    this.describe();
+                },
+                failure: function () {
+                    if (!this.isVisible() || this.host !== host) return;
+                    this.torrents = null;
+                    this.setPreview('');
+                },
+                scope: this,
+            }
+        );
+    },
+
+    setPreview: function (html) {
+        if (this.preview && this.preview.rendered) {
+            this.preview.setText(html, false);
+        } else if (this.preview) {
+            this.preview.text = html;
+        }
+    },
+
+    /**
+     * When a torrent counts as having finished, for a given kind of rule.
+     *
+     * This mirrors `tracker::finished_at` in the daemon, including its
+     * asymmetry: the destructive rule will not work from a completion time
+     * libtorrent never recorded, and the others fall back to when the torrent
+     * was added. Changing one without the other makes this window lie, which
+     * is worse than it saying nothing.
+     */
+    finishedAt: function (torrent, destructive) {
+        var completed = Number(torrent['completed_time']) || 0;
+        if (completed > 0) return completed;
+        if (destructive) return 0;
+        return Number(torrent['time_added']) || 0;
+    },
+
+    /**
+     * Says, in a sentence, what the form in front of you would do.
+     *
+     * An estimate and phrased as one: it is the same arithmetic the daemon
+     * does, on the same numbers, but the daemon is the one that acts.
+     */
+    describe: function () {
+        if (!this.torrents) return;
+        if (!this.torrents.length) {
+            this.setPreview(
+                Ext.util.Format.htmlEncode(
+                    _('No torrents announce to this tracker right now.')
+                )
+            );
+            return;
+        }
+
+        var options = this.options();
+        var now = new Date().getTime() / 1000;
+        var finished = [];
+        Ext.each(this.torrents, function (torrent) {
+            if (torrent['is_finished']) finished.push(torrent);
+        });
+
+        var lines = [
+            String.format(
+                _('{0} torrents here, {1} of them finished.'),
+                this.torrents.length,
+                finished.length
+            ),
+        ];
+
+        if (options['auto_remove']) {
+            lines.push(this.describeRemoval(finished, options, now));
+        }
+        if (options['auto_move'] && options['move_path']) {
+            lines.push(this.describeMove(finished, options, now));
+        }
+        if (options['auto_label'] && options['label']) {
+            lines.push(this.describeLabel(finished, options));
+        }
+
+        this.setPreview(lines.join('<br/>'));
+    },
+
+    describeRemoval: function (finished, options, now) {
+        var due = [];
+        var freed = 0;
+        Ext.each(
+            finished,
+            function (torrent) {
+                var from = this.finishedAt(torrent, true);
+                if (from <= 0) return;
+                due.push(from + options['remove_after_hours'] * 3600);
+                freed += Number(torrent['total_wanted']) || 0;
+            },
+            this
+        );
+
+        if (!due.length) {
+            return _(
+                'Nothing would be removed: none of the finished ones has a completion time the daemon saw.'
+            );
+        }
+        due.sort(function (a, b) {
+            return a - b;
+        });
+
+        var fate = options['remove_data']
+            ? String.format(
+                  _('{0} would be removed with their files, freeing {1}'),
+                  due.length,
+                  fsize(freed)
+              )
+            : String.format(
+                  _('{0} would be removed, their files kept'),
+                  due.length
+              );
+        return fate + ', ' + this.when(due[0], now) + '.';
+    },
+
+    describeMove: function (finished, options, now) {
+        var due = [];
+        var destination = String(options['move_path']).replace(/\/+$/, '');
+        Ext.each(
+            finished,
+            function (torrent) {
+                var where = String(torrent['save_path'] || '').replace(
+                    /\/+$/,
+                    ''
+                );
+                if (where === destination) return;
+                var from = this.finishedAt(torrent, false);
+                if (from <= 0) return;
+                due.push(from + options['move_after_hours'] * 3600);
+            },
+            this
+        );
+
+        if (!due.length) {
+            return _('Nothing would be moved: they are already there.');
+        }
+        due.sort(function (a, b) {
+            return a - b;
+        });
+        return (
+            String.format(
+                _('{0} would be moved to {1}'),
+                due.length,
+                Ext.util.Format.htmlEncode(options['move_path'])
+            ) +
+            ', ' +
+            this.when(due[0], now) +
+            '.'
+        );
+    },
+
+    describeLabel: function (finished, options) {
+        var label = String(options['label']).trim().toLowerCase();
+        var onArrival = 0;
+        var onCompletion = 0;
+        Ext.each(
+            this.torrents,
+            function (torrent) {
+                var current = String(torrent['label'] || '');
+                if (current === label) return;
+                if (options['label_on_add'] && !current) onArrival++;
+                else if (options['label_when_done'] && torrent['is_finished'])
+                    onCompletion++;
+            },
+            this
+        );
+
+        var total = onArrival + onCompletion;
+        if (!total) {
+            return String.format(
+                _('Every torrent here is already in {0}.'),
+                Ext.util.Format.htmlEncode(options['label'])
+            );
+        }
+        return String.format(
+            _('{0} would be put in {1}.'),
+            total,
+            Ext.util.Format.htmlEncode(options['label'])
+        );
+    },
+
+    /**
+     * "in 21h", or "at the next sweep" for something already due.
+     */
+    when: function (at, now) {
+        var left = Math.round(at - now);
+        if (left <= 0) return _('at the next sweep, about a minute away');
+        return String.format(_('the first in {0}'), ftime(left));
     },
 
     /**
@@ -260,6 +502,7 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
             },
             this
         );
+        this.describe();
     },
 
     /**

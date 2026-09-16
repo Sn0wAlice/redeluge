@@ -219,6 +219,19 @@ is blank — which is what it says for every torrent until you set a rule. The
 conditions behind those two numbers are the sweep's own: a countdown that
 reaches zero and is followed by nothing would be worse than no countdown.
 
+### Before you arm one
+
+The window says what the form in front of you would do, under the buttons, and
+it says it again every time you change a field:
+
+> 3 torrents here, 2 of them finished.
+> 2 would be removed with their files, freeing 420 MiB, the first in 21h.
+
+It is an estimate and phrased as one — the daemon is what acts — but it is the
+same arithmetic on the same numbers, so it is the difference between arming a
+rule and discovering what it meant an hour later. A rule that would act on the
+next sweep says so in those words rather than counting down from nothing.
+
 ### Setting them without the interface
 
 It is one key, like the rest:
