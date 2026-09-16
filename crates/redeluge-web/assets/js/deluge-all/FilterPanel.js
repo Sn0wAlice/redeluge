@@ -86,16 +86,17 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
         this.relayEvents(this.list, ['selectionchange']);
 
         // Right-clicking a tracker opens what the daemon does with that
-        // tracker's torrents. Only this list: the states are a fixed
-        // vocabulary with nothing to configure, and a label's options are in
-        // Preferences, where the list of labels is managed anyway.
-        if (this.filterType == 'tracker_host') {
+        // tracker's torrents; right-clicking Unregistered offers to throw the
+        // whole group away. A label's options are in Preferences, where the
+        // list of labels is managed anyway, and the other rows have nothing to
+        // offer.
+        if (this.filterType == 'tracker_host' || this.filterType == 'state') {
             this.list.on('contextmenu', this.onContextMenu, this);
         }
     },
 
     /**
-     * The menu for one tracker row.
+     * The menu for one row, where that row has one.
      *
      * The row is not selected on the way, deliberately: selecting one filters
      * the torrent list, and a right-click that quietly changed what the list
@@ -108,37 +109,94 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
 
         var record = this.getStore().getAt(index);
         if (!record) return;
+        var value = record.id;
+
+        if (this.filterType == 'state') {
+            // One row in this list has anything to offer: the torrents their
+            // tracker has stopped recognising, which is a group that exists to
+            // be thrown away.
+            if (value != 'Unregistered' || !record.get('count')) return;
+            this.showMenu(e, 'unregistered');
+            return;
+        }
 
         // `All` is every tracker at once, and the empty row is the torrents
         // that have no tracker. Neither is something a rule can be set on.
-        var host = record.id;
-        if (!host || host == 'All') return;
-
-        this.menuHost = host;
-
-        if (!this.menu) {
-            this.menu = new Ext.menu.Menu({
-                items: [
-                    {
-                        text: _('Settings...'),
-                        iconCls: 'x-deluge-preferences',
-                        handler: this.onSettingsClick,
-                        scope: this,
-                    },
-                ],
-            });
-        }
-        this.menu.showAt(e.getXY());
+        if (!value || value == 'All') return;
+        this.menuHost = value;
+        this.showMenu(e, 'tracker');
     },
 
-    // The menu is not one of this panel's items, so it is not taken with it.
+    /**
+     * Builds the menu this row wants, once, and shows it where the mouse is.
+     */
+    showMenu: function (e, kind) {
+        if (!this.menus) this.menus = {};
+        if (!this.menus[kind]) {
+            this.menus[kind] =
+                kind == 'unregistered'
+                    ? new Ext.menu.Menu({
+                          items: [
+                              {
+                                  text: _('Remove these torrents...'),
+                                  iconCls: 'icon-remove',
+                                  handler: this.onRemoveUnregistered,
+                                  scope: this,
+                              },
+                          ],
+                      })
+                    : new Ext.menu.Menu({
+                          items: [
+                              {
+                                  text: _('Settings...'),
+                                  iconCls: 'x-deluge-preferences',
+                                  handler: this.onSettingsClick,
+                                  scope: this,
+                              },
+                          ],
+                      });
+        }
+        this.menus[kind].showAt(e.getXY());
+    },
+
+    /**
+     * Hands the whole unregistered group to the ordinary Remove dialog.
+     *
+     * The same dialog as the toolbar's Remove, so the choice between keeping
+     * the files and deleting them is made in the one place that has always
+     * asked it, and nothing here can delete anything on its own.
+     */
+    onRemoveUnregistered: function () {
+        deluge.client.core.get_torrents_status(
+            { state: 'Unregistered' },
+            ['name'],
+            {
+                success: function (torrents) {
+                    var ids = [];
+                    for (var id in torrents || {}) {
+                        ids.push(id);
+                    }
+                    if (!ids.length) {
+                        // The group emptied itself between the right-click and
+                        // the answer, which a re-announce can do.
+                        deluge.ui.update();
+                        return;
+                    }
+                    deluge.removeWindow.show(ids);
+                },
+                scope: this,
+            }
+        );
+    },
+
+    // The menus are not items of this panel, so they are not taken with it.
     // The sidebar drops every panel on a disconnect, which happens as often as
     // somebody's network does.
     onDestroy: function () {
-        if (this.menu) {
-            this.menu.destroy();
-            this.menu = null;
+        for (var kind in this.menus || {}) {
+            this.menus[kind].destroy();
         }
+        this.menus = null;
         Deluge.FilterPanel.superclass.onDestroy.call(this);
     },
 

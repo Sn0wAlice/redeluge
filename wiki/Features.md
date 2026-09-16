@@ -237,6 +237,33 @@ announce URL — because that is the row the rule is set on. Remember that a key
 is replaced whole: send every tracker you want to keep a rule for, not just the
 one you are changing. The Web UI reads the current value and merges for you.
 
+## Torrents the tracker has dropped
+
+A private tracker that has pruned a torrent answers every announce the same
+way for ever: *Unregistered torrent*, *Torrent not found*, *not registered with
+this tracker*. The torrent then sits in the list seeding to nobody, counting
+for nothing, and at a glance it looks exactly like one that simply has no peers
+today.
+
+The sidebar separates them. Under *States*, beside *Active*, there is
+**Unregistered**: every torrent whose tracker last said it had no record of it.
+Right-click that row and *Remove these torrents...* hands the whole group to
+the ordinary Remove dialog, which asks — as it always has — whether to keep the
+files or delete them. Nothing here removes anything on its own.
+
+It is deliberately narrow. A tracker that is down, refusing connections or
+rate-limiting is *not* a tracker that has forgotten the torrent, and a check
+that lumped the two together would offer to delete a library because a tracker
+was rebooting. Only the phrases that mean "I have no record of this" count:
+`unregistered`, `not registered`, `torrent not found`, `unknown torrent`,
+`info hash not found`. Everything else stays an error like any other.
+
+Like *Active*, it is a question rather than a state: the torrents in it are
+still Seeding or Downloading as far as libtorrent is concerned, and no other
+client sees anything unusual about them. Over the API it is a filter like the
+rest — `core.get_torrents_status({"state": "Unregistered"}, ["name"])` — and
+`core.get_filter_tree` counts it beside the states.
+
 ## What the daemon did on its own
 
 Six things here act without being asked: the share-ratio rule, the idle rule,

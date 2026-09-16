@@ -72,6 +72,31 @@ talking to.
   method and no future Deluge method can collide with it. It is the only one so
   far, and it is advertised in `daemon.get_method_list` like everything else.
 
+- **The torrents a tracker has dropped are a group of their own**, under
+  *States* in the sidebar, beside *Active*: **Unregistered**. A private tracker
+  that has pruned a torrent answers every announce with *Unregistered torrent*
+  or *Torrent not found* for ever, and until now such a torrent was
+  indistinguishable at a glance from one that merely has no peers today.
+  Right-click the row and *Remove these torrents...* hands the whole group to
+  the ordinary Remove dialog, which asks whether to keep the files as it always
+  has. Nothing removes anything on its own.
+- The check is deliberately narrow: only the phrases that mean "I have no
+  record of this". A tracker that is down, refusing connections or
+  rate-limiting is not one that has forgotten the torrent, and offering to
+  delete a library because a tracker was rebooting would be unforgivable.
+- The Remove dialog now says how many torrents it is about to remove when there
+  is more than one, rather than "the torrent (s)".
+
+### Fixed
+
+- **A tracker's own failure reason was thrown away.** For a tracker error the
+  daemon reported libtorrent's error code, so a torrent whose tracker had
+  dropped it said *Error: tracker failure* — true, useless, and impossible to
+  tell apart from any other tracker trouble. The reason the tracker actually
+  sent is now what the status carries, falling back to the transport error only
+  when the tracker did not answer at all. Tracker warnings carry their text for
+  the same reason; they used to arrive empty.
+
 ### Changed
 
 - The README now says what this program is and is not: a BitTorrent client

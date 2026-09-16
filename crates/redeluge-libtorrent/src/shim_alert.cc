@@ -186,7 +186,15 @@ FlatAlert flatten(lt::alert const* alert) {
   if (auto const* a = lt::alert_cast<lt::tracker_error_alert>(alert)) {
     FlatAlert flat = blank(alert, kTrackerError, "tracker_error");
     flat.str_a = rust::String(a->tracker_url());
-    flat.str_b = rust::String(a->error.message());
+    // The tracker's own words first, and the transport error only when it did
+    // not answer at all. `error.message()` for a tracker that replied with a
+    // failure reason is "tracker failure", which says nothing: the reason
+    // itself is the difference between "come back later" and "I have never
+    // heard of this torrent", and something has to be able to tell them apart.
+    char const* reason = a->error_message();
+    flat.str_b = rust::String((reason != nullptr && reason[0] != '\0')
+                                  ? reason
+                                  : a->error.message());
     flat.num_a = static_cast<int64_t>(a->times_in_row);
     return flat;
   }
@@ -199,6 +207,10 @@ FlatAlert flatten(lt::alert const* alert) {
   if (auto const* a = lt::alert_cast<lt::tracker_warning_alert>(alert)) {
     FlatAlert flat = blank(alert, kTrackerWarning, "tracker_warning");
     flat.str_a = rust::String(a->tracker_url());
+    // Carried for the same reason as the error above: some trackers say what
+    // they think of a torrent here rather than in a failure reason.
+    char const* warning = a->warning_message();
+    flat.str_b = rust::String(warning != nullptr ? warning : "");
     return flat;
   }
   return blank(alert, kUnknown, alert->what());

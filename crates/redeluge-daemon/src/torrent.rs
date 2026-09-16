@@ -594,6 +594,35 @@ pub struct PeerCountry {
 /// sidebar's group for torrents that have none.
 ///
 /// Shared, because the filter tree and the torrent status both need the
+/// Whether the tracker has said this torrent no longer exists.
+///
+/// A private tracker that has pruned a torrent answers every announce with the
+/// same handful of phrases, and the torrent then sits in the list for ever:
+/// seeding to nobody, counting for nothing, and indistinguishable at a glance
+/// from one that simply has no peers today. This is the check that tells them
+/// apart, so the sidebar can group them and you can throw them away.
+///
+/// Deliberately narrow. A tracker that is down, refusing connections or
+/// rate-limiting is not a tracker that has forgotten the torrent, and a rule
+/// that lumped the two together would offer to delete a library because a
+/// tracker was rebooting. Only the phrases that mean "I have no record of
+/// this" count, and everything else is an error like any other.
+pub fn tracker_says_unregistered(tracker_status: &str) -> bool {
+    /// What trackers answer when the torrent is gone. Lower case; the status
+    /// is folded before it is compared.
+    const GONE: &[&str] = &[
+        "unregistered",
+        "not registered",
+        "torrent not found",
+        "unknown torrent",
+        "info hash not found",
+        "infohash not found",
+    ];
+
+    let status = tracker_status.to_lowercase();
+    GONE.iter().any(|phrase| status.contains(phrase))
+}
+
 /// When each of a tracker's rules is due to act on this torrent.
 ///
 /// Answers `(move, remove)` as Unix seconds, zero for "not counting down".
@@ -842,6 +871,40 @@ mod file_tests {
         assert_eq!(progress[1], Value::Float64(0.0));
         assert_eq!(priorities.len(), 2);
         assert_eq!(priorities[0], Value::Int(4));
+    }
+}
+
+#[cfg(test)]
+mod unregistered_tests {
+    use super::tracker_says_unregistered;
+
+    #[test]
+    fn the_phrases_trackers_use_for_a_torrent_they_have_dropped() {
+        // As they arrive, which is with the daemon's own "Error: " in front.
+        assert!(tracker_says_unregistered("Error: Unregistered torrent"));
+        assert!(tracker_says_unregistered(
+            "Error: torrent not registered with this tracker"
+        ));
+        assert!(tracker_says_unregistered("Error: Torrent not found"));
+        assert!(tracker_says_unregistered("Error: unknown torrent"));
+        assert!(tracker_says_unregistered("Error: info hash not found"));
+        // Whatever case the tracker felt like.
+        assert!(tracker_says_unregistered("ERROR: UNREGISTERED TORRENT"));
+    }
+
+    #[test]
+    fn a_tracker_having_a_bad_day_is_not_a_torrent_that_is_gone() {
+        // The distinction the whole thing rests on. Offering to delete a
+        // library because a tracker was rebooting would be unforgivable.
+        assert!(!tracker_says_unregistered("Error: Connection timed out"));
+        assert!(!tracker_says_unregistered("Error: connection refused"));
+        assert!(!tracker_says_unregistered(
+            "Error: too many requests, slow down"
+        ));
+        assert!(!tracker_says_unregistered("Error: (403) Forbidden"));
+        assert!(!tracker_says_unregistered("Announce OK (12 peers)"));
+        assert!(!tracker_says_unregistered("Announce Sent"));
+        assert!(!tracker_says_unregistered(""));
     }
 }
 

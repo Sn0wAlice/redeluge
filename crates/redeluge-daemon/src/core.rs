@@ -2438,6 +2438,7 @@ impl Core {
                             torrent.options.owner.clone(),
                             torrent.options.label.clone(),
                             status.download_payload_rate > 0 || status.upload_payload_rate > 0,
+                            torrent.tracker_status.clone(),
                         ))
                     })
                     .collect::<Vec<_>>()
@@ -2451,8 +2452,9 @@ impl Core {
         let mut by_owner: BTreeMap<String, i64> = BTreeMap::new();
         let mut by_label: BTreeMap<String, i64> = BTreeMap::new();
         let mut active = 0i64;
+        let mut unregistered = 0i64;
 
-        for (state, tracker, owner, label, transferring) in statuses {
+        for (state, tracker, owner, label, transferring, tracker_status) in statuses {
             *by_state.entry(state).or_insert(0) += 1;
             // Active means moving bytes, not "not paused". A seeding torrent
             // nobody is downloading from is idle, and counting it here put
@@ -2468,6 +2470,13 @@ impl Core {
             // `tracker.example.com` while every torrent was recorded under
             // `example.com`, and clicking the row filtered to nothing. A
             // filter value has to be the value it is compared against.
+            // The ones the tracker has stopped recognising. Counted here so
+            // the sidebar can offer them as a group: they are otherwise
+            // indistinguishable from a torrent that merely has no peers today,
+            // and they are the ones that are safe to throw away.
+            if crate::torrent::tracker_says_unregistered(&tracker_status) {
+                unregistered += 1;
+            }
             let host = crate::torrent::tracker_host(&tracker);
             *by_tracker.entry(host).or_insert(0) += 1;
             *by_owner.entry(owner).or_insert(0) += 1;
@@ -2478,7 +2487,16 @@ impl Core {
             Value::List(vec![Value::Str(label.to_owned()), Value::Int(count)])
         };
 
-        let mut states = vec![pair("All", total), pair("Active", active)];
+        // `Unregistered` is a question about the tracker rather than a state
+        // libtorrent has, exactly as `Active` is a question about right now.
+        // Both sit at the top of the list with the states because that is
+        // where somebody looks for them, and `matches_filter` answers both
+        // specially so that the row and the list it opens agree.
+        let mut states = vec![
+            pair("All", total),
+            pair("Active", active),
+            pair("Unregistered", unregistered),
+        ];
         for state in TorrentState::ALL {
             states.push(pair(
                 state.as_str(),
@@ -2716,6 +2734,16 @@ fn matches_filter(status: &BTreeMap<String, Value>, filter: &[(String, Vec<Strin
         if key == "state" && wanted.iter().any(|value| value == "Active") {
             let rate = |name: &str| status.get(name).and_then(Value::as_i64).unwrap_or_default();
             return rate("download_payload_rate") > 0 || rate("upload_payload_rate") > 0;
+        }
+        // Nor is "Unregistered": it is what the tracker last said about the
+        // torrent, not what the torrent is doing. A private tracker that has
+        // pruned one answers every announce the same way for ever, and this is
+        // how those are gathered up to be thrown away.
+        if key == "state" && wanted.iter().any(|value| value == "Unregistered") {
+            return status
+                .get("tracker_status")
+                .and_then(Value::as_str)
+                .is_some_and(crate::torrent::tracker_says_unregistered);
         }
         // The quick search. Deluge looks in more than the name, so that
         // "error" or the name of a tracker finds what you meant, and every

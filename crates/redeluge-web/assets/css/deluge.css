@@ -138,7 +138,12 @@ button::-moz-focus-inner {
     background-image: url('../icons/inactive.png');
 }
 .x-deluge-error,
-.deluge-torrents .error {
+.deluge-torrents .error,
+/* The torrents their tracker has stopped recognising. The same icon as an
+   error, because that is what it is: one the tracker reported rather than one
+   libtorrent did, and the sidebar row would otherwise be the only one in the
+   list with a blank where every other state has a picture. */
+.x-deluge-unregistered {
     background-image: url('../icons/alert.png');
 }
 .x-deluge-checking,

@@ -168,7 +168,13 @@ impl Alert {
             AlertKind::AddTorrent
             | AlertKind::SaveResumeDataFailed
             | AlertKind::StorageMovedFailed => non_empty(&self.str_a),
-            AlertKind::FileError | AlertKind::TrackerError => non_empty(&self.str_b),
+            // The tracker's own failure reason when it sent one, which is
+            // what tells "come back later" apart from "I have never heard of
+            // this torrent"; the transport error otherwise. Warnings carry
+            // their text in the same place.
+            AlertKind::FileError | AlertKind::TrackerError | AlertKind::TrackerWarning => {
+                non_empty(&self.str_b)
+            }
             _ => None,
         }
     }

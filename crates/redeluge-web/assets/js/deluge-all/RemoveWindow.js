@@ -52,6 +52,20 @@ Deluge.RemoveWindow = Ext.extend(Ext.Window, {
     show: function (ids) {
         Deluge.RemoveWindow.superclass.show.call(this);
         this.torrentIds = ids;
+
+        // Say how many. One torrent removed by mistake is a nuisance; forty,
+        // because the sidebar handed a whole group to this dialog and it said
+        // "the torrent (s)", is somebody's evening.
+        if (!this.rendered) return;
+        var count = (ids || []).length;
+        this.body.update(
+            count > 1
+                ? String.format(
+                      _('Are you sure you wish to remove these {0} torrents?'),
+                      count
+                  )
+                : _('Are you sure you wish to remove the torrent?')
+        );
     },
 
     onCancel: function () {
