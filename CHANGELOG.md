@@ -49,6 +49,18 @@ talking to.
   nobody can act on, and the next question is always which.
 - `redeluge.get_peers` reads the ledger back, biggest taker first.
 
+- **A fourth tracker rule: bandwidth and connection limits.** The same four
+  numbers a label carries — download and upload rate, connections, upload slots
+  — imposed on every torrent of a tracker through `core.set_torrent_options`,
+  exactly as if you had set them by hand. Applied when a torrent is first seen
+  under the rule and again whenever you change it, never on every pass: a
+  standing rule that overwrote a limit you set yourself, once a minute, would
+  be unusable.
+- **The Add dialog says whether there is room** before anything is written: the
+  torrent's size against the free space where it is about to land, in red when
+  it does not fit. The disk-space rule catches a full disk after the fact by
+  pausing everything that writes; this is the same fact said at the only moment
+  it is cheap to act on. `web.get_torrent_info` carries a `total_size` for it.
 - **The tracker settings window says what the rule would do before you arm
   it**, under the buttons and updated as you type: how many torrents are here,
   how many have finished, how many the rule would remove or move, when the

@@ -61,6 +61,17 @@ pub struct SessionState {
     /// thread and the ones on the async side write to the same history, or it
     /// would answer "why is this paused" for half the reasons.
     pub activity: std::sync::Arc<crate::activity::Log>,
+    /// Which torrents already carry their tracker's limits, and which
+    /// version of them.
+    ///
+    /// Keyed by torrent, holding the rule's fingerprint. It is how the limits
+    /// are applied when a torrent is first seen under a rule and again when
+    /// the rule changes, without being re-applied every minute: a standing
+    /// rule that overwrote a limit somebody set by hand, every minute, would
+    /// be unusable. Not saved: after a restart every torrent is seen for the
+    /// first time again, and re-applying a rule that has not changed writes
+    /// the same numbers.
+    pub tracker_limits: BTreeMap<String, String>,
     /// What each peer has done, across connections and restarts.
     ///
     /// Written by the sampler on the async side and saved from this thread on
@@ -297,6 +308,7 @@ impl Manager {
             idle_since: BTreeMap::new(),
             low_space: false,
             paused_by_session: std::collections::BTreeSet::new(),
+            tracker_limits: BTreeMap::new(),
             activity: std::sync::Arc::clone(&activity),
             peers: std::sync::Arc::clone(&peers),
             countries: None,

@@ -137,10 +137,27 @@ announce to, and the sidebar has been grouping them by it all along. This is a
 place to say what should happen to that group, once, instead of setting it on
 every torrent that arrives from it.
 
-Three rules, each off for every tracker until you turn it on for one by name.
+Four rules, each off for every tracker until you turn it on for one by name.
 They are applied in the order below, which is the order that matters when a
-torrent qualifies for more than one: a torrent is filed under the right name
-before it is moved, and moved before it is taken away.
+torrent qualifies for more than one: a torrent is held to its limits and filed
+under the right name before it is moved, and moved before it is taken away.
+
+### Limit them
+
+| Option | |
+|---|---|
+| `auto_limit` | Hold this tracker's torrents to the limits below |
+| `max_download_speed`, `max_upload_speed` | KiB/s, `-1` for no limit |
+| `max_connections`, `max_upload_slots` | `-1` for no limit |
+
+The same four numbers a label carries, applied the same way: through
+`core.set_torrent_options`, exactly as if you had set them on each torrent.
+
+They are applied when a torrent from this tracker is first seen, and again
+whenever you change them — not on every pass. A standing rule that overwrote a
+limit you set by hand, once a minute, would be unusable; this way the rule
+gives way until you move it. After a restart every torrent is seen for the
+first time again, so a rule you have not changed writes the same numbers back.
 
 ### Label them
 

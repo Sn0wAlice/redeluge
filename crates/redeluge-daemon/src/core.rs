@@ -2201,7 +2201,7 @@ fn options_from(value: Option<&Value>, defaults: TorrentOptions) -> TorrentOptio
     options
 }
 
-fn json_to_value(json: &serde_json::Value) -> Value {
+pub(crate) fn json_to_value(json: &serde_json::Value) -> Value {
     match json {
         serde_json::Value::Null => Value::None,
         serde_json::Value::Bool(value) => Value::Bool(*value),
@@ -2594,7 +2594,7 @@ impl Core {
         ]))
     }
 
-    async fn apply_torrent_options(
+    pub(crate) async fn apply_torrent_options(
         &self,
         ids: Vec<String>,
         options: Value,

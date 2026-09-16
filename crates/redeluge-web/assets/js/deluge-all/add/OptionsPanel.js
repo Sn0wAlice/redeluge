@@ -76,6 +76,13 @@ Deluge.add.OptionsPanel = Ext.extend(Ext.TabPanel, {
         this.torrentId = torrentId;
         this.form.optionsManager.changeId(torrentId);
 
+        // What it will take on disk, so the options tab can say whether there
+        // is room for it. Zero for a magnet, whose size nobody knows until the
+        // metadata arrives.
+        if (this.form.setTorrentSize) {
+            this.form.setTorrentSize(this.torrents[torrentId]['total_size'] || 0);
+        }
+
         this.files.clearFiles();
         var root = this.files.getRootNode();
         var priorities = this.form.optionsManager.get('file_priorities');

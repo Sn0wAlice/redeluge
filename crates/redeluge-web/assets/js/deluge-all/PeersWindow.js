@@ -114,7 +114,9 @@ Deluge.PeersWindow = Ext.extend(Ext.Window, {
                 '->',
                 {
                     text: _('Refresh'),
-                    iconCls: 'icon-ok',
+                    // The circular arrow, which is what `update.png` is; the
+                    // tick this used to wear meant nothing here.
+                    iconCls: 'icon-update-tracker',
                     handler: this.load,
                     scope: this,
                 },

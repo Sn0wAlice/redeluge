@@ -58,6 +58,10 @@ impl TorrentInfo {
             "name": self.name,
             "info_hash": self.info_hash,
             "files_tree": self.files_tree(),
+            // What it will take on disk, so the Add dialog can say whether
+            // there is room before anything is written. Summed here rather
+            // than walked in the browser: the tree is already being built.
+            "total_size": self.files.iter().map(|file| file.length).sum::<i64>(),
         })
     }
 
@@ -231,6 +235,10 @@ pub fn magnet_info(uri: &str) -> Result<Json, Error> {
         "name": name,
         "info_hash": info_hash,
         "files_tree": Json::Object(Map::new()),
+        // Unknown until the metadata arrives, which for a magnet is after it
+        // has been added. Zero rather than absent, so the caller has one case
+        // to handle rather than two.
+        "total_size": 0,
     }))
 }
 

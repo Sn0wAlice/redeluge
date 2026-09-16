@@ -93,6 +93,24 @@ pub struct Options {
     #[serde(default)]
     pub move_after_hours: f64,
 
+    // ------------------------------------------------------------- limiting
+    /// Impose speed and connection limits on these torrents.
+    ///
+    /// The same four numbers the label options carry, and in the same units:
+    /// KiB/s for the speeds, `-1` for no limit, which is Deluge's convention
+    /// everywhere.
+    #[serde(default)]
+    pub auto_limit: bool,
+
+    #[serde(default = "minus_one_float")]
+    pub max_download_speed: f64,
+    #[serde(default = "minus_one_float")]
+    pub max_upload_speed: f64,
+    #[serde(default = "minus_one")]
+    pub max_connections: i64,
+    #[serde(default = "minus_one")]
+    pub max_upload_slots: i64,
+
     // --------------------------------------------------------------- labelling
     /// Put these torrents in a label.
     #[serde(default)]
@@ -128,6 +146,12 @@ pub struct Options {
 fn yes() -> bool {
     true
 }
+fn minus_one() -> i64 {
+    -1
+}
+fn minus_one_float() -> f64 {
+    -1.0
+}
 
 impl Default for Options {
     fn default() -> Self {
@@ -138,6 +162,11 @@ impl Default for Options {
             auto_move: false,
             move_path: String::new(),
             move_after_hours: 0.0,
+            auto_limit: false,
+            max_download_speed: -1.0,
+            max_upload_speed: -1.0,
+            max_connections: -1,
+            max_upload_slots: -1,
             auto_label: false,
             label: String::new(),
             label_on_add: true,
@@ -163,6 +192,13 @@ impl Options {
             auto_move: self.auto_move,
             move_path: self.move_path.trim().to_owned(),
             move_after_hours: hours(self.move_after_hours),
+            auto_limit: self.auto_limit,
+            // A rate that is not a number is no limit at all, which is what
+            // every one of these means by -1.
+            max_download_speed: rate(self.max_download_speed),
+            max_upload_speed: rate(self.max_upload_speed),
+            max_connections: self.max_connections.max(-1),
+            max_upload_slots: self.max_upload_slots.max(-1),
             auto_label: self.auto_label,
             label: self.label.trim().to_owned(),
             label_on_add: self.label_on_add,
@@ -177,7 +213,7 @@ impl Options {
     /// labelling with no label are both entries somebody started and did not
     /// finish, and neither should cost a sweep of the library.
     pub fn acts(&self) -> bool {
-        self.removes() || self.moves() || self.labels()
+        self.removes() || self.moves() || self.labels() || self.limits()
     }
 
     pub fn removes(&self) -> bool {
@@ -191,6 +227,57 @@ impl Options {
     pub fn labels(&self) -> bool {
         self.auto_label && !self.label.trim().is_empty()
     }
+
+    pub fn limits(&self) -> bool {
+        self.auto_limit
+    }
+
+    /// The torrent options these limits impose.
+    ///
+    /// The same shape `label::Options::to_torrent_options` produces, because
+    /// it is the same idea applied to a different grouping and
+    /// `core.set_torrent_options` is what carries out both.
+    pub fn to_torrent_options(&self) -> Vec<(String, Json)> {
+        if !self.limits() {
+            return Vec::new();
+        }
+        vec![
+            ("max_download_speed".into(), number(self.max_download_speed)),
+            ("max_upload_speed".into(), number(self.max_upload_speed)),
+            ("max_connections".into(), Json::from(self.max_connections)),
+            ("max_upload_slots".into(), Json::from(self.max_upload_slots)),
+        ]
+    }
+
+    /// What the limits are, as one short string.
+    ///
+    /// Used to notice that a rule has changed since it was last applied to a
+    /// torrent: the values themselves, so a change of any of them shows.
+    pub fn limits_fingerprint(&self) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            self.max_download_speed,
+            self.max_upload_speed,
+            self.max_connections,
+            self.max_upload_slots
+        )
+    }
+}
+
+/// A rate from a client: no limit when it is not a number.
+fn rate(value: f64) -> f64 {
+    if value.is_finite() && value >= 0.0 {
+        value
+    } else {
+        -1.0
+    }
+}
+
+/// A rate as JSON, which has no room for something that is not a number.
+fn number(value: f64) -> Json {
+    serde_json::Number::from_f64(value)
+        .map(Json::Number)
+        .unwrap_or_else(|| Json::from(-1))
 }
 
 /// A delay from a client, bounded and never `NaN`.
@@ -399,6 +486,66 @@ mod tests {
 
         // Neither time known is nothing to measure from, whatever the rule.
         assert_eq!(finished_at(0, 0, false), 0.0);
+    }
+
+    #[test]
+    fn limits_are_only_imposed_once_the_switch_is_on() {
+        let prepared = Options {
+            max_download_speed: 500.0,
+            max_connections: 20,
+            ..Options::default()
+        };
+        assert!(!prepared.limits());
+        assert!(
+            prepared.to_torrent_options().is_empty(),
+            "a rule that is off must not reset a torrent's own limits"
+        );
+        assert!(!prepared.acts());
+
+        let armed = Options {
+            auto_limit: true,
+            ..prepared.clone()
+        };
+        let applied: BTreeMap<String, Json> = armed.to_torrent_options().into_iter().collect();
+        assert_eq!(applied.get("max_download_speed"), Some(&json!(500.0)));
+        assert_eq!(applied.get("max_connections"), Some(&json!(20)));
+        // The two nobody set are still sent, as "no limit", because a rule
+        // that names three of four would leave the fourth at whatever the
+        // last rule happened to set.
+        assert_eq!(applied.get("max_upload_speed"), Some(&json!(-1.0)));
+        assert!(armed.acts());
+    }
+
+    #[test]
+    fn a_change_of_any_limit_shows_in_the_fingerprint() {
+        // What tells the sweep that a rule has been edited since it last
+        // applied it to a torrent.
+        let one = Options {
+            auto_limit: true,
+            max_upload_speed: 50.0,
+            ..Options::default()
+        };
+        let two = Options {
+            max_upload_speed: 60.0,
+            ..one.clone()
+        };
+        assert_ne!(one.limits_fingerprint(), two.limits_fingerprint());
+        assert_eq!(one.limits_fingerprint(), one.sane().limits_fingerprint());
+    }
+
+    #[test]
+    fn a_rate_that_is_not_a_number_is_no_limit() {
+        let options = Options {
+            auto_limit: true,
+            max_download_speed: f64::NAN,
+            max_upload_speed: -8.0,
+            max_connections: -50,
+            ..Options::default()
+        }
+        .sane();
+        assert_eq!(options.max_download_speed, -1.0);
+        assert_eq!(options.max_upload_speed, -1.0);
+        assert_eq!(options.max_connections, -1);
     }
 
     #[test]

@@ -39,15 +39,29 @@ Deluge.add.OptionsTab = Ext.extend(Ext.form.FormPanel, {
             fieldLabel: '',
             style: 'padding: 5px 0; margin-bottom: 0;',
         });
-        this.optionsManager.bind(
-            'download_location',
-            fieldset.add({
-                fieldLabel: '',
-                name: 'download_location',
-                anchor: '95%',
-                labelSeparator: '',
-            })
-        );
+        var location = fieldset.add({
+            fieldLabel: '',
+            name: 'download_location',
+            anchor: '95%',
+            labelSeparator: '',
+            listeners: {
+                change: { fn: this.checkFreeSpace, scope: this },
+                blur: { fn: this.checkFreeSpace, scope: this },
+            },
+        });
+        this.optionsManager.bind('download_location', location);
+        // Kept because the options manager has no way to hand a field back,
+        // and this is the only one anything here has to read directly.
+        this.location = location;
+
+        // The disk-space rule catches a full disk after the fact, by pausing
+        // everything that is writing. This is the same fact said before
+        // anything is written, which is the only moment it is cheap to act on.
+        this.space = fieldset.add({
+            xtype: 'label',
+            text: '',
+            style: 'display: block; margin: 2px 0 0 2px; color: #666;',
+        });
         var fieldset = this.add({
             xtype: 'fieldset',
             title: _('Move Completed Folder'),
@@ -200,6 +214,95 @@ Deluge.add.OptionsTab = Ext.extend(Ext.form.FormPanel, {
                 labelSeparator: '',
             })
         );
+    },
+
+    /**
+     * Told what the selected torrent will take, when the selection changes.
+     */
+    setTorrentSize: function (bytes) {
+        this.torrentSize = Number(bytes) || 0;
+        this.checkFreeSpace();
+    },
+
+    /**
+     * Asks the daemon what is free where this torrent is about to be written.
+     *
+     * The daemon answers for the filesystem the path is on, which is not
+     * always the one the path looks like it is on: a folder inside the
+     * download folder can be a mount point for another disk.
+     */
+    checkFreeSpace: function () {
+        var path = this.location ? this.location.getValue() : '';
+        if (!path) {
+            this.setSpaceText('', false);
+            return;
+        }
+        // The answer is about a path, and the path can change while the call
+        // is out; anything that comes back about another one is dropped.
+        this.pending = path;
+
+        deluge.client.core.get_free_space(path, {
+            success: function (free) {
+                if (this.pending !== path) return;
+                this.showFreeSpace(path, Number(free));
+            },
+            failure: function () {
+                if (this.pending !== path) return;
+                this.setSpaceText('', false);
+            },
+            scope: this,
+        });
+    },
+
+    showFreeSpace: function (path, free) {
+        if (!(free >= 0)) {
+            // -1 is the daemon saying it could not look, which happens for a
+            // path that does not exist yet and is not worth alarming anybody
+            // about: the daemon creates it.
+            this.setSpaceText('', false);
+            return;
+        }
+
+        var size = this.torrentSize || 0;
+        if (!size) {
+            this.setSpaceText(
+                String.format(_('{0} free at {1}'), fsize(free), path),
+                false
+            );
+            return;
+        }
+
+        if (free >= size) {
+            this.setSpaceText(
+                String.format(
+                    _('{0} needed, {1} free at {2}'),
+                    fsize(size),
+                    fsize(free),
+                    path
+                ),
+                false
+            );
+            return;
+        }
+        this.setSpaceText(
+            String.format(
+                _('{0} needed, only {1} free at {2}'),
+                fsize(size),
+                fsize(free),
+                path
+            ),
+            true
+        );
+    },
+
+    setSpaceText: function (text, short) {
+        if (!this.space) return;
+        this.space.setText(text);
+        if (!this.space.el) return;
+        // Said in red rather than refused: the torrent may be one the person
+        // means to add and make room for, and a client that argues with you
+        // about your own disk is worse than one that tells you.
+        this.space.el.setStyle('color', short ? '#a03030' : '#666');
     },
 
     getDefaults: function () {

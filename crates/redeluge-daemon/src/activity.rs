@@ -43,6 +43,7 @@ pub mod did {
     pub const PAUSED: &str = "paused";
     pub const RESUMED: &str = "resumed";
     pub const CHANGED: &str = "changed";
+    pub const LIMITED: &str = "limited";
 }
 
 /// One thing the daemon did on its own.

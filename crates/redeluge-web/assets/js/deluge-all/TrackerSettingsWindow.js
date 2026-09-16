@@ -10,8 +10,8 @@
  * by it all along. This window is reached by right-clicking one of those rows,
  * because that row is the thing the rules belong to.
  *
- * Three rules so far: label these torrents, move them when they are done, and
- * remove them when they are done with. The window is built from
+ * Four rules so far: hold these torrents to a set of limits, label them, move
+ * them when they are done, and remove them when they are done with. The window is built from
  * `Deluge.TrackerSettingsWindow.RULES` rather than written out, so a fourth is
  * an entry in that list and the daemon side that acts on it, and nothing else
  * in this file changes. Every rule is a switch and the fields that switch
@@ -31,7 +31,7 @@ Ext.ns('Deluge');
 Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
     title: _('Tracker Settings'),
     width: 520,
-    height: 620,
+    height: 660,
     layout: 'fit',
     buttonAlign: 'right',
     closeAction: 'hide',
@@ -320,6 +320,14 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
         if (options['auto_label'] && options['label']) {
             lines.push(this.describeLabel(finished, options));
         }
+        if (options['auto_limit']) {
+            lines.push(
+                String.format(
+                    _('All {0} would be held to these limits.'),
+                    this.torrents.length
+                )
+            );
+        }
 
         this.setPreview(lines.join('<br/>'));
     },
@@ -605,6 +613,64 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
  *            `warn` on a field is a line shown only while that field is on
  */
 Deluge.TrackerSettingsWindow.RULES = [
+    {
+        key: 'auto_limit',
+        title: _('Limit these torrents'),
+        boxLabel: _('Hold them to these limits'),
+        note: _(
+            'Applied when a torrent from this tracker is first seen, and again whenever you change these numbers. A limit you set on one torrent by hand stands until then: the rule does not fight you every minute. -1 is no limit.'
+        ),
+        fields: [
+            {
+                name: 'max_download_speed',
+                xtype: 'spinnerfield',
+                fieldLabel: _('Maximum download (KiB/s):'),
+                labelSeparator: '',
+                width: 80,
+                decimalPrecision: 1,
+                minValue: -1,
+                maxValue: 9999999,
+                incrementValue: 1,
+                value: -1,
+            },
+            {
+                name: 'max_upload_speed',
+                xtype: 'spinnerfield',
+                fieldLabel: _('Maximum upload (KiB/s):'),
+                labelSeparator: '',
+                width: 80,
+                decimalPrecision: 1,
+                minValue: -1,
+                maxValue: 9999999,
+                incrementValue: 1,
+                value: -1,
+            },
+            {
+                name: 'max_connections',
+                xtype: 'spinnerfield',
+                fieldLabel: _('Maximum connections:'),
+                labelSeparator: '',
+                width: 80,
+                decimalPrecision: 0,
+                minValue: -1,
+                maxValue: 9999999,
+                incrementValue: 1,
+                value: -1,
+            },
+            {
+                name: 'max_upload_slots',
+                xtype: 'spinnerfield',
+                fieldLabel: _('Maximum upload slots:'),
+                labelSeparator: '',
+                width: 80,
+                decimalPrecision: 0,
+                minValue: -1,
+                maxValue: 9999999,
+                incrementValue: 1,
+                value: -1,
+            },
+        ],
+    },
     {
         key: 'auto_label',
         title: _('Label these torrents'),

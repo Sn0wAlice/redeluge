@@ -33,6 +33,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use redeluge_libtorrent::{AddTorrent, Setting};
+use redeluge_rencode::Value;
 use serde_json::Value as Json;
 
 use crate::activity::{did, rule, Action};
@@ -890,6 +891,48 @@ async fn apply_tracker_rules(core: Arc<Core>) {
             }
         };
 
+        // Limits first: a torrent about to be moved or removed may as well
+        // spend its last minutes obeying the rule it is under, and a torrent
+        // that is merely new gets them before it has downloaded much.
+        for wanted in work.limits {
+            let options = Value::Dict(
+                wanted
+                    .options
+                    .iter()
+                    .map(|(key, value)| {
+                        (Value::Str(key.clone()), crate::core::json_to_value(value))
+                    })
+                    .collect(),
+            );
+            match core
+                .apply_torrent_options(vec![wanted.id.clone()], options)
+                .await
+            {
+                Ok(_) => {
+                    core.manager
+                        .with({
+                            let id = wanted.id.clone();
+                            let fingerprint = wanted.fingerprint.clone();
+                            move |state| {
+                                state.tracker_limits.insert(id, fingerprint);
+                            }
+                        })
+                        .await
+                        .ok();
+                    tracing::info!(torrent = %wanted.id, tracker = %wanted.host,
+                        "limits applied by the tracker's rule");
+                    record(
+                        &core,
+                        Action::new(rule::TRACKER, did::LIMITED, now)
+                            .torrent(&wanted.id, &wanted.name)
+                            .detail(format!("{} sets the limits here", wanted.host)),
+                    );
+                }
+                Err(err) => tracing::warn!(torrent = %wanted.id, error = %err.message,
+                    "could not apply a tracker's limits"),
+            }
+        }
+
         for wanted in work.labels {
             // The same call `label.set_torrent` makes, so the label is created
             // if it has gone missing and whatever it applies is applied.
@@ -926,9 +969,21 @@ async fn apply_tracker_rules(core: Arc<Core>) {
 /// What one pass of the tracker rules has decided.
 #[derive(Default)]
 struct TrackerWork {
+    limits: Vec<TrackerLimit>,
     labels: Vec<TrackerLabel>,
     moves: Vec<TrackerMove>,
     removals: Vec<TrackerRemoval>,
+}
+
+/// Limits a tracker's rule wants a torrent to carry.
+struct TrackerLimit {
+    id: String,
+    name: String,
+    host: String,
+    /// The rule's limits as `core.set_torrent_options` takes them.
+    options: Vec<(String, Json)>,
+    /// What was applied, so the same rule is not applied twice.
+    fingerprint: String,
 }
 
 /// Which torrent, and which tracker's rule is why.
@@ -998,6 +1053,24 @@ fn decide_tracker_work(
         let finished = tracker::finished_at(status.completed_time, status.added_time, false);
         let finished_strictly =
             tracker::finished_at(status.completed_time, status.added_time, true);
+
+        // ----------------------------------------------------------- limits
+        // Applied when this torrent is first seen under the rule, and again
+        // when the rule changes. Not every pass: a limit somebody sets by hand
+        // is theirs to keep until the rule itself moves.
+        if options.limits() {
+            let fingerprint = options.limits_fingerprint();
+            let applied = state.tracker_limits.get(&id);
+            if applied != Some(&fingerprint) {
+                work.limits.push(TrackerLimit {
+                    id: id.clone(),
+                    name: status.name.clone(),
+                    host: host.clone(),
+                    options: options.to_torrent_options(),
+                    fingerprint,
+                });
+            }
+        }
 
         // ------------------------------------------------------------ label
         if options.labels() {

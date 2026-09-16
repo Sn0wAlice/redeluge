@@ -30,6 +30,7 @@ exec docker run --rm -v "${repo}:/src" -w /src \
         docker/check-docs.sh
         ruff check tools
         ruff format --check tools
+        python3 tools/draw_icons.py --check
         cargo fmt --all -- --check
         cargo clippy --workspace --all-targets -- -D warnings
         cargo test --workspace

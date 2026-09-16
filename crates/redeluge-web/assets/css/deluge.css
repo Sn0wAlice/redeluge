@@ -138,13 +138,21 @@ button::-moz-focus-inner {
     background-image: url('../icons/inactive.png');
 }
 .x-deluge-error,
-.deluge-torrents .error,
-/* The torrents their tracker has stopped recognising. The same icon as an
-   error, because that is what it is: one the tracker reported rather than one
-   libtorrent did, and the sidebar row would otherwise be the only one in the
-   list with a blank where every other state has a picture. */
-.x-deluge-unregistered {
+.deluge-torrents .error {
     background-image: url('../icons/alert.png');
+}
+/* The torrents their tracker has stopped recognising. Its own icon rather than
+   the error alert: this is a tracker disowning a torrent, not a torrent that
+   is broken, and it is the one sidebar row that offers to delete what it
+   lists. Drawn by tools/draw_icons.py. */
+.x-deluge-unregistered {
+    background-image: url('../icons/unregistered.png');
+}
+.icon-activity {
+    background-image: url('../icons/activity.png') !important;
+}
+.icon-peers {
+    background-image: url('../icons/peers.png') !important;
 }
 .x-deluge-checking,
 .deluge-torrents .checking {
