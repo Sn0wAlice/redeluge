@@ -211,11 +211,13 @@ async fn dispatch(
         // Everything in the daemon's namespaces goes to the daemon, and
         // `label.*` is one of them: Radarr, Sonarr and the rest reach this
         // server rather than the daemon's own port, so a namespace that is not
-        // forwarded here is a namespace they cannot call.
+        // forwarded here is a namespace they cannot call. `redeluge.*` is this
+        // fork's own, and the interface calls it from here like any other.
         method
             if method.starts_with("core.")
                 || method.starts_with("daemon.")
-                || method.starts_with("label.") =>
+                || method.starts_with("label.")
+                || method.starts_with("redeluge.") =>
         {
             // Writing the configuration changes the rate limits the status bar
             // shows, so what is held about them stops being true here rather

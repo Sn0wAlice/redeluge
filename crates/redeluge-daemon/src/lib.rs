@@ -10,6 +10,7 @@
 //! daemon. Every method here is one of those, with the same name, arity and
 //! authorisation level.
 
+pub mod activity;
 pub mod auth;
 pub mod config;
 pub mod core;

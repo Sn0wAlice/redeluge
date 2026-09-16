@@ -229,7 +229,15 @@ impl Torrent {
         session_paused: bool,
         trackers: &[redeluge_libtorrent::TrackerEntry],
     ) -> BTreeMap<String, Value> {
-        self.status_with_peers(status, session_paused, trackers, &[], 0.0, 0)
+        self.status_with_peers(
+            status,
+            session_paused,
+            trackers,
+            &[],
+            0.0,
+            0,
+            &crate::features::tracker::Settings::default(),
+        )
     }
 
     /// The status, with the peer list filled in.
@@ -245,6 +253,7 @@ impl Torrent {
         peers: &[(redeluge_libtorrent::PeerInfo, PeerCountry)],
         idle_since: f64,
         idle_grace: u64,
+        tracker_rules: &crate::features::tracker::Settings,
     ) -> BTreeMap<String, Value> {
         let state = self.state(status, session_paused);
         let mut out: BTreeMap<String, Value> = BTreeMap::new();
@@ -449,9 +458,22 @@ impl Torrent {
         put("creator", Value::Str(String::new()));
 
         let current = current_tracker(&status.current_tracker, trackers);
+        let host = tracker_host(&current);
         put("tracker", Value::Str(current.clone()));
-        put("tracker_host", Value::Str(tracker_host(&current)));
+        put("tracker_host", Value::Str(host.clone()));
         put("tracker_status", Value::Str(self.tracker_status.clone()));
+
+        // What this torrent's tracker is about to do to it, as two moments
+        // rather than two sentences: the interface counts down between polls,
+        // and a sentence computed here would be stale the moment it arrived.
+        // Zero means nothing is coming, as it does for the idle rule below.
+        //
+        // The conditions are the sweep's, and they have to stay the sweep's: a
+        // countdown that reaches zero and is followed by nothing is worse than
+        // no countdown, because it teaches you not to believe the next one.
+        let (move_at, remove_at) = tracker_countdowns(status, &host, tracker_rules);
+        put("tracker_move_at", Value::Float64(move_at));
+        put("tracker_remove_at", Value::Float64(remove_at));
 
         // The idle rule's countdown. Three numbers rather than a sentence,
         // because the interface counts down between polls and a sentence
@@ -572,6 +594,50 @@ pub struct PeerCountry {
 /// sidebar's group for torrents that have none.
 ///
 /// Shared, because the filter tree and the torrent status both need the
+/// When each of a tracker's rules is due to act on this torrent.
+///
+/// Answers `(move, remove)` as Unix seconds, zero for "not counting down".
+/// The two differ in what counts as having finished, which
+/// [`crate::features::tracker::finished_at`] explains: the destructive rule
+/// will not work from a completion time libtorrent never saw, and the others
+/// will.
+fn tracker_countdowns(
+    status: &LtStatus,
+    host: &str,
+    rules: &crate::features::tracker::Settings,
+) -> (f64, f64) {
+    use crate::features::tracker;
+
+    let Some(options) = rules.options(host) else {
+        return (0.0, 0.0);
+    };
+    if !status.is_finished {
+        return (0.0, 0.0);
+    }
+
+    let move_at = if options.moves()
+        && status.save_path.trim_end_matches('/') != options.move_path.trim_end_matches('/')
+    {
+        tracker::due_at(
+            tracker::finished_at(status.completed_time, status.added_time, false),
+            options.move_after_hours,
+        )
+    } else {
+        0.0
+    };
+
+    let remove_at = if options.removes() {
+        tracker::due_at(
+            tracker::finished_at(status.completed_time, status.added_time, true),
+            options.remove_after_hours,
+        )
+    } else {
+        0.0
+    };
+
+    (move_at, remove_at)
+}
+
 /// answer, and the last time each worked it out for itself they disagreed.
 pub fn current_tracker(announced: &str, trackers: &[redeluge_libtorrent::TrackerEntry]) -> String {
     if !announced.is_empty() {

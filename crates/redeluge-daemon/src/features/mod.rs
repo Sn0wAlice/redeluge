@@ -35,6 +35,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use redeluge_libtorrent::{AddTorrent, Setting};
 use serde_json::Value as Json;
 
+use crate::activity::{did, rule, Action};
 use crate::core::Core;
 use crate::events::Event;
 
@@ -126,6 +127,21 @@ fn now() -> f64 {
         .duration_since(UNIX_EPOCH)
         .map(|since| since.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+/// Torrents a sweep acted on: the id, and the name for the history.
+///
+/// A pair rather than the id alone because the interface has to say what was
+/// acted on, and for a removal the torrent is gone before anybody reads it.
+type Acted = Vec<(String, String)>;
+
+/// Records something a rule did on its own, for the interface to show.
+///
+/// A line in the log says it too, and the log is where an operator looks when
+/// something has gone wrong. This is where a person looks when nothing has:
+/// "why is that paused", "what happened to that download".
+fn record(core: &Core, action: crate::activity::Action) {
+    core.manager.activity().record(action);
 }
 
 async fn setting(core: &Core, key: &str) -> Option<Json> {
@@ -288,11 +304,23 @@ async fn rotate_idle_downloads(core: Arc<Core>) {
 
         match outcome {
             Ok((released, paused)) => {
-                for id in released {
+                for (id, name) in released {
                     tracing::info!(torrent = %id, "released by the idle rule");
+                    record(
+                        &core,
+                        Action::new(rule::IDLE, did::RESUMED, now)
+                            .torrent(&id, &name)
+                            .detail("its time paused was up"),
+                    );
                 }
-                for id in paused {
+                for (id, name) in paused {
                     tracing::info!(torrent = %id, "paused: idle while something was queued");
+                    record(
+                        &core,
+                        Action::new(rule::IDLE, did::PAUSED, now)
+                            .torrent(&id, &name)
+                            .detail("it was transferring nothing and something was queued"),
+                    );
                 }
             }
             Err(err) => tracing::warn!(error = %err, "the torrent manager is not answering"),
@@ -308,7 +336,7 @@ fn sweep_idle(
     state: &mut crate::manager::SessionState,
     settings: &idlepause::Settings,
     now: f64,
-) -> (Vec<String>, Vec<String>) {
+) -> (Acted, Acted) {
     use redeluge_libtorrent::{flags, FlagChange};
 
     let mut released = Vec::new();
@@ -347,7 +375,9 @@ fn sweep_idle(
             .set_to(flags::PAUSED, false)
             .set_to(flags::AUTO_MANAGED, true);
         if state.session.set_flags(&id, change).is_ok() {
+            let mut name = String::new();
             if let Some(torrent) = state.torrents.get_mut(&id) {
+                name = torrent.options.name.clone().unwrap_or_default();
                 torrent.options.idle_resume_at = 0.0;
                 // The options, not just the session flags: a restart re-adds
                 // every torrent from these.
@@ -356,7 +386,7 @@ fn sweep_idle(
             }
             state.mark_dirty();
             state.idle_since.remove(&id);
-            released.push(id);
+            released.push((id, name));
         }
     }
 
@@ -438,19 +468,21 @@ fn sweep_idle(
             .set_to(flags::PAUSED, true)
             .set_to(flags::AUTO_MANAGED, false);
         if state.session.set_flags(id, change).is_ok() {
+            let mut name = String::new();
             if let Some(torrent) = state.torrents.get_mut(id) {
+                name = torrent.options.name.clone().unwrap_or_default();
                 torrent.options.idle_resume_at = now + settings.pause_for as f64;
                 torrent.options.paused = true;
                 torrent.options.auto_managed = false;
             }
             state.mark_dirty();
-            paused.push(id.clone());
+            paused.push((id.clone(), name));
             running -= 1;
             queued -= 1;
         }
     }
 
-    for id in &paused {
+    for (id, _) in &paused {
         state.idle_since.remove(id);
     }
 
@@ -518,11 +550,24 @@ async fn guard_disk_space(core: Arc<Core>) {
             .await
         {
             Ok((released, paused)) => {
-                for id in released {
+                let at = now();
+                for (id, name) in released {
                     tracing::info!(torrent = %id, "released: there is room again");
+                    record(
+                        &core,
+                        Action::new(rule::DISK, did::RESUMED, at)
+                            .torrent(&id, &name)
+                            .detail("there is room on the disk again"),
+                    );
                 }
-                for id in paused {
+                for (id, name) in paused {
                     tracing::warn!(torrent = %id, "paused: not enough free space to keep writing");
+                    record(
+                        &core,
+                        Action::new(rule::DISK, did::PAUSED, at)
+                            .torrent(&id, &name)
+                            .detail("the disk it writes to is nearly full"),
+                    );
                 }
             }
             Err(err) => tracing::warn!(error = %err, "the torrent manager is not answering"),
@@ -552,7 +597,7 @@ fn sweep_space(
     state: &mut crate::manager::SessionState,
     settings: &diskspace::Settings,
     free: &std::collections::BTreeMap<String, i64>,
-) -> (Vec<String>, Vec<String>) {
+) -> (Acted, Acted) {
     use redeluge_libtorrent::{flags, FlagChange};
 
     let statuses = state.session.all_torrent_status();
@@ -622,13 +667,15 @@ fn sweep_space(
             .set_to(flags::PAUSED, false)
             .set_to(flags::AUTO_MANAGED, managed);
         if state.session.set_flags(&id, change).is_ok() {
+            let mut name = String::new();
             if let Some(torrent) = state.torrents.get_mut(&id) {
+                name = torrent.options.name.clone().unwrap_or_default();
                 torrent.options.space_paused = false;
                 torrent.options.paused = false;
                 torrent.options.auto_managed = managed;
             }
             state.mark_dirty();
-            released.push(id);
+            released.push((id, name));
         }
     }
 
@@ -640,7 +687,9 @@ fn sweep_space(
             .set_to(flags::PAUSED, true)
             .set_to(flags::AUTO_MANAGED, false);
         if state.session.set_flags(&id, change).is_ok() {
+            let mut name = String::new();
             if let Some(torrent) = state.torrents.get_mut(&id) {
+                name = torrent.options.name.clone().unwrap_or_default();
                 torrent.options.space_was_managed = torrent.options.auto_managed;
                 torrent.options.space_paused = true;
                 torrent.options.paused = true;
@@ -648,7 +697,7 @@ fn sweep_space(
             }
             state.mark_dirty();
             state.idle_since.remove(&id);
-            paused.push(id);
+            paused.push((id, name));
         }
     }
 
@@ -699,23 +748,35 @@ async fn apply_tracker_rules(core: Arc<Core>) {
             }
         };
 
-        for (id, host, label) in work.labels {
+        for wanted in work.labels {
             // The same call `label.set_torrent` makes, so the label is created
             // if it has gone missing and whatever it applies is applied.
-            match core.assign_label(&id, &label).await {
-                Ok(()) => tracing::info!(torrent = %id, tracker = %host, %label,
-                    "labelled by the tracker's rule"),
-                Err(err) => tracing::warn!(torrent = %id, %label, error = %err.message,
+            match core.assign_label(&wanted.id, &wanted.label).await {
+                Ok(()) => {
+                    tracing::info!(torrent = %wanted.id, tracker = %wanted.host,
+                        label = %wanted.label, "labelled by the tracker's rule");
+                    record(
+                        &core,
+                        Action::new(rule::TRACKER, did::LABELLED, now)
+                            .torrent(&wanted.id, &wanted.name)
+                            .detail(format!(
+                                "{} says its torrents go in {}",
+                                wanted.host, wanted.label
+                            )),
+                    );
+                }
+                Err(err) => tracing::warn!(torrent = %wanted.id, label = %wanted.label,
+                    error = %err.message,
                     "could not label a torrent its tracker's rule names"),
             }
         }
 
         for candidate in work.moves {
-            start_tracker_move(&core, &candidate).await;
+            start_tracker_move(&core, &candidate, now).await;
         }
 
-        for (id, host, with_data) in work.removals {
-            remove_for_tracker(&core, &id, &host, with_data).await;
+        for removal in work.removals {
+            remove_for_tracker(&core, &removal, now).await;
         }
     }
 }
@@ -723,21 +784,40 @@ async fn apply_tracker_rules(core: Arc<Core>) {
 /// What one pass of the tracker rules has decided.
 #[derive(Default)]
 struct TrackerWork {
-    /// `(torrent, tracker, label)`
-    labels: Vec<(String, String, String)>,
+    labels: Vec<TrackerLabel>,
     moves: Vec<TrackerMove>,
-    /// `(torrent, tracker, delete the files too)`
-    removals: Vec<(String, String, bool)>,
+    removals: Vec<TrackerRemoval>,
+}
+
+/// Which torrent, and which tracker's rule is why.
+///
+/// The name travels with the id everywhere here because the history has to say
+/// what was acted on after the fact, and after a removal there is nothing left
+/// to look it up in.
+struct TrackerLabel {
+    id: String,
+    name: String,
+    host: String,
+    label: String,
 }
 
 /// A move a tracker's rule asks for, before anybody has looked at the disk.
 struct TrackerMove {
     id: String,
+    name: String,
     host: String,
     from: String,
     to: String,
     /// What will have to fit at the destination.
     size: i64,
+}
+
+/// A removal a tracker's rule asks for.
+struct TrackerRemoval {
+    id: String,
+    name: String,
+    host: String,
+    with_data: bool,
 }
 
 /// One pass over the library: what each tracker's rules have to say about it.
@@ -792,7 +872,12 @@ fn decide_tracker_work(
                 && torrent.options.label != wanted
                 && !wanted.is_empty()
             {
-                work.labels.push((id.clone(), host.clone(), wanted));
+                work.labels.push(TrackerLabel {
+                    id: id.clone(),
+                    name: status.name.clone(),
+                    host: host.clone(),
+                    label: wanted,
+                });
             }
         }
 
@@ -807,6 +892,7 @@ fn decide_tracker_work(
             moving = true;
             work.moves.push(TrackerMove {
                 id: id.clone(),
+                name: status.name.clone(),
                 host: host.clone(),
                 from: status.save_path.clone(),
                 to: options.move_path.clone(),
@@ -826,7 +912,12 @@ fn decide_tracker_work(
             && !moving
             && tracker::due(finished_strictly, now, options.remove_after_hours)
         {
-            work.removals.push((id, host, options.remove_data));
+            work.removals.push(TrackerRemoval {
+                id,
+                name: status.name.clone(),
+                host,
+                with_data: options.remove_data,
+            });
         }
     }
 
@@ -837,7 +928,7 @@ fn decide_tracker_work(
 ///
 /// The disk is measured here rather than in the pass above, so the session
 /// thread is not held for a `statvfs` per torrent.
-async fn start_tracker_move(core: &Core, candidate: &TrackerMove) {
+async fn start_tracker_move(core: &Core, candidate: &TrackerMove, at: f64) {
     let destination = std::path::Path::new(&candidate.to);
     let source = std::path::Path::new(&candidate.from);
 
@@ -875,8 +966,19 @@ async fn start_tracker_move(core: &Core, candidate: &TrackerMove) {
         .await;
 
     match started {
-        Ok(Ok(())) => tracing::info!(torrent = %candidate.id, tracker = %candidate.host,
-            destination = %candidate.to, "moving: the tracker's rule for finished torrents"),
+        Ok(Ok(())) => {
+            tracing::info!(torrent = %candidate.id, tracker = %candidate.host,
+                destination = %candidate.to, "moving: the tracker's rule for finished torrents");
+            record(
+                core,
+                Action::new(rule::TRACKER, did::MOVED, at)
+                    .torrent(&candidate.id, &candidate.name)
+                    .detail(format!(
+                        "{} says its finished torrents go to {}",
+                        candidate.host, candidate.to
+                    )),
+            );
+        }
         Ok(Err(err)) => tracing::warn!(torrent = %candidate.id, error = %err,
             "could not move a torrent its tracker's rule is due to move"),
         Err(err) => tracing::warn!(error = %err, "the torrent manager is not answering"),
@@ -884,7 +986,9 @@ async fn start_tracker_move(core: &Core, candidate: &TrackerMove) {
 }
 
 /// Removes a torrent a tracker's rule is done with.
-async fn remove_for_tracker(core: &Core, id: &str, host: &str, with_data: bool) {
+async fn remove_for_tracker(core: &Core, removal: &TrackerRemoval, at: f64) {
+    let id = removal.id.as_str();
+    let with_data = removal.with_data;
     // Announced before and after, like `core.remove_torrent`, because a client
     // holding the torrent's details has to be told to let go of them before
     // they stop existing.
@@ -908,8 +1012,22 @@ async fn remove_for_tracker(core: &Core, id: &str, host: &str, with_data: bool) 
 
     match removed {
         Ok(Ok(())) => {
-            tracing::info!(torrent = %id, tracker = %host, data = with_data,
+            tracing::info!(torrent = %id, tracker = %removal.host, data = with_data,
                 "removed: the tracker's rule for finished torrents");
+            record(
+                core,
+                Action::new(rule::TRACKER, did::REMOVED, at)
+                    .torrent(id, &removal.name)
+                    .detail(format!(
+                        "{} says its finished torrents go, {}",
+                        removal.host,
+                        if with_data {
+                            "with their files"
+                        } else {
+                            "keeping their files"
+                        }
+                    )),
+            );
             core.manager.announce(Event::TorrentRemoved {
                 torrent_id: id.to_owned(),
             });
@@ -1399,6 +1517,13 @@ async fn follow_schedule(core: Arc<Core>) {
         // sets a rate limit by hand within the same hour.
         if current != Some(state) {
             tracing::info!(state = state.as_str(), "the schedule changed");
+            // Only on a change, which is the same condition the rule itself
+            // uses: an entry an hour, every hour, would bury everything else.
+            record(
+                &core,
+                Action::new(rule::SCHEDULE, did::CHANGED, now())
+                    .detail(format!("the schedule moved to {}", state.as_str())),
+            );
             apply_schedule(&core, &settings, state).await;
             current = Some(state);
         }

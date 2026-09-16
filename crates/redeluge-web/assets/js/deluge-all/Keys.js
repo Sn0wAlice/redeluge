@@ -57,6 +57,8 @@ Deluge.Keys = {
         'idle_pause_at',
         'idle_resume_at',
         'space_paused',
+        'tracker_move_at',
+        'tracker_remove_at',
     ],
 
     /**

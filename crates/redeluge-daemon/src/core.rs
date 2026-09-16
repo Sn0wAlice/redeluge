@@ -63,6 +63,15 @@ pub const PLUGIN_METHODS: &[&str] = &[
     "label.set_torrent",
 ];
 
+/// The methods that are this daemon's own.
+///
+/// Not Deluge's, and deliberately not in the `core.` namespace so that nobody
+/// has to wonder which is which: a client that finds `redeluge.*` in the
+/// method list knows exactly what it has found, and no future Deluge method
+/// can collide with one of these. They are advertised for the same reason the
+/// Label plugin's are — a list that does not say what can be called misleads.
+pub const REDELUGE_METHODS: &[&str] = &["redeluge.get_recent_actions"];
+
 /// Everything a call can reach.
 pub struct Core {
     pub manager: Manager,
@@ -261,6 +270,16 @@ impl Core {
         crate::features::idlepause::Settings::from_config(config.get("idle_pause"))
             .sane()
             .grace
+    }
+
+    /// The per-tracker rules, out of `core.conf`.
+    ///
+    /// Read for the status as well as for the sweep, because the status
+    /// reports when each rule is due and has to be reading the same numbers
+    /// the sweep acts on.
+    async fn tracker_rules(&self) -> crate::features::tracker::Settings {
+        let config = self.config.lock().await;
+        crate::features::tracker::Settings::from_config(config.get("tracker")).sane()
     }
 
     // ------------------------------------------------------------- labels
@@ -672,6 +691,12 @@ impl Rpc for Core {
                 },
             );
         }
+        // Reading what the daemon did to its own torrents is reading, and a
+        // read-only account is entitled to know why something it can see is
+        // paused.
+        if REDELUGE_METHODS.contains(&method) {
+            return Some(AuthLevel::ReadOnly);
+        }
         // core.get_auth_levels_mappings is level 0 in the Python daemon, which
         // makes it reachable before a client has proved anything. Raised here,
         // as the phase 0 report said it should be.
@@ -694,6 +719,7 @@ impl Rpc for Core {
         // in the other direction: a client that reads the list would not find
         // what it can call.
         methods.extend(PLUGIN_METHODS.iter().map(|name| (*name).to_owned()));
+        methods.extend(REDELUGE_METHODS.iter().map(|name| (*name).to_owned()));
         methods.sort();
         methods
     }
@@ -1517,6 +1543,20 @@ impl Rpc for Core {
                 self.assign_label(&torrent_id, &id).await?;
                 Ok(Value::None)
             }
+            // What the daemon did without being asked, newest first. Each rule
+            // that acts on its own writes a line here; `activity.rs` says why
+            // the log file was not enough.
+            "redeluge.get_recent_actions" => {
+                let limit = args
+                    .first()
+                    .and_then(Value::as_i64)
+                    .filter(|limit| *limit > 0)
+                    .map(|limit| limit as usize)
+                    .unwrap_or(crate::activity::CAPACITY);
+                let actions = self.manager.activity().recent(limit);
+                Ok(Value::List(actions.iter().map(action_value).collect()))
+            }
+
             "label.get_config" => {
                 let labels = self.labels().await;
                 Ok(json_to_value(&labels.to_json()))
@@ -2211,6 +2251,7 @@ impl Core {
         files: bool,
     ) -> Result<BTreeMap<String, Value>, RpcError> {
         let grace = self.idle_grace().await;
+        let rules = self.tracker_rules().await;
         let wanted = id.to_owned();
         let status = self
             .manager
@@ -2252,6 +2293,7 @@ impl Core {
                     &peers,
                     idle_since,
                     grace,
+                    &rules,
                 );
                 if let Some((entries, progress, priorities)) = file_list {
                     crate::torrent::put_files(&mut out, &entries, &progress, &priorities);
@@ -2270,6 +2312,7 @@ impl Core {
         keys: Option<Vec<String>>,
     ) -> Result<Value, RpcError> {
         let grace = self.idle_grace().await;
+        let rules = self.tracker_rules().await;
         let all = self
             .manager
             .with(move |state| {
@@ -2297,6 +2340,7 @@ impl Core {
                             &[],
                             idle_since,
                             grace,
+                            &rules,
                         ),
                     ));
                 }
@@ -2585,6 +2629,27 @@ impl Core {
             .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
         Ok(Value::None)
     }
+}
+
+/// One recorded action, as a client reads it.
+fn action_value(action: &crate::activity::Action) -> Value {
+    Value::Dict(vec![
+        (Value::Str("time".into()), Value::Float64(action.at)),
+        (
+            Value::Str("rule".into()),
+            Value::Str(action.rule.to_owned()),
+        ),
+        (Value::Str("did".into()), Value::Str(action.did.to_owned())),
+        (
+            Value::Str("torrent_id".into()),
+            Value::Str(action.torrent_id.clone()),
+        ),
+        (Value::Str("name".into()), Value::Str(action.name.clone())),
+        (
+            Value::Str("detail".into()),
+            Value::Str(action.detail.clone()),
+        ),
+    ])
 }
 
 /// A label as the Label plugin would have stored it.

@@ -294,6 +294,20 @@ pub fn finished_at(completed_time: i64, added_time: i64, destructive: bool) -> f
     added_time as f64
 }
 
+/// When a rule measured from this moment comes due.
+///
+/// Zero when it never does, which is what every other time in this API uses
+/// for "not counting down": the interface draws nothing rather than a date in
+/// 1970. Reported in the torrent's status so the list can say what is about to
+/// happen to a torrent, which for the destructive rule is the difference
+/// between a feature you dare leave on and one you do not.
+pub fn due_at(finished_at: f64, hours: f64) -> f64 {
+    if finished_at <= 0.0 {
+        return 0.0;
+    }
+    finished_at + hours * HOUR
+}
+
 /// Whether there is room at the destination to move this torrent.
 ///
 /// `free` is what the destination's filesystem reports, and a negative figure
@@ -421,6 +435,9 @@ mod tests {
         assert!(!due(finished, finished + 23.0 * HOUR, day));
         assert!(due(finished, finished + 24.0 * HOUR, day));
         assert!(due(finished, finished + 400.0 * HOUR, day));
+
+        // And the same moment, as the interface counts down to it.
+        assert_eq!(due_at(finished, day), finished + 24.0 * HOUR);
     }
 
     #[test]
@@ -430,6 +447,8 @@ mod tests {
         // time, and "zero seconds since the epoch" is not one.
         assert!(!due(0.0, 9_999_999.0, 0.0));
         assert!(!due(-1.0, 9_999_999.0, 0.0));
+        // And nothing to count down to, rather than a date in 1970.
+        assert_eq!(due_at(0.0, 24.0), 0.0);
     }
 
     #[test]

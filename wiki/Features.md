@@ -206,6 +206,19 @@ kinds of rule answer that differently, on purpose:
 
 The daemon looks over the library once a minute.
 
+### Seeing it coming
+
+The torrent list has a *Tracker Rule* column, beside *Idle*, and it says what
+is about to happen to each row: *removed in 21h*, *moved in 2h*. Removal is
+named first when both are due, because it is the one that cannot be undone.
+
+It is counted in the browser from two timestamps the status carries,
+`tracker_remove_at` and `tracker_move_at`, so it ticks between polls rather
+than being as old as the last one. Zero means nothing is coming and the column
+is blank — which is what it says for every torrent until you set a rule. The
+conditions behind those two numbers are the sweep's own: a countdown that
+reaches zero and is followed by nothing would be worse than no countdown.
+
 ### Setting them without the interface
 
 It is one key, like the rest:
@@ -223,6 +236,46 @@ The key is the tracker host as the sidebar groups it — `example.org`, not the
 announce URL — because that is the row the rule is set on. Remember that a key
 is replaced whole: send every tracker you want to keep a rule for, not just the
 one you are changing. The Web UI reads the current value and merges for you.
+
+## What the daemon did on its own
+
+Six things here act without being asked: the share-ratio rule, the idle rule,
+the disk-space rule, the schedule, and a tracker's rules for labelling, moving
+and removing. Two of them move or delete files.
+
+**Activity**, in the toolbar, is the short history of what they did — newest
+first, with the torrent, the rule and why. It is not a log viewer: it answers
+the two questions somebody actually asks once automatic rules are on, *why is
+that paused* and *what happened to that download*, and it answers them beside
+the torrents rather than in `docker logs`.
+
+| | |
+|---|---|
+| Tracker | Labelled, moved or removed by a tracker's rule |
+| Idle | Paused for transferring nothing while something was queued, or let go again |
+| Disk | Paused because the disk it writes to is nearly full, or let go once there was room |
+| Ratio | Stopped or removed at its share ratio |
+| Schedule | The weekly schedule changed what is allowed to run |
+
+The last two hundred are kept, in memory. That is deliberate: the history
+explains the state the daemon is in now, which a restart clears anyway, and a
+file would need rotating, locking and a format for something read twice a
+month. The daemon's log still has every line, and keeps them.
+
+Over the API it is `redeluge.get_recent_actions`, optionally with a limit:
+
+```bash
+curl -s -b cookies.txt -H 'Content-Type: application/json' \
+  -d '{"method":"redeluge.get_recent_actions","params":[20],"id":1}' \
+  http://127.0.0.1:8112/json
+```
+
+Each entry is `time`, `rule`, `did`, `torrent_id`, `name` and `detail`. The
+name is stored with the entry rather than looked up, because after a removal
+there is nothing left to look it up in. `redeluge.*` is this fork's own
+namespace, kept separate from `core.*` so that nothing can mistake one for a
+Deluge method; it is the only one, and it is advertised in
+`daemon.get_method_list` like everything else.
 
 ## Pausing idle downloads
 

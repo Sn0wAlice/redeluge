@@ -48,6 +48,7 @@ never in the status code, because that is what the shipped front end expects.
 | `core.*` | forwarded to the daemon | 70 |
 | `daemon.*` | forwarded to the daemon | 4 |
 | `label.*` | forwarded to the daemon | 8 |
+| `redeluge.*` | forwarded to the daemon, this fork's own | 1 |
 
 Ask the server itself for the list:
 
@@ -63,6 +64,13 @@ says `["Label"]` and the eight `label.*` methods work, because labels are part
 of this daemon and every program built on Deluge's API asks for the plugin
 before it will let you set a category. See
 [Features](Features) for the details.
+
+`redeluge.*` is the one namespace that is neither Deluge's nor a plugin's. It
+holds what this fork added and Deluge has no equivalent for —
+`redeluge.get_recent_actions`, the short history of what the daemon did without
+being asked — and it is separate from `core.*` on purpose, so that no client
+can mistake it for a Deluge method and no future Deluge method can collide with
+it.
 
 ## Logging in
 

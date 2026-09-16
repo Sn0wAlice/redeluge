@@ -99,6 +99,37 @@
         return '';
     }
 
+    /**
+     * What this torrent's tracker rules are about to do to it.
+     *
+     * Counted from the timestamps rather than from a sentence the server
+     * wrote, for the same reason the idle column is: it ticks between polls
+     * instead of being two seconds stale.
+     *
+     * Removal is said first when both are coming. It is the one that cannot be
+     * undone, and a row saying only "moved in 2h" while it is also being
+     * deleted tonight has told you the less important half.
+     */
+    function trackerRuleRenderer(value, p, r) {
+        var now = new Date().getTime() / 1000;
+        var removeAt = Number(r.data['tracker_remove_at']) || 0;
+        var moveAt = Number(r.data['tracker_move_at']) || 0;
+
+        if (removeAt > 0) {
+            var left = Math.round(removeAt - now);
+            return left > 0
+                ? String.format(_('removed in {0}'), ftime(left))
+                : _('removed shortly');
+        }
+        if (moveAt > 0) {
+            var until = Math.round(moveAt - now);
+            return until > 0
+                ? String.format(_('moved in {0}'), ftime(until))
+                : _('moved shortly');
+        }
+        return '';
+    }
+
     function etaSorter(eta) {
         if (eta === 0) return Number.MAX_VALUE;
         if (eta <= -1) return Number.MAX_SAFE_INTEGER;
@@ -264,6 +295,19 @@
                 dataIndex: 'idle_pause_at',
             },
             {
+                // Beside Idle, the other countdown to something the daemon is
+                // about to do on its own. Shown by default, unlike most of
+                // these: one of the two things it announces deletes files, and
+                // a rule that acts with no warning is a rule nobody leaves on.
+                header: _('Tracker Rule'),
+                // Wide enough for "removed in 23h 57m", which is what the
+                // longest of these actually says.
+                width: 150,
+                sortable: true,
+                renderer: trackerRuleRenderer,
+                dataIndex: 'tracker_remove_at',
+            },
+            {
                 // Beside Owner, the other thing that puts torrents in groups.
                 // Shown by default: a label you cannot see is one you cannot
                 // tell apart from no label at all, and the sidebar's Labels
@@ -393,6 +437,8 @@
                 { name: 'idle_since', type: 'float' },
                 { name: 'idle_pause_at', type: 'float' },
                 { name: 'idle_resume_at', type: 'float' },
+                { name: 'tracker_move_at', type: 'float' },
+                { name: 'tracker_remove_at', type: 'float' },
                 { name: 'space_paused', type: 'bool' },
             ],
         },

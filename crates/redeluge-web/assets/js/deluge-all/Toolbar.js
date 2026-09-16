@@ -92,6 +92,17 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
                         scope: this,
                     },
                     {
+                        // What the daemon did on its own. Beside Preferences,
+                        // which is where the rules that did it are turned on,
+                        // and enabled only once there is a daemon to ask.
+                        id: 'activity',
+                        disabled: true,
+                        text: _('Activity'),
+                        iconCls: 'icon-ok',
+                        handler: this.onActivityClick,
+                        scope: this,
+                    },
+                    {
                         id: 'connectionman',
                         text: _('Connection Manager'),
                         iconCls: 'x-deluge-connection-manager',
@@ -146,7 +157,15 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
         Deluge.Toolbar.superclass.constructor.call(this, config);
     },
 
-    connectedButtons: ['add', 'remove', 'pause', 'resume', 'up', 'down'],
+    connectedButtons: [
+        'add',
+        'remove',
+        'pause',
+        'resume',
+        'up',
+        'down',
+        'activity',
+    ],
 
     initComponent: function () {
         Deluge.Toolbar.superclass.initComponent.call(this);
@@ -206,6 +225,15 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
             field.setValue('');
             deluge.ui.update();
         }
+    },
+
+    onActivityClick: function () {
+        // Built when it is first wanted rather than with the interface: most
+        // sessions never open it.
+        if (!deluge.activityWindow) {
+            deluge.activityWindow = new Deluge.ActivityWindow();
+        }
+        deluge.activityWindow.show();
     },
 
     onHelpClick: function () {

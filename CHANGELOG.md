@@ -50,6 +50,28 @@ talking to.
   same way, so every connected client lets go of the torrent instead of holding
   a row for something that no longer exists.
 
+- **The torrent list says what a tracker's rule is about to do**, in a *Tracker
+  Rule* column beside *Idle*: *removed in 21h*, *moved in 2h*. Removal is named
+  first when both are due, because it is the one that cannot be undone. Counted
+  in the browser from two new status fields, `tracker_remove_at` and
+  `tracker_move_at`, so it ticks between polls instead of being as old as the
+  last one, and both are zero — and the column blank — when nothing is coming.
+  A rule that announces itself is a rule you dare leave on.
+- **Activity, in the toolbar: what the daemon did without being asked.** Six
+  things here act on their own — the share-ratio rule, the idle rule, the
+  disk-space rule, the schedule, and a tracker's rules for labelling, moving
+  and removing — and until now the only trace any of them left was a line in
+  the log, which on a container install means knowing to run `docker logs`.
+  The last two hundred actions are kept in memory, newest first, with the
+  torrent, the rule and why. It answers *why is that paused* and *what happened
+  to that download* beside the torrents rather than in a log file.
+- The torrent's name is stored with each entry rather than looked up, because
+  after a removal there is nothing left to look it up in.
+- `redeluge.get_recent_actions` reads it back. A namespace of this fork's own,
+  deliberately not `core.*`, so that no client can mistake it for a Deluge
+  method and no future Deluge method can collide with it. It is the only one so
+  far, and it is advertised in `daemon.get_method_list` like everything else.
+
 ### Changed
 
 - The README now says what this program is and is not: a BitTorrent client

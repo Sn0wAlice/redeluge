@@ -55,6 +55,12 @@ pub struct SessionState {
     /// the idle rule was started again by the next session resume, and the
     /// scheduler performs one at startup: every pause was lost on restart.
     pub paused_by_session: std::collections::BTreeSet<String>,
+    /// What the daemon has done on its own, for the interface to show.
+    ///
+    /// Shared with everything else that acts by itself: the rules on this
+    /// thread and the ones on the async side write to the same history, or it
+    /// would answer "why is this paused" for half the reasons.
+    pub activity: std::sync::Arc<crate::activity::Log>,
     /// Where peer countries come from, when the operator provided a database.
     countries: Option<crate::geoip::CountryLookup>,
     config_dir: PathBuf,
@@ -210,6 +216,14 @@ impl SessionState {
     }
 }
 
+/// Unix seconds, for the history of what the rules on this thread did.
+fn now_seconds() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
 /// A job for the session thread.
 type Job = Box<dyn FnOnce(&mut SessionState) + Send>;
 
@@ -218,6 +232,7 @@ type Job = Box<dyn FnOnce(&mut SessionState) + Send>;
 pub struct Manager {
     jobs: mpsc::Sender<Job>,
     events: tokio::sync::broadcast::Sender<Event>,
+    activity: std::sync::Arc<crate::activity::Log>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -243,6 +258,7 @@ impl Manager {
     ) -> Result<Self> {
         let session = Session::new(&settings)?;
         let (jobs, inbox) = mpsc::channel::<Job>();
+        let activity = std::sync::Arc::new(crate::activity::Log::default());
 
         let state = SessionState {
             session,
@@ -254,6 +270,7 @@ impl Manager {
             idle_since: BTreeMap::new(),
             low_space: false,
             paused_by_session: std::collections::BTreeSet::new(),
+            activity: std::sync::Arc::clone(&activity),
             countries: None,
             config_dir,
             dirty: false,
@@ -262,6 +279,7 @@ impl Manager {
         let manager = Self {
             jobs,
             events: events.clone(),
+            activity,
         };
 
         std::thread::Builder::new()
@@ -297,6 +315,11 @@ impl Manager {
 
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Event> {
         self.events.subscribe()
+    }
+
+    /// What the daemon has done on its own.
+    pub fn activity(&self) -> &std::sync::Arc<crate::activity::Log> {
+        &self.activity
     }
 
     fn emit(&self, event: Event) {
@@ -482,12 +505,23 @@ fn enforce_seeding_rules<F: Fn(Event)>(state: &mut SessionState, emit: &F) {
                 // Recorded on the torrent as well, because a restart re-adds
                 // every torrent from its stored options: a stop kept only in
                 // the session came back running.
+                let mut name = String::new();
                 if let Some(torrent) = state.torrents.get_mut(&id) {
                     torrent.options.paused = true;
                     torrent.options.auto_managed = false;
+                    name = torrent.options.name.clone().unwrap_or_default();
                 }
                 state.dirty = true;
                 tracing::info!(torrent = %id, "stopped at its share ratio");
+                state.activity.record(
+                    crate::activity::Action::new(
+                        crate::activity::rule::RATIO,
+                        crate::activity::did::PAUSED,
+                        now_seconds(),
+                    )
+                    .torrent(&id, &name)
+                    .detail("it reached its share ratio"),
+                );
             }
             Err(err) => tracing::warn!(torrent = %id, error = %err,
                 "could not stop a torrent at its share ratio"),
@@ -500,12 +534,26 @@ fn enforce_seeding_rules<F: Fn(Event)>(state: &mut SessionState, emit: &F) {
         });
         // The data stays. Deluge removes the torrent, not the download, and a
         // rule that deleted files on a timer would be a bad surprise.
+        let name = state
+            .torrents
+            .get(&id)
+            .and_then(|torrent| torrent.options.name.clone())
+            .unwrap_or_default();
         match state.session.remove_torrent(&id, false) {
             Ok(()) => {
                 state.torrents.remove(&id);
                 state.forget(&id);
                 state.dirty = true;
                 tracing::info!(torrent = %id, "removed at its share ratio");
+                state.activity.record(
+                    crate::activity::Action::new(
+                        crate::activity::rule::RATIO,
+                        crate::activity::did::REMOVED,
+                        now_seconds(),
+                    )
+                    .torrent(&id, &name)
+                    .detail("it reached its share ratio; the files were kept"),
+                );
                 emit(Event::TorrentRemoved { torrent_id: id });
             }
             Err(err) => tracing::warn!(torrent = %id, error = %err,

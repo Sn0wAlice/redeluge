@@ -97,7 +97,8 @@ async fn the_listener_and_the_core_together_cover_the_contract() {
     let (core, _dir) = daemon().await;
     let advertised: Vec<String> = core.method_list();
 
-    // The contract plus the plugin this daemon answers for, and nothing else.
+    // The contract, the plugin this daemon answers for and this fork's own
+    // methods, and nothing else.
     // A Deluge daemon advertises its plugins' methods as well as the core's,
     // so the list growing by exactly the Label plugin's is correct; growing by
     // anything else would mean an invented method, which is what this guards.
@@ -107,6 +108,14 @@ async fn the_listener_and_the_core_together_cover_the_contract() {
         .collect();
     expected.extend(
         redeluge_daemon::core::PLUGIN_METHODS
+            .iter()
+            .map(|name| (*name).to_owned()),
+    );
+    // And this fork's own, in their own namespace so that nothing can mistake
+    // them for Deluge's. Declared here for the same reason the config keys
+    // are: the next invented method has to be a deliberate act.
+    expected.extend(
+        redeluge_daemon::core::REDELUGE_METHODS
             .iter()
             .map(|name| (*name).to_owned()),
     );
@@ -129,7 +138,10 @@ async fn every_plugin_method_is_answerable() {
     let context = admin();
 
     let mut missing = Vec::new();
-    for name in redeluge_daemon::core::PLUGIN_METHODS {
+    for name in redeluge_daemon::core::PLUGIN_METHODS
+        .iter()
+        .chain(redeluge_daemon::core::REDELUGE_METHODS)
+    {
         let outcome = core.call(&context, name, Vec::new(), Vec::new()).await;
         if let Err(error) = outcome {
             if error.exception == "NotImplementedError" {
