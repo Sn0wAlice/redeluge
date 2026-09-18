@@ -448,6 +448,12 @@ impl Torrent {
                             // knows and nothing was carrying.
                             (Value::Str("utp".into()), Value::Bool(peer.utp)),
                             (Value::Str("encrypted".into()), Value::Bool(peer.encrypted)),
+                            // Where this peer was found. The one field that
+                            // says whether a torrent still has a way of
+                            // finding anybody at all: a swarm reachable only
+                            // through a tracker dies with that tracker, and
+                            // one the DHT still answers for does not.
+                            (Value::Str("source".into()), Value::Str(peer.source.clone())),
                             // The number that says whether this peer is worth
                             // having: pieces it has and we do not.
                             (

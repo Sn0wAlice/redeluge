@@ -4,8 +4,9 @@
 
 The icons Deluge shipped cover Deluge's interface. The features added here —
 the activity history, the peer ledger, the tracker info window, the torrents a
-tracker has stopped recognising — had no icon, and the choice was between
-borrowing one that means something else and drawing them.
+tracker has stopped recognising, the ones nobody has any more — had no icon,
+and the choice was between borrowing one that means something else and drawing
+them.
 
 They are drawn rather than downloaded so that the set stays one set. The
 palette is sampled from the icons already shipped, not chosen: the existing
@@ -123,8 +124,31 @@ TRACKER_INFO = [
     '................',
 ]
 
+# A swarm with nobody in it. The first attempt drew the peer graph hollow and
+# it read as a face at sixteen pixels; a barred circle says "none" and cannot
+# be mistaken for anything else.
+DEAD = [
+    '................',
+    '.....kkkkkk.....',
+    '...kkwwwwwwkk...',
+    '..kwwwwwwwkwwk..',
+    '..kwwwwwwkwwwk..',
+    '.kwwwwwwkwwwwwk.',
+    '.kwwwwwkwwwwwwk.',
+    '.kwwwwkwwwwwwwk.',
+    '.kwwwkwwwwwwwwk.',
+    '.kwwkwwwwwwwwwk.',
+    '.kwkwwwwwwwwwwk.',
+    '..kkwwwwwwwwwk..',
+    '..kwwwwwwwwwwk..',
+    '...kkwwwwwwkk...',
+    '.....kkkkkk.....',
+    '................',
+]
+
 ICONS = {
     'activity': ACTIVITY,
+    'dead': DEAD,
     'peers': PEERS,
     'tracker_info': TRACKER_INFO,
     'unregistered': UNREGISTERED,

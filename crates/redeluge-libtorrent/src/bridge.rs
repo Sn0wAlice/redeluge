@@ -116,6 +116,9 @@ pub mod ffi {
         utp: bool,
         /// True when the connection is encrypted, either scheme.
         encrypted: bool,
+        /// How this peer was found: `tracker`, `DHT`, `PEX`, `LSD`, `resume`
+        /// or `incoming`. Empty when libtorrent recorded no source.
+        source: String,
         /// How many pieces this peer has that we do not.
         ///
         /// The one number that says whether a peer is worth having: a seed we

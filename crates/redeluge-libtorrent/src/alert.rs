@@ -179,6 +179,19 @@ impl Alert {
         }
     }
 
+    /// Whether a tracker error carries the tracker's own words.
+    ///
+    /// False means the transport failed and the tracker never answered, which
+    /// is a different fact: one announce per listen socket means a dual-stack
+    /// host talking to a single-stack tracker produces one of each, every
+    /// time, and only one of them is the tracker's opinion of the torrent.
+    pub fn tracker_answered(&self) -> bool {
+        matches!(
+            self.kind,
+            AlertKind::TrackerError | AlertKind::TrackerWarning
+        ) && self.num_b == 1
+    }
+
     /// Tracker URL, for the four tracker alerts.
     pub fn tracker_url(&self) -> Option<&str> {
         matches!(

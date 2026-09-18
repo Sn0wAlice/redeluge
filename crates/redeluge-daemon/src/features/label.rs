@@ -85,6 +85,15 @@ pub struct Options {
     #[serde(default)]
     pub stuck_max_progress: f64,
 
+    /// `remove` or `pause`. Pausing is the default, here as globally: the
+    /// action that deletes has to be the one somebody chose.
+    #[serde(default = "pause")]
+    pub stuck_action: String,
+
+    /// The label a paused torrent is filed under. Empty to leave it alone.
+    #[serde(default)]
+    pub stuck_label: String,
+
     /// Delete its files along with it.
     ///
     /// On by default, which the tracker rule's equivalent is not, and the
@@ -127,6 +136,9 @@ fn two() -> f64 {
 fn yes() -> bool {
     true
 }
+fn pause() -> String {
+    "pause".to_owned()
+}
 
 impl Default for Options {
     fn default() -> Self {
@@ -148,6 +160,8 @@ impl Default for Options {
             apply_stuck: false,
             stuck_hours: 0.0,
             stuck_max_progress: 0.0,
+            stuck_action: pause(),
+            stuck_label: String::new(),
             stuck_remove_data: true,
             hide_by_default: false,
             auto_add: false,
@@ -217,9 +231,11 @@ impl Options {
     /// daemon's own rule. A label is how somebody says "these are different",
     /// and a rule that overrode them saying it would be a poor rule.
     pub fn stuck_rule(&self) -> Option<super::stuck::Rule> {
-        self.apply_stuck.then_some(super::stuck::Rule {
+        self.apply_stuck.then(|| super::stuck::Rule {
             hours: self.stuck_hours,
             max_progress: self.stuck_max_progress,
+            action: super::stuck::Action::parse(&self.stuck_action),
+            label: crate::core::normalise_label(self.stuck_label.trim()),
             remove_data: self.stuck_remove_data,
         })
     }

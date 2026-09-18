@@ -774,13 +774,33 @@ fn handle_alert<F: Fn(Event)>(state: &mut SessionState, alert: &Alert, emit: &F)
                 .error()
                 .map(str::to_owned)
                 .unwrap_or_else(|| alert.message.clone());
-            if let Some(torrent) = state.torrents.get_mut(&id) {
-                torrent.tracker_status = format!("Error: {message}");
+            let status = format!("Error: {message}");
+
+            // A socket's complaint must not overwrite what the tracker itself
+            // said. Both arrive for every announce on a dual-stack host — one
+            // per listen socket — and the socket's is usually last, which
+            // silently emptied the Unregistered group: the sentence that says
+            // the torrent no longer exists was replaced, within milliseconds,
+            // by "skipping tracker announce (unreachable)".
+            //
+            // Narrow on purpose. Only a verdict of that kind is protected, and
+            // only from a transport error; an announce that succeeds sets
+            // `Announce OK` unconditionally a few lines above, so nothing can
+            // latch here once the tracker changes its mind.
+            let keep = !alert.tracker_answered()
+                && state.torrents.get(&id).is_some_and(|torrent| {
+                    crate::torrent::tracker_says_unregistered(&torrent.tracker_status)
+                });
+
+            if !keep {
+                if let Some(torrent) = state.torrents.get_mut(&id) {
+                    torrent.tracker_status = status.clone();
+                }
+                emit(Event::TorrentTrackerStatus {
+                    torrent_id: id,
+                    status,
+                });
             }
-            emit(Event::TorrentTrackerStatus {
-                torrent_id: id,
-                status: format!("Error: {message}"),
-            });
         }
 
         AlertKind::ExternalIp => {

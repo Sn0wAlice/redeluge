@@ -325,6 +325,13 @@ pub struct PeerInfo {
     pub utp: bool,
     /// True when the connection is encrypted, either scheme.
     pub encrypted: bool,
+    /// How this peer was found: `tracker`, `DHT`, `PEX`, `LSD`, `resume` or
+    /// `incoming`. Empty when libtorrent recorded no source.
+    ///
+    /// The one field that says whether a torrent still has a way of finding
+    /// anybody: a swarm reachable only through a tracker dies with it, and one
+    /// the DHT is still answering for does not.
+    pub source: String,
     /// How many pieces this peer has that we do not.
     pub useful_pieces: i32,
     /// Bytes sent to and received from this peer, on this connection only.
@@ -349,6 +356,7 @@ impl From<ffi::PeerInfo> for PeerInfo {
             country: (!raw.country.is_empty()).then_some(raw.country),
             utp: raw.utp,
             encrypted: raw.encrypted,
+            source: raw.source,
             useful_pieces: raw.useful_pieces,
             total_upload: raw.total_upload,
             total_download: raw.total_download,

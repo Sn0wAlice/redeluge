@@ -2592,6 +2592,12 @@ impl Core {
                             torrent.options.label.clone(),
                             status.download_payload_rate > 0 || status.upload_payload_rate > 0,
                             torrent.tracker_status.clone(),
+                            // The tracker answered and said nobody has this.
+                            // `-1` is "it has not said", which is why this is
+                            // not written as `<= 0`.
+                            !status.is_finished
+                                && status.num_complete == 0
+                                && status.num_incomplete == 0,
                         ))
                     })
                     .collect::<Vec<_>>()
@@ -2606,8 +2612,9 @@ impl Core {
         let mut by_label: BTreeMap<String, i64> = BTreeMap::new();
         let mut active = 0i64;
         let mut unregistered = 0i64;
+        let mut dead = 0i64;
 
-        for (state, tracker, owner, label, transferring, tracker_status) in statuses {
+        for (state, tracker, owner, label, transferring, tracker_status, dead_swarm) in statuses {
             *by_state.entry(state).or_insert(0) += 1;
             // Active means moving bytes, not "not paused". A seeding torrent
             // nobody is downloading from is idle, and counting it here put
@@ -2630,6 +2637,9 @@ impl Core {
             if crate::torrent::tracker_says_unregistered(&tracker_status) {
                 unregistered += 1;
             }
+            if dead_swarm {
+                dead += 1;
+            }
             let host = crate::torrent::tracker_host(&tracker);
             *by_tracker.entry(host).or_insert(0) += 1;
             *by_owner.entry(owner).or_insert(0) += 1;
@@ -2640,8 +2650,11 @@ impl Core {
             Value::List(vec![Value::Str(label.to_owned()), Value::Int(count)])
         };
 
-        // `Unregistered` is a question about the tracker rather than a state
-        // libtorrent has, exactly as `Active` is a question about right now.
+        // `Unregistered` and `Dead` are questions rather than states libtorrent
+        // has, exactly as `Active` is a question about right now. The first is
+        // the tracker refusing to know the torrent; the second is the tracker
+        // answering that nobody has it. They are different problems with
+        // different answers, which is why they are different rows.
         // Both sit at the top of the list with the states because that is
         // where somebody looks for them, and `matches_filter` answers both
         // specially so that the row and the list it opens agree.
@@ -2649,6 +2662,7 @@ impl Core {
             pair("All", total),
             pair("Active", active),
             pair("Unregistered", unregistered),
+            pair("Dead", dead),
         ];
         for state in TorrentState::ALL {
             states.push(pair(
@@ -2982,6 +2996,22 @@ fn filter_pairs(filter: Option<&Value>) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
+/// Whether the tracker has said, in so many words, that nobody has this.
+///
+/// Both figures come from an announce the tracker answered: `-1` means it has
+/// not said, zero means it said none. A torrent that is finished is excluded
+/// because a swarm of nobody is what a finished private torrent looks like on
+/// a quiet day, and it is not a problem to be solved.
+fn is_dead_swarm(status: &BTreeMap<String, Value>) -> bool {
+    let number = |name: &str| status.get(name).and_then(Value::as_i64).unwrap_or(-1);
+    let finished = status
+        .get("is_finished")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    !finished && number("total_seeds") == 0 && number("total_peers") == 0
+}
+
 fn matches_filter(status: &BTreeMap<String, Value>, filter: &[(String, Vec<String>)]) -> bool {
     filter.iter().all(|(key, wanted)| {
         // "All" is how every client spells "no filter on this field".
@@ -3004,6 +3034,16 @@ fn matches_filter(status: &BTreeMap<String, Value>, filter: &[(String, Vec<Strin
                 .get("tracker_status")
                 .and_then(Value::as_str)
                 .is_some_and(crate::torrent::tracker_says_unregistered);
+        }
+        // Nor is "Dead", which is a question about the swarm: the tracker
+        // answered, and what it answered was that nobody has this any more.
+        // Distinct from `Unregistered`, where the tracker still has a record
+        // and refuses it, and from a torrent nothing is arriving for, which
+        // may be the connection rather than the content. `-1` is libtorrent
+        // for "the tracker has not said", which is not the same as zero and is
+        // why this cannot be written as `<= 0`.
+        if key == "state" && wanted.iter().any(|value| value == "Dead") {
+            return is_dead_swarm(status);
         }
         // The quick search. Deluge looks in more than the name, so that
         // "error" or the name of a tracker finds what you meant, and every

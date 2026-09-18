@@ -147,6 +147,13 @@
                             renderer: connectionRenderer,
                             dataIndex: 'utp',
                         },
+                        {
+                            header: _('Found by'),
+                            width: 80,
+                            sortable: true,
+                            renderer: Ext.util.Format.htmlEncode,
+                            dataIndex: 'source',
+                        },
                     ],
                     stripeRows: true,
                     deferredRender: false,

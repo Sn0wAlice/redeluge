@@ -114,6 +114,34 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
             ),
             style: 'display: block; margin: 2px 0 6px 0; color: #666;',
         });
+        this.fields.stuck_action = stuck.add({
+            xtype: 'combo',
+            fieldLabel: _('Then:'),
+            labelSeparator: '',
+            width: 220,
+            mode: 'local',
+            triggerAction: 'all',
+            editable: false,
+            valueField: 'id',
+            displayField: 'text',
+            value: 'pause',
+            store: new Ext.data.ArrayStore({
+                idIndex: 0,
+                fields: ['id', 'text'],
+                data: [
+                    ['pause', _('Pause it and leave it alone')],
+                    ['remove', _('Remove it')],
+                ],
+            }),
+            listeners: { select: this.onSwitched, scope: this },
+        });
+        this.fields.stuck_label = stuck.add({
+            xtype: 'textfield',
+            fieldLabel: _('Put it in label:'),
+            labelSeparator: '',
+            width: 160,
+            emptyText: _('leave its label alone'),
+        });
         this.fields.stuck_remove_data = stuck.add({
             xtype: 'checkbox',
             hideLabel: true,
@@ -242,7 +270,15 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
             } else if (field.getXType() === 'spinnerfield') {
                 field.setValue(Deluge.number(value, this.defaultOf(name)));
             } else {
-                field.setValue(value === undefined ? '' : value);
+                // A stored blank is a real answer for a path or a label, and
+                // no answer at all for the action combo. The defaults say
+                // which is which rather than every field guessing.
+                var fallback = Deluge.LabelSettingsWindow.DEFAULTS[name];
+                var text =
+                    value === undefined || value === null || value === ''
+                        ? fallback
+                        : value;
+                field.setValue(text === undefined ? '' : text);
             }
         }
         this.onSwitched();
@@ -276,9 +312,14 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
         }
 
         if (this.stuckWarning) {
+            var on = this.fields.apply_stuck.getValue() === true;
+            var removing = this.fields.stuck_action.getValue() === 'remove';
+            // Each of these belongs to one action and means nothing under the
+            // other, so the group's own enabling is not the whole story.
+            this.fields.stuck_label.setDisabled(!on || removing);
+            this.fields.stuck_remove_data.setDisabled(!on || !removing);
             this.stuckWarning.setVisible(
-                this.fields.apply_stuck.getValue() === true &&
-                    this.fields.stuck_remove_data.getValue() === true
+                on && removing && this.fields.stuck_remove_data.getValue() === true
             );
         }
     },
@@ -364,7 +405,13 @@ Deluge.LabelSettingsWindow.GROUPS = {
     ],
     apply_queue: ['stop_at_ratio', 'stop_ratio', 'remove_at_ratio'],
     apply_move_completed: ['move_completed_path'],
-    apply_stuck: ['stuck_hours', 'stuck_max_progress', 'stuck_remove_data'],
+    apply_stuck: [
+        'stuck_hours',
+        'stuck_max_progress',
+        'stuck_action',
+        'stuck_label',
+        'stuck_remove_data',
+    ],
 };
 
 /**
@@ -382,6 +429,9 @@ Deluge.LabelSettingsWindow.DEFAULTS = {
     stop_ratio: 2,
     stuck_hours: 0,
     stuck_max_progress: 0,
+    // The gentle action, matching the daemon: the one that deletes has to be
+    // chosen rather than arrived at.
+    stuck_action: 'pause',
 };
 
 /**

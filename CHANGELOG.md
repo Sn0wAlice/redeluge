@@ -7,7 +7,7 @@ redeluge numbers its own releases from 1.0.0. The version the daemon reports
 to clients stays `2.2.1`, because that is the Deluge a client expects to be
 talking to.
 
-## [Unreleased]
+## [1.6.0] — 2026-09-18
 
 ### Added
 
@@ -27,6 +27,24 @@ talking to.
   the second. Neither announces or scrapes: every figure is one libtorrent was
   already holding, because opening a window is not a reason to send a tracker
   several hundred requests.
+- **Nothing is acted on while its tracker is failing every announce.** A
+  tracker down for an afternoon looks exactly like a dead swarm from the
+  inside, and without this a five hour outage against a four hour rule was a
+  library-wide deletion — with the rule working exactly as written. It is not a
+  setting: an interlock somebody can switch off is one that will be off on the
+  day it was needed.
+- **The rule can pause instead of removing**, and file what it paused under a
+  label. Pausing is now the default: the action that deletes has to be the one
+  you chose. A label whose own rule is off is an exemption, so filing paused
+  torrents in one is both how they stop being reconsidered every minute and how
+  you find them again.
+- **A `Dead` group in the sidebar**, beside *Unregistered*: the torrents whose
+  tracker answered and said the swarm is empty. Distinct from a tracker
+  refusing to know the torrent, and from one that simply is not arriving —
+  which may be your connection.
+- **The Peers tab says where each peer was found**: tracker, DHT, PEX, LSD,
+  resume or incoming. It is what says whether a torrent still has any way of
+  finding anybody: a swarm reachable only through a tracker dies with it.
 - **The rule for downloads that get nowhere is no longer a label's alone.**
   Preferences, Queue carries it for every torrent; a label still sets its own,
   and a label with the rule off is an exemption from the daemon's rule rather

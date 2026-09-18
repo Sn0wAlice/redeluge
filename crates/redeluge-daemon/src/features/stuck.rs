@@ -59,13 +59,48 @@ pub struct Mark {
     pub active_time: i64,
 }
 
+/// What to do with a download that has stopped getting anywhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    /// Take it out of the list, with or without its files.
+    Remove,
+    /// Stop it and leave it there, optionally under a label, so somebody can
+    /// look before anything is deleted.
+    Pause,
+}
+
+impl Action {
+    /// Parsed from the configuration. Anything unrecognised pauses, because a
+    /// value this build cannot read must not be the one that deletes.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "remove" => Self::Remove,
+            _ => Self::Pause,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Remove => "remove",
+            Self::Pause => "pause",
+        }
+    }
+}
+
 /// What one scope asks for. Resolved from a label's options or the global
 /// settings, so the sweep does not care which said so.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Rule {
     pub hours: f64,
     /// Percent, 0 to 100.
     pub max_progress: f64,
+    pub action: Action,
+    /// The label to put a paused torrent in. Empty to leave its label alone.
+    ///
+    /// Putting it in a label that has the rule off is how a torrent stops
+    /// being reconsidered every minute, and it is the reason this is here
+    /// rather than being a separate feature: the exemption already exists.
+    pub label: String,
     pub remove_data: bool,
 }
 
@@ -103,8 +138,19 @@ pub struct Settings {
     /// Percent. Zero means only torrents that never started.
     #[serde(default)]
     pub max_progress: f64,
+    /// `remove` or `pause`. Pausing is the default: the rule that deletes
+    /// should be the one somebody chose, not the one they got.
+    #[serde(default = "pause")]
+    pub action: String,
+    /// The label a paused torrent goes in. Empty to leave it alone.
+    #[serde(default)]
+    pub label: String,
     #[serde(default = "yes")]
     pub remove_data: bool,
+}
+
+fn pause() -> String {
+    "pause".to_owned()
 }
 
 fn yes() -> bool {
@@ -117,6 +163,8 @@ impl Default for Settings {
             enabled: false,
             hours: 0.0,
             max_progress: 0.0,
+            action: pause(),
+            label: String::new(),
             remove_data: true,
         }
     }
@@ -141,9 +189,11 @@ impl Settings {
 
     /// The rule, when it is on at all.
     pub fn rule(&self) -> Option<Rule> {
-        self.enabled.then_some(Rule {
+        self.enabled.then(|| Rule {
             hours: self.hours,
             max_progress: self.max_progress,
+            action: Action::parse(&self.action),
+            label: crate::core::normalise_label(self.label.trim()),
             remove_data: self.remove_data,
         })
     }
@@ -181,17 +231,21 @@ pub fn mark_for(done: i64, active_time: i64, previous: Option<&Mark>) -> Mark {
 mod tests {
     use super::*;
 
-    const FOUR_HOURS: Rule = Rule {
-        hours: 4.0,
-        max_progress: 0.0,
-        remove_data: true,
-    };
+    fn four_hours() -> Rule {
+        Rule {
+            hours: 4.0,
+            max_progress: 0.0,
+            action: Action::Remove,
+            label: String::new(),
+            remove_data: true,
+        }
+    }
 
     #[test]
     fn a_torrent_with_no_mark_yet_is_never_stuck() {
         // The first pass after a start takes the mark. Acting on that pass
         // would delete on the strength of a clock that had not been set.
-        assert!(!is_stuck(0.0, 99_999, None, &FOUR_HOURS));
+        assert!(!is_stuck(0.0, 99_999, None, &four_hours()));
     }
 
     #[test]
@@ -201,9 +255,9 @@ mod tests {
             active_time: 1_000,
         };
         // Three hours of trying: not yet.
-        assert!(!is_stuck(0.0, 1_000 + 3 * 3600, Some(&mark), &FOUR_HOURS));
+        assert!(!is_stuck(0.0, 1_000 + 3 * 3600, Some(&mark), &four_hours()));
         // Four, exactly.
-        assert!(is_stuck(0.0, 1_000 + 4 * 3600, Some(&mark), &FOUR_HOURS));
+        assert!(is_stuck(0.0, 1_000 + 4 * 3600, Some(&mark), &four_hours()));
     }
 
     #[test]
@@ -225,7 +279,7 @@ mod tests {
                 active_time: 20_000
             }
         );
-        assert!(!is_stuck(0.01, 20_000, Some(&moved), &FOUR_HOURS));
+        assert!(!is_stuck(0.01, 20_000, Some(&moved), &four_hours()));
     }
 
     #[test]
@@ -237,12 +291,12 @@ mod tests {
             done: 1,
             active_time: 0,
         };
-        assert!(!is_stuck(0.03, 99_999, Some(&mark), &FOUR_HOURS));
+        assert!(!is_stuck(0.03, 99_999, Some(&mark), &four_hours()));
 
         // Raise the ceiling and it is in scope.
         let anything = Rule {
             max_progress: 100.0,
-            ..FOUR_HOURS
+            ..four_hours()
         };
         assert!(is_stuck(0.03, 99_999, Some(&mark), &anything));
         assert!(is_stuck(0.99, 99_999, Some(&mark), &anything));
@@ -250,7 +304,7 @@ mod tests {
         // And a ceiling in between means what it says.
         let barely = Rule {
             max_progress: 5.0,
-            ..FOUR_HOURS
+            ..four_hours()
         };
         assert!(is_stuck(0.04, 99_999, Some(&mark), &barely));
         assert!(!is_stuck(0.06, 99_999, Some(&mark), &barely));
@@ -264,7 +318,7 @@ mod tests {
         };
         let negative = Rule {
             hours: -5.0,
-            ..FOUR_HOURS
+            ..four_hours()
         };
         assert_eq!(negative.seconds(), 0.0);
         assert!(is_stuck(0.0, 0, Some(&mark), &negative), "zero means now");
@@ -272,7 +326,7 @@ mod tests {
         let nonsense = Rule {
             hours: f64::NAN,
             max_progress: f64::NAN,
-            remove_data: true,
+            ..four_hours()
         };
         assert_eq!(nonsense.seconds(), 0.0);
         assert_eq!(nonsense.ceiling(), 0.0);
@@ -280,7 +334,7 @@ mod tests {
         let silly = Rule {
             hours: 1_000_000.0,
             max_progress: 900.0,
-            remove_data: true,
+            ..four_hours()
         };
         assert_eq!(silly.seconds(), MAX_HOURS * HOUR);
         assert_eq!(silly.ceiling(), 1.0);
@@ -296,8 +350,32 @@ mod tests {
         };
         let rule = on.rule().expect("a rule");
         assert_eq!(rule.seconds(), 6.0 * HOUR);
-        // The same default as the label rule's, and for the same reason: a
-        // torrent that downloaded nothing has no files worth keeping.
-        assert!(rule.remove_data);
+        // Pausing, not deleting: the destructive action has to be the one
+        // somebody chose rather than the one they got by turning a rule on.
+        assert_eq!(rule.action, Action::Pause);
+    }
+
+    #[test]
+    fn an_action_this_build_cannot_read_pauses() {
+        // A value from a newer build, or a typo. Whatever it is, it must not
+        // be read as the one that deletes files.
+        assert_eq!(Action::parse("remove"), Action::Remove);
+        assert_eq!(Action::parse("pause"), Action::Pause);
+        assert_eq!(Action::parse("obliterate"), Action::Pause);
+        assert_eq!(Action::parse(""), Action::Pause);
+    }
+
+    #[test]
+    fn the_label_a_pause_files_it_under_is_normalised() {
+        // It goes through `label.set_torrent`, which stores the normal form.
+        // Comparing against what somebody typed would find them different for
+        // ever and relabel every minute.
+        let settings = Settings {
+            enabled: true,
+            action: "pause".to_owned(),
+            label: "  Dead Swarm!  ".to_owned(),
+            ..Settings::default()
+        };
+        assert_eq!(settings.rule().expect("a rule").label, "deadswarm");
     }
 }

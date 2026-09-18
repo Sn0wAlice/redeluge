@@ -118,10 +118,18 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
         var value = record.id;
 
         if (this.filterType == 'state') {
-            // One row in this list has anything to offer: the torrents their
-            // tracker has stopped recognising, which is a group that exists to
-            // be thrown away.
-            if (value != 'Unregistered' || !record.get('count')) return;
+            // Two rows in this list have anything to offer, and both for the
+            // same reason: they are groups that exist to be looked at and
+            // thrown away. `Unregistered` is the tracker refusing to know
+            // these torrents; `Dead` is the tracker answering that nobody has
+            // them any more.
+            if (
+                (value != 'Unregistered' && value != 'Dead') ||
+                !record.get('count')
+            ) {
+                return;
+            }
+            this.menuState = value;
             this.showMenu(e, 'unregistered');
             return;
         }
@@ -197,8 +205,9 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
      * asked it, and nothing here can delete anything on its own.
      */
     onRemoveUnregistered: function () {
+        if (!this.menuState) return;
         deluge.client.core.get_torrents_status(
-            { state: 'Unregistered' },
+            { state: this.menuState },
             ['name'],
             {
                 success: function (torrents) {

@@ -438,6 +438,28 @@ rust::Vec<PeerInfo> Session::peers(rust::Str info_hash) const {
     }
     entry.useful_pieces = useful;
 
+    // Where this peer came from. A bitfield in libtorrent, because a peer can
+    // be learned of twice, and one word here because that is what a column
+    // shows: the first source that found it, in the order they are worth
+    // knowing. `incoming` last, since a peer that connected to us was still
+    // found by whatever told it about us.
+    auto const from = [&](lt::peer_source_flags_t which) {
+      return (peer.source & which) != lt::peer_source_flags_t{};
+    };
+    if (from(lt::peer_info::tracker)) {
+      entry.source = rust::String("tracker");
+    } else if (from(lt::peer_info::dht)) {
+      entry.source = rust::String("DHT");
+    } else if (from(lt::peer_info::pex)) {
+      entry.source = rust::String("PEX");
+    } else if (from(lt::peer_info::lsd)) {
+      entry.source = rust::String("LSD");
+    } else if (from(lt::peer_info::resume_data)) {
+      entry.source = rust::String("resume");
+    } else if (from(lt::peer_info::incoming)) {
+      entry.source = rust::String("incoming");
+    }
+
     // What this connection has actually moved, which is the only honest
     // measure of what a peer is worth: the speeds above are a snapshot, and a
     // peer that took forty gibibytes and gave nothing back looks idle in both.

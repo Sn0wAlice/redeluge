@@ -137,6 +137,8 @@ Two numbers say when to act:
 |---|---|
 | `hours` / `stuck_hours` | How long without a byte arriving |
 | `max_progress` / `stuck_max_progress` | How far along a torrent may be and still be taken, in per cent |
+| `action` / `stuck_action` | `pause` or `remove`. **Pause is the default**: the action that deletes has to be the one you chose, not the one you got by turning a rule on |
+| `label` / `stuck_label` | Where a paused torrent is filed. A label whose own rule is off is an exemption, so this is both how they stop being looked at every minute and how you find them again |
 
 `max_progress` is zero by default, which means **only torrents that never
 started** — deleting one that is 90% done and stalled is a different decision
@@ -154,6 +156,7 @@ It is narrow on purpose. It will not take:
 
 | | |
 |---|---|
+| A torrent whose **tracker is failing every announce** | An outage is why nothing is arriving; the torrents behind it are not what is broken. Not a setting — an interlock somebody can switch off is one that will be off on the day it was needed |
 | A torrent **further along than `max_progress`** | Out of the box that is anything which downloaded a single byte |
 | A **paused** one, including one the queue is holding back | Somebody paused it, or the daemon did, and neither is the torrent failing |
 | A **finished** one | A torrent with every file deselected is finished at zero bytes, on purpose |
@@ -336,6 +339,31 @@ The key is the tracker host as the sidebar groups it — `example.org`, not the
 announce URL — because that is the row the rule is set on. Remember that a key
 is replaced whole: send every tracker you want to keep a rule for, not just the
 one you are changing. The Web UI reads the current value and merges for you.
+
+## Torrents nobody has any more
+
+Under *States* in the sidebar, beside *Unregistered*: **Dead** is every torrent
+whose tracker answered, and answered that the swarm is empty — no seeds, no
+peers. Right-click the row and *Remove these torrents...* hands the group to
+the ordinary Remove dialog, which asks whether to keep the files.
+
+The three states it is easy to confuse, and what tells them apart:
+
+| | What happened |
+|---|---|
+| **Unregistered** | The tracker has a record of you and refuses the torrent: *unregistered*, *torrent not found* |
+| **Dead** | The tracker answered normally and said nobody has it |
+| Nothing arriving | Could be either of those, or your connection, or a firewall — which is why the rule that acts on it holds back during a tracker outage |
+
+`-1` is libtorrent's way of saying the tracker has not answered yet, and it is
+not the same as zero: a torrent that has never announced is not in this group.
+A finished torrent is not either — an empty swarm is what a finished private
+torrent looks like on a quiet day, and it is not a problem to be solved.
+
+The Peers tab now carries a **Found by** column — `tracker`, `DHT`, `PEX`,
+`LSD`, `resume` or `incoming` — which answers the question this group raises: a
+swarm reachable only through a tracker dies with that tracker, and one the DHT
+is still answering for does not.
 
 ## What this client says it is
 

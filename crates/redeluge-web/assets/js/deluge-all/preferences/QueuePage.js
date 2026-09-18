@@ -283,7 +283,7 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
         fieldset = this.add({
             xtype: 'fieldset',
             border: false,
-            title: _('Remove Downloads That Get Nowhere'),
+            title: _('Downloads That Get Nowhere'),
             autoHeight: true,
             labelWidth: 210,
             style: 'padding-top: 5px; margin-bottom: 0px',
@@ -291,7 +291,7 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
         fieldset.add({
             xtype: 'label',
             text: _(
-                'A torrent that has been trying for hours without a single byte arriving is not slow, it is dead: a magnet nobody seeds, or content that has left the swarm. This throws those away. A label can set its own rule, or turn this off for its torrents.'
+                'A torrent that has been trying for hours without a single byte arriving is not slow, it is dead: a magnet nobody seeds, or content that has left the swarm. A label can set its own rule, or turn this off for its torrents. Nothing is acted on while its tracker is failing every announce — an outage is not a dead swarm.'
             ),
             style: 'display: block; margin-bottom: 6px; color: #666;',
         });
@@ -300,7 +300,7 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
         this.stuck.enabled = fieldset.add({
             xtype: 'checkbox',
             hideLabel: true,
-            boxLabel: _('Remove a download that stops getting anywhere'),
+            boxLabel: _('Act on a download that stops getting anywhere'),
             handler: this.onStuckToggled,
             scope: this,
         });
@@ -314,6 +314,41 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
             xtype: 'label',
             text: _(
                 'Zero per cent takes only what never started, which is the safe reading and the default. Raising it puts torrents that did start and then stalled in scope — at a hundred, one stalled at 90% goes the same way. The hours are counted in time spent trying, so a torrent that sat in the queue or was paused overnight has not been failing for a night.'
+            ),
+            style: 'display: block; margin: 2px 0 6px 0; color: #666;',
+        });
+        this.stuck.action = fieldset.add({
+            xtype: 'combo',
+            fieldLabel: _('Then:'),
+            labelSeparator: '',
+            width: 220,
+            mode: 'local',
+            triggerAction: 'all',
+            editable: false,
+            valueField: 'id',
+            displayField: 'text',
+            value: 'pause',
+            store: new Ext.data.ArrayStore({
+                idIndex: 0,
+                fields: ['id', 'text'],
+                data: [
+                    ['pause', _('Pause it and leave it alone')],
+                    ['remove', _('Remove it')],
+                ],
+            }),
+            listeners: { select: this.onStuckToggled, scope: this },
+        });
+        this.stuck.label = fieldset.add({
+            xtype: 'textfield',
+            fieldLabel: _('Put it in label:'),
+            labelSeparator: '',
+            width: 160,
+            emptyText: _('leave its label alone'),
+        });
+        fieldset.add({
+            xtype: 'label',
+            text: _(
+                'A label whose own rule is off is an exemption, so filing paused torrents in one is how they stop being looked at every minute — and how you find them again to decide.'
             ),
             style: 'display: block; margin: 2px 0 6px 0; color: #666;',
         });
@@ -422,6 +457,8 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
                         this.stuck.max_progress.getValue(),
                         0
                     ),
+                    action: this.stuck.action.getValue() || 'pause',
+                    label: this.stuck.label.getValue() || '',
                     remove_data: this.stuck.remove_data.getValue() === true,
                 },
             });
@@ -464,6 +501,8 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
                 this.stuck.max_progress.setValue(
                     Deluge.number(settings['max_progress'], 0)
                 );
+                this.stuck.action.setValue(settings['action'] || 'pause');
+                this.stuck.label.setValue(settings['label'] || '');
                 this.stuck.remove_data.setValue(
                     settings['remove_data'] !== false
                 );
@@ -485,11 +524,15 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
      */
     onStuckToggled: function () {
         var on = this.stuck.enabled.getValue() === true;
+        var removing = this.stuck.action.getValue() === 'remove';
         this.stuck.hours.setDisabled(!on);
         this.stuck.max_progress.setDisabled(!on);
-        this.stuck.remove_data.setDisabled(!on);
+        this.stuck.action.setDisabled(!on);
+        // Each half belongs to one action and means nothing under the other.
+        this.stuck.label.setDisabled(!on || removing);
+        this.stuck.remove_data.setDisabled(!on || !removing);
         this.stuckWarning.setVisible(
-            on && this.stuck.remove_data.getValue() === true
+            on && removing && this.stuck.remove_data.getValue() === true
         );
     },
 });

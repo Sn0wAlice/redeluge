@@ -1327,29 +1327,35 @@ async fn remove_stuck_downloads(core: Arc<Core>) {
         };
 
         for removal in removals {
-            remove_for_rule(
-                &core,
-                &removal.id,
-                &removal.name,
-                removal.with_data,
-                rule::LABEL,
-                format!(
-                    "{} takes downloads that have done nothing {}, {}",
-                    if removal.scope.is_empty() {
-                        "this daemon".to_owned()
-                    } else {
-                        removal.scope.clone()
-                    },
-                    describe_delay(removal.hours),
-                    if removal.with_data {
-                        "with their files"
-                    } else {
-                        "keeping their files"
-                    }
-                ),
-                now,
-            )
-            .await;
+            let who = if removal.scope.is_empty() {
+                "this daemon".to_owned()
+            } else {
+                removal.scope.clone()
+            };
+            let how_long = describe_delay(removal.hours);
+
+            match removal.action {
+                stuck::Action::Remove => {
+                    remove_for_rule(
+                        &core,
+                        &removal.id,
+                        &removal.name,
+                        removal.with_data,
+                        rule::LABEL,
+                        format!(
+                            "{who} takes downloads that have done nothing {how_long}, {}",
+                            if removal.with_data {
+                                "with their files"
+                            } else {
+                                "keeping their files"
+                            }
+                        ),
+                        now,
+                    )
+                    .await;
+                }
+                stuck::Action::Pause => pause_stuck(&core, &removal, &who, &how_long, now).await,
+            }
         }
     }
 }
@@ -1364,6 +1370,9 @@ struct StuckRemoval {
     /// history line says which, because "why did that go" has two answers now.
     scope: String,
     hours: f64,
+    action: stuck::Action,
+    /// The label to file it under when pausing. Empty to leave it alone.
+    label_as: String,
     with_data: bool,
 }
 
@@ -1403,6 +1412,11 @@ fn decide_stuck_removals(
     let mut out = Vec::new();
     let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
+    // Which tracker domains are answering at all. A tracker that is down is
+    // the reason nothing is arriving, and the torrents behind it are not the
+    // thing that is broken: see `held_back_by`.
+    let health = tracker_health(state);
+
     for status in state.session.all_torrent_status() {
         let Some(torrent) = state.torrents.get(&status.info_hash) else {
             continue;
@@ -1422,7 +1436,7 @@ fn decide_stuck_removals(
         let rule = labels
             .options(&label)
             .map(|options| options.stuck_rule())
-            .unwrap_or(global);
+            .unwrap_or_else(|| global.clone());
 
         let takeable = !status.is_finished
             && !status.is_paused
@@ -1432,24 +1446,37 @@ fn decide_stuck_removals(
                 LtState::CheckingFiles | LtState::CheckingResumeData
             );
 
-        if let (Some(rule), true) = (rule, takeable) {
+        if let (Some(rule), true) = (&rule, takeable) {
             if stuck::is_stuck(
                 status.progress,
                 status.active_time,
                 state.progress_marks.get(&status.info_hash),
-                &rule,
+                rule,
             ) {
-                out.push(StuckRemoval {
-                    id: status.info_hash.clone(),
-                    name,
-                    scope: if labels.options(&label).is_some() {
-                        label
-                    } else {
-                        String::new()
-                    },
-                    hours: rule.seconds() / 3600.0,
-                    with_data: rule.remove_data,
-                });
+                // The interlock. Everything else here asks "is this torrent
+                // getting anywhere"; this asks "is there anything it could be
+                // getting anywhere through". A tracker outage looks exactly
+                // like a dead swarm from the inside, and without this a
+                // tracker down for an afternoon takes the library with it.
+                match held_back_by(&status, state, &health) {
+                    Some(reason) => {
+                        tracing::debug!(torrent = %status.info_hash, %reason,
+                            "a stuck rule is due but held back");
+                    }
+                    None => out.push(StuckRemoval {
+                        id: status.info_hash.clone(),
+                        name,
+                        scope: if labels.options(&label).is_some() {
+                            label
+                        } else {
+                            String::new()
+                        },
+                        hours: rule.seconds() / 3600.0,
+                        action: rule.action,
+                        label_as: rule.label.clone(),
+                        with_data: rule.remove_data,
+                    }),
+                }
             }
         }
 
@@ -1462,6 +1489,138 @@ fn decide_stuck_removals(
     state.progress_marks.retain(|id, _| seen.contains(id));
 
     out
+}
+
+/// Stops a download that is getting nowhere, and files it where it can be seen.
+///
+/// The gentle half of the rule, and the one it defaults to. Nothing is deleted
+/// and nothing is hidden: the torrent stops, keeps whatever it had, and lands
+/// in a label if the rule names one — which is also how it stops being
+/// reconsidered every minute, because a label with the rule off is an
+/// exemption.
+async fn pause_stuck(core: &Core, stopped: &StuckRemoval, who: &str, how_long: &str, at: f64) {
+    use redeluge_libtorrent::{flags, FlagChange};
+
+    let id = stopped.id.clone();
+    // The flag matters as much as the pause: libtorrent's queue resumes an
+    // auto-managed torrent it finds paused, so pausing without clearing it
+    // does nothing at all. The idle rule learned this first.
+    let paused = core
+        .manager
+        .with(move |state| {
+            let change = FlagChange::new()
+                .set_to(flags::PAUSED, true)
+                .set_to(flags::AUTO_MANAGED, false);
+            let outcome = state.session.set_flags(&id, change);
+            if outcome.is_ok() {
+                if let Some(torrent) = state.torrents.get_mut(&id) {
+                    torrent.options.paused = true;
+                    torrent.options.auto_managed = false;
+                }
+                state.mark_dirty();
+            }
+            outcome
+        })
+        .await;
+
+    match paused {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            tracing::warn!(torrent = %stopped.id, error = %err,
+                "could not pause a download that is getting nowhere");
+            return;
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "the torrent manager is not answering");
+            return;
+        }
+    }
+
+    let mut filed = String::new();
+    if !stopped.label_as.is_empty() {
+        match core.assign_label(&stopped.id, &stopped.label_as).await {
+            Ok(()) => filed = format!(" and put in {}", stopped.label_as),
+            Err(err) => tracing::warn!(torrent = %stopped.id, label = %stopped.label_as,
+                error = %err.message, "could not label a download it paused"),
+        }
+    }
+
+    tracing::info!(torrent = %stopped.id, rule = %who, "paused: it was getting nowhere");
+    record(
+        core,
+        Action::new(rule::LABEL, did::PAUSED, at)
+            .torrent(&stopped.id, &stopped.name)
+            .detail(format!(
+                "{who} stops downloads that have done nothing {how_long}{filed}"
+            )),
+    );
+}
+
+/// One word per tracker domain: whether it is answering.
+///
+/// The same arithmetic the sidebar colours its rows with, so the rule and the
+/// interface cannot disagree about which tracker is down.
+fn tracker_health(
+    state: &mut crate::manager::SessionState,
+) -> std::collections::BTreeMap<String, String> {
+    let session_paused = state.session_paused;
+    let rows: Vec<crate::trackerinfo::Row> = state
+        .session
+        .all_torrent_status()
+        .into_iter()
+        .filter_map(|status| {
+            let torrent = state.torrents.get(&status.info_hash)?;
+            let trackers = state
+                .session
+                .trackers(&status.info_hash)
+                .unwrap_or_default();
+            Some(crate::trackerinfo::Row {
+                state: torrent.state(&status, session_paused),
+                current: crate::torrent::current_tracker(&status.current_tracker, &trackers),
+                trackers,
+                tracker_status: torrent.tracker_status.clone(),
+                size: status.total_wanted,
+                downloaded: status.all_time_download,
+                uploaded: status.all_time_upload,
+                seeds: i64::from(status.num_complete),
+                peers: i64::from(status.num_incomplete),
+                next_announce: status.next_announce,
+            })
+        })
+        .collect();
+
+    crate::trackerinfo::by_domain(&rows)
+        .into_iter()
+        .map(|(host, totals)| (host, totals.health().to_owned()))
+        .collect()
+}
+
+/// Why this torrent is not being acted on, though its rule says it is due.
+///
+/// One reason so far, and it is the important one: a tracker that is failing
+/// every announce is why no bytes are arriving, and the torrents behind it are
+/// not the thing that is broken. A five hour outage with a four hour rule
+/// would otherwise be a library-wide deletion, and the rule would have been
+/// working exactly as written.
+///
+/// Not a setting. An interlock somebody can switch off is an interlock that
+/// will be off on the day it was needed.
+fn held_back_by(
+    status: &redeluge_libtorrent::TorrentStatus,
+    state: &mut crate::manager::SessionState,
+    health: &std::collections::BTreeMap<String, String>,
+) -> Option<String> {
+    let trackers = state
+        .session
+        .trackers(&status.info_hash)
+        .unwrap_or_default();
+    let announced = crate::torrent::current_tracker(&status.current_tracker, &trackers);
+    let host = crate::torrent::tracker_host(&announced);
+    if host.is_empty() {
+        return None;
+    }
+    (health.get(&host).map(String::as_str) == Some("down"))
+        .then(|| format!("{host} is not answering"))
 }
 
 /// A delay as the clause that finishes the sentence the history keeps.

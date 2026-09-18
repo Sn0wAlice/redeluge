@@ -68,4 +68,11 @@ Deluge.data.Peer = Ext.data.Record.create([
         name: 'encrypted',
         type: 'bool',
     },
+    {
+        // Where this peer was found: tracker, DHT, PEX, LSD, resume or
+        // incoming. It answers the question a dead-looking torrent raises —
+        // whether there is any way left of finding anybody.
+        name: 'source',
+        type: 'string',
+    },
 ]);

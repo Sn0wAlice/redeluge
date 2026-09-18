@@ -192,10 +192,15 @@ FlatAlert flatten(lt::alert const* alert) {
     // itself is the difference between "come back later" and "I have never
     // heard of this torrent", and something has to be able to tell them apart.
     char const* reason = a->error_message();
-    flat.str_b = rust::String((reason != nullptr && reason[0] != '\0')
-                                  ? reason
-                                  : a->error.message());
+    bool const answered = reason != nullptr && reason[0] != '\0';
+    flat.str_b = rust::String(answered ? reason : a->error.message());
     flat.num_a = static_cast<int64_t>(a->times_in_row);
+    // Whether the tracker said this or the socket did. libtorrent announces
+    // once per listen socket, so a host with an IPv6 socket and an IPv4-only
+    // tracker gets one of each for every announce, and the socket's complaint
+    // arrives last. Something has to be able to tell the daemon which of the
+    // two it is looking at.
+    flat.num_b = answered ? 1 : 0;
     return flat;
   }
   if (auto const* a = lt::alert_cast<lt::tracker_reply_alert>(alert)) {
