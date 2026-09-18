@@ -741,6 +741,29 @@ pub fn current_tracker(announced: &str, trackers: &[redeluge_libtorrent::Tracker
         .unwrap_or_default()
 }
 
+/// The host a tracker URL names, subdomain and all.
+///
+/// [`tracker_host`] drops the subdomain, because the sidebar groups
+/// `tracker.example.org` and `announce.example.org` into one row. A window
+/// about that row has to take them apart again, and this is the name each one
+/// goes by. An IPv6 literal comes back without its brackets, and a port is
+/// not part of a host.
+pub fn tracker_hostname(url: &str) -> String {
+    // udp:// parses like any other scheme once it is one this understands.
+    let without_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    // Strip any credentials, then take the host up to the port or path.
+    let authority = without_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, rest)| rest);
+
+    // An IPv6 literal is bracketed, and its colons are not a port separator.
+    if let Some(rest) = authority.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or("").to_owned();
+    }
+    authority.split(':').next().unwrap_or("").to_owned()
+}
+
 /// What clients group a torrent's tracker by.
 ///
 /// Deluge's rule, label for label, because this string is a filter value as
@@ -752,21 +775,7 @@ pub fn current_tracker(announced: &str, trackers: &[redeluge_libtorrent::Tracker
 /// (three-letter second level) and turned the IP address `192.168.1.1` into
 /// `168.1.1`. This is the list Deluge actually uses.
 pub fn tracker_host(url: &str) -> String {
-    // udp:// parses like any other scheme once it is one this understands.
-    let without_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-    // Strip any credentials, then take the host up to the port or path.
-    let authority = without_scheme.split(['/', '?', '#']).next().unwrap_or("");
-    let authority = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, rest)| rest);
-
-    // An IPv6 literal is bracketed, and its colons are not a port separator.
-    let host = if let Some(rest) = authority.strip_prefix('[') {
-        return rest.split(']').next().unwrap_or("").to_owned();
-    } else {
-        authority.split(':').next().unwrap_or("")
-    };
-
+    let host = tracker_hostname(url);
     if host.is_empty() {
         return String::new();
     }
@@ -1099,5 +1108,31 @@ mod tracker_host_tests {
         // sidebar sends back: a word here would filter to nothing.
         assert_eq!(tracker_host(""), "");
         assert_eq!(tracker_host("not a url"), "not a url");
+    }
+
+    #[test]
+    fn the_hostname_keeps_what_the_group_drops() {
+        // The tracker info window takes one sidebar row apart again, and the
+        // subdomain is the only thing telling two of its trackers apart.
+        use super::tracker_hostname;
+
+        assert_eq!(
+            tracker_hostname("http://tracker.example.com/announce"),
+            "tracker.example.com"
+        );
+        assert_eq!(
+            tracker_hostname("udp://announce.example.com:6969"),
+            "announce.example.com"
+        );
+        // Everything that is not the host is still not the host.
+        assert_eq!(
+            tracker_hostname("http://user:pass@tracker.example.com/a"),
+            "tracker.example.com"
+        );
+        assert_eq!(
+            tracker_hostname("http://[2001:db8::1]:8080/announce"),
+            "2001:db8::1"
+        );
+        assert_eq!(tracker_hostname(""), "");
     }
 }

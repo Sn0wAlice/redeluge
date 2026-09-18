@@ -281,7 +281,13 @@ pub struct TrackerEntry {
     pub tier: u8,
     /// The last error or warning, when there is one.
     pub message: Option<String>,
-    /// True when at least one endpoint reached the tracker.
+    /// True when at least one endpoint has had an announce answered.
+    ///
+    /// Not the same as "is not failing": a tracker nobody has announced to yet
+    /// is neither. libtorrent announces once per listen socket, so a host with
+    /// an IPv6 socket and an IPv4-only tracker has one endpoint working and one
+    /// failing, for ever, and this is the half that decides whether the tracker
+    /// is up.
     pub verified: bool,
     pub updating: bool,
     /// Consecutive failures on the worst endpoint.

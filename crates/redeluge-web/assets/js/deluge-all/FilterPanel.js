@@ -72,7 +72,10 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
             reserveScrollOffset: true,
             store: new Ext.data.ArrayStore({
                 idIndex: 0,
-                fields: ['filter', 'count'],
+                // `healthCls` is the tracker list's: the colour a row is drawn
+                // in when its tracker is failing. Empty everywhere else, which
+                // is what the other templates ask for.
+                fields: ['filter', 'count', 'healthCls'],
             }),
             columns: [
                 {
@@ -147,6 +150,15 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
                       })
                     : new Ext.menu.Menu({
                           items: [
+                              // Above Settings, because looking is what you do
+                              // first and changing what happens to a hundred
+                              // torrents is what you do after.
+                              {
+                                  text: _('Info...'),
+                                  iconCls: 'icon-tracker-info',
+                                  handler: this.onInfoClick,
+                                  scope: this,
+                              },
                               {
                                   text: _('Settings...'),
                                   iconCls: 'x-deluge-preferences',
@@ -198,6 +210,16 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
         }
         this.menus = null;
         Deluge.FilterPanel.superclass.onDestroy.call(this);
+    },
+
+    onInfoClick: function () {
+        if (!this.menuHost) return;
+        // Built when it is first wanted rather than with the interface, the
+        // same as the settings window below: most sessions never open either.
+        if (!deluge.trackerInfo) {
+            deluge.trackerInfo = new Deluge.TrackerInfoWindow();
+        }
+        deluge.trackerInfo.show(this.menuHost);
     },
 
     onSettingsClick: function () {
@@ -295,6 +317,7 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
                 // it and nothing to say what it was.
                 record.set('filter', s[0] === '' ? this.emptyLabel() : _(s[0]));
                 record.set('count', s[1]);
+                record.set('healthCls', this.healthClass(s[0]));
                 record.endEdit();
                 filters[s[0]] = true;
             },
@@ -316,14 +339,91 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
         if (!this.list.getSelectionCount()) {
             this.list.select(0);
         }
+
+        // Rides the sidebar's own refresh rather than keeping a timer: there is
+        // nothing to colour when the sidebar is not being drawn, and the
+        // throttle inside keeps it off the two-second poll.
+        this.refreshHealth();
+    },
+
+    /**
+     * The class one tracker row is drawn with, from the last health answer.
+     *
+     * Only the tracker list has these, and only for rows that are a tracker:
+     * `All` is every tracker at once and the empty row is the torrents that
+     * have none, so neither has a state of its own to show.
+     */
+    healthClass: function (value) {
+        if (this.filterType != 'tracker_host') return '';
+        if (!value || value == 'All') return '';
+        var health = (this.health || {})[value];
+        if (!health) return '';
+        return 'x-deluge-tracker-health x-deluge-tracker-' + health;
+    },
+
+    /**
+     * Asks the daemon which trackers are answering, at most every so often.
+     *
+     * The answer is one word per domain and costs a walk of every torrent's
+     * tracker list, which is cheap but not two-seconds cheap, and a tracker
+     * that has just gone down is not news that has to arrive within a poll.
+     */
+    refreshHealth: function () {
+        if (this.filterType != 'tracker_host') return;
+        if (this.healthInFlight) return;
+        var now = new Date().getTime();
+        if (this.healthAt && now - this.healthAt < Deluge.FilterPanel.HEALTH_INTERVAL) {
+            return;
+        }
+        // Set before the call rather than after it, so a daemon that is slow
+        // or gone is asked at the same rate as one that answers.
+        this.healthAt = now;
+        this.healthInFlight = true;
+
+        deluge.client.redeluge.get_tracker_health({
+            success: function (health) {
+                this.healthInFlight = false;
+                this.health = health || {};
+                this.applyHealth();
+            },
+            failure: function () {
+                this.healthInFlight = false;
+            },
+            scope: this,
+        });
+    },
+
+    /**
+     * Repaints the rows the sidebar already has with the answer that just
+     * arrived, without waiting for the next refresh to rebuild them.
+     */
+    applyHealth: function () {
+        if (!this.list || !this.list.getStore()) return;
+        var store = this.getStore();
+        store.each(function (record) {
+            var health = this.healthClass(record.id);
+            if (record.get('healthCls') == health) return;
+            record.set('healthCls', health);
+        }, this);
+        store.commitChanges();
     },
 });
+
+/**
+ * How often the tracker rows ask whether their trackers still answer, in
+ * milliseconds.
+ */
+Deluge.FilterPanel.HEALTH_INTERVAL = 20000;
 
 // The tracker filter had the tracker's own favicon here, served by Deluge's
 // icon fetcher. redeluge has none, so the URL answered 404 once per host on
 // every sidebar refresh and drew nothing. The indent stays, which keeps the
 // tracker list lined up with the state and label lists beside it.
+// The tracker's state took that indent over: a dot, in the four colours
+// `redeluge.get_tracker_health` answers with, drawn where the favicon used to
+// be. The class is computed rather than templated because `All` and the
+// no-tracker row are not trackers and have no state to show.
 Deluge.FilterPanel.templates = {
     tracker_host:
-        '<div class="x-deluge-filter">{filter:htmlEncode} ({count})</div>',
+        '<div class="x-deluge-filter {healthCls}">{filter:htmlEncode} ({count})</div>',
 };

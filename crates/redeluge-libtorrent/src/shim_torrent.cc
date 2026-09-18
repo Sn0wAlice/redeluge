@@ -340,19 +340,36 @@ rust::Vec<TrackerEntry> Session::trackers(rust::Str info_hash) const {
 
     // In 2.0 the per-announce state lives on the endpoints rather than the
     // entry. The daemon shows one line per tracker, so this reports the worst
-    // endpoint: a tracker is only healthy when every endpoint reaches it.
+    // endpoint's failure count alongside the best one's success.
+    //
+    // Two messages can be going at once, and they are not worth the same. What
+    // the tracker itself said — `Unregistered torrent`, a rate limit, a
+    // passkey it does not know — is the answer somebody is looking for; what
+    // the socket said is why one endpoint could not ask. The tracker's own
+    // wins wherever both exist, which is the ordinary case on a host with an
+    // IPv6 socket and an IPv4-only tracker.
+    std::string said;
+    std::string failed;
     for (auto const& endpoint : announce.endpoints) {
       for (auto const& info : endpoint.info_hashes) {
         if (info.fails > entry.fails) {
           entry.fails = info.fails;
-          if (!info.message.empty()) entry.message = rust::String(info.message);
-          if (info.last_error && entry.message.empty()) {
-            entry.message = rust::String(info.last_error.message());
-          }
         }
-        entry.verified = entry.verified || info.fails == 0;
+        if (said.empty() && !info.message.empty()) said = info.message;
+        if (failed.empty() && info.last_error) failed = info.last_error.message();
+        // Answered, not merely "not failing": `fails == 0` is also what a
+        // tracker nobody has tried yet looks like, and reading it alone made
+        // an untried tracker indistinguishable from a working one.
+        // `start_sent` is libtorrent's record of a valid response having come
+        // back from an announce, which is the thing being asked about.
+        entry.verified = entry.verified || (info.fails == 0 && info.start_sent);
         entry.updating = entry.updating || info.updating;
       }
+    }
+    if (!said.empty()) {
+      entry.message = rust::String(said);
+    } else if (!failed.empty()) {
+      entry.message = rust::String(failed);
     }
     out.push_back(std::move(entry));
   }

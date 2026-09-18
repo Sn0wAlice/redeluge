@@ -154,6 +154,11 @@ button::-moz-focus-inner {
 .icon-peers {
     background-image: url('../icons/peers.png') !important;
 }
+/* The letter in the disc, on the tracker row's own menu. Drawn by
+   tools/draw_icons.py. */
+.icon-tracker-info {
+    background-image: url('../icons/tracker_info.png') !important;
+}
 .x-deluge-checking,
 .deluge-torrents .checking {
     background-image: url('../icons/checking.png');
@@ -466,6 +471,149 @@ dl.singleline dd {
 
 #sidebar .x-list-selected em {
     font-weight: bold;
+}
+
+/* Tracker health.
+ *
+ * A sidebar row is a domain, which can be several trackers, so the colour is
+ * the worst of them: `down` means every announce to that domain is failing,
+ * and `warning` means some are, or that it has stopped recognising torrents.
+ * The dot sits in the indent the tracker favicon used to occupy, so nothing
+ * moved to make room for it.
+ *
+ * The colours are the shipped icons': the green of downloading.png, the yellow
+ * of warning.png, the red of alert.png and its darker shadow. The inset
+ * shadow is what makes the yellow one legible on white, and it costs the
+ * others nothing.
+ */
+#sidebar .x-deluge-tracker-health {
+    position: relative;
+}
+
+#sidebar .x-deluge-tracker-health::before {
+    content: '';
+    position: absolute;
+    left: 5px;
+    top: 50%;
+    width: 8px;
+    height: 8px;
+    margin-top: -4px;
+    border-radius: 50%;
+    background-color: #c0c0c0;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+#sidebar .x-deluge-tracker-ok::before {
+    background-color: #129d01;
+}
+
+#sidebar .x-deluge-tracker-warning::before {
+    background-color: #e6d92b;
+}
+
+#sidebar .x-deluge-tracker-down::before {
+    background-color: #e6381f;
+}
+
+#sidebar .x-deluge-tracker-unknown::before {
+    background-color: #c0c0c0;
+}
+
+/* A tracker failing on every torrent it has is the one thing in this list
+   worth reading before the counts beside it. */
+#sidebar .x-deluge-tracker-down {
+    color: #a9100f;
+}
+
+/* Tracker info window.
+ *
+ * The banner says the one thing the window is for, which is whether this
+ * tracker answers, so it is the width of the panel and the first thing in it.
+ * Everything below is a two-column table of figures.
+ */
+.x-deluge-tracker-banner {
+    padding: 8px 10px;
+    margin-bottom: 10px;
+    border: 1px solid #d0d0d0;
+    border-left-width: 4px;
+    background-color: #f7f7f7;
+}
+
+.x-deluge-tracker-banner .x-deluge-tracker-state {
+    font-weight: bold;
+    margin-right: 8px;
+}
+
+.x-deluge-tracker-banner .x-deluge-tracker-subject {
+    color: #555555;
+    word-break: break-all;
+}
+
+.x-deluge-tracker-banner .x-deluge-tracker-detail,
+.x-deluge-tracker-banner .x-deluge-tracker-message {
+    margin-top: 4px;
+    color: #555555;
+}
+
+/* What the tracker itself said, verbatim: the exact sentence is the thing
+   worth searching for when it is one you have not seen before. */
+.x-deluge-tracker-banner .x-deluge-tracker-message {
+    font-family: monospace;
+    word-break: break-word;
+}
+
+.x-deluge-tracker-banner.x-deluge-tracker-ok {
+    border-left-color: #129d01;
+}
+
+.x-deluge-tracker-banner.x-deluge-tracker-warning {
+    border-left-color: #e6d92b;
+}
+
+.x-deluge-tracker-banner.x-deluge-tracker-down {
+    border-left-color: #e6381f;
+    background-color: #fdf2f0;
+}
+
+.x-deluge-tracker-banner.x-deluge-tracker-down .x-deluge-tracker-state {
+    color: #a9100f;
+}
+
+.x-deluge-tracker-banner.x-deluge-tracker-unknown {
+    border-left-color: #c0c0c0;
+}
+
+table.x-deluge-tracker-info {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+table.x-deluge-tracker-info th {
+    text-align: left;
+    vertical-align: top;
+    white-space: nowrap;
+    width: 130px;
+    padding: 3px 10px 3px 0;
+    color: #555555;
+    font-weight: normal;
+}
+
+table.x-deluge-tracker-info td {
+    vertical-align: top;
+    padding: 3px 0;
+}
+
+.x-deluge-tracker-url {
+    font-family: monospace;
+    word-break: break-all;
+}
+
+.x-deluge-tracker-bad {
+    color: #a9100f;
+}
+
+.x-deluge-tracker-quiet {
+    color: #888888;
 }
 
 /* MessageBox icon styles */

@@ -267,6 +267,70 @@ announce URL — because that is the row the rule is set on. Remember that a key
 is replaced whole: send every tracker you want to keep a rule for, not just the
 one you are changing. The Web UI reads the current value and merges for you.
 
+## Which trackers are down
+
+Right-click a tracker in the sidebar and choose *Info*.
+
+A sidebar row is a domain, not a tracker. `tracker.example.org` and
+`backup.example.org` are grouped into one row, because that is the unit a set
+of rules belongs to. What they do not share is a state: one can be refusing
+every announce while the other answers, and the only trace of that used to be
+the tracker column of whichever torrent happened to be on the failing one. A
+tracker down for a week looked exactly like a torrent nobody is seeding.
+
+The window takes the row apart again. A *Summary* tab for the domain, then one
+tab per announce URL under it, each of them saying:
+
+| | |
+|---|---|
+| Whether it answers | *Working*, *Trouble*, *Down* or *Not contacted yet*, with the tracker's own error message under it, verbatim |
+| Torrents | How many list this tracker, and how many are announcing to it rather than to one of its siblings |
+| Swarm | Seeds and peers, from the announces this tracker actually answered |
+| Size, downloaded, uploaded, ratio | What its torrents add up to — the ratio being the number most trackers ask about |
+| Next announce | When the soonest one is due |
+
+The sidebar carries the same answer as a colour: a dot on each tracker row, in
+the indent the tracker's favicon used to occupy.
+
+| | |
+|---|---|
+| Green | Announces are getting through |
+| Amber | Some are failing, or the tracker has stopped recognising torrents |
+| Red | Every announce to this domain is failing |
+| Grey | Nothing has been tried yet |
+
+*Down* is deliberately the strong word. One failing announce among working ones
+is trouble, not a tracker that has gone away, and a colour that cries wolf over
+a single stale announce is one you learn to ignore.
+
+Nothing here announces or scrapes. Every figure is one libtorrent was already
+holding, because opening a window is not a reason to send a tracker several
+hundred requests — which is also why BEP 48's full scrape is switched off
+nearly everywhere it was ever offered.
+
+Over the API there are two methods. The detail of one domain, keyed the way the
+sidebar keys it:
+
+```bash
+curl -s -b cookies.txt -H 'Content-Type: application/json' \
+  -d '{"method":"redeluge.get_tracker_info","params":["example.org"],"id":1}' \
+  http://127.0.0.1:8112/json
+```
+
+And the colours, one word per domain, which is all the sidebar needs:
+
+```bash
+curl -s -b cookies.txt -H 'Content-Type: application/json' \
+  -d '{"method":"redeluge.get_tracker_health","params":[],"id":1}' \
+  http://127.0.0.1:8112/json
+```
+
+The torrents counted are the ones the sidebar counts — the ones announcing to
+this domain — so the total in the window and the number on the row agree.
+Within them, a torrent counts towards every tracker of the domain it lists, not
+only the one it is announcing to: a listed backup that has been failing for a
+month is exactly what this is for.
+
 ## Torrents the tracker has dropped
 
 A private tracker that has pruned a torrent answers every announce the same

@@ -7,6 +7,27 @@ redeluge numbers its own releases from 1.0.0. The version the daemon reports
 to clients stays `2.2.1`, because that is the Deluge a client expects to be
 talking to.
 
+## [Unreleased]
+
+### Added
+
+- **Which of your trackers are down, and why.** Right-click a tracker in the
+  sidebar and choose *Info*. A sidebar row is a domain, not a tracker —
+  `tracker.example.org` and `backup.example.org` share a row and a set of rules
+  — so the window takes the row apart again: a summary of the domain, then a
+  tab per announce URL under it, each saying whether that tracker answers,
+  what it said when it did not, and what its torrents add up to.
+- **The tracker list is coloured by that answer.** A dot per row, in the indent
+  the tracker favicon used to sit in: green when announces are getting through,
+  red when every announce to that domain is failing, amber when some are or the
+  tracker has stopped recognising torrents, grey when nothing has been tried
+  yet. A tracker that has been down for a week used to look exactly like a
+  torrent nobody is seeding.
+- `redeluge.get_tracker_info` answers the first, `redeluge.get_tracker_health`
+  the second. Neither announces or scrapes: every figure is one libtorrent was
+  already holding, because opening a window is not a reason to send a tracker
+  several hundred requests.
+
 ## [1.5.1] — 2026-09-16
 
 ### Added

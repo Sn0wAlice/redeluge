@@ -70,7 +70,12 @@ pub const PLUGIN_METHODS: &[&str] = &[
 /// method list knows exactly what it has found, and no future Deluge method
 /// can collide with one of these. They are advertised for the same reason the
 /// Label plugin's are — a list that does not say what can be called misleads.
-pub const REDELUGE_METHODS: &[&str] = &["redeluge.get_recent_actions", "redeluge.get_peers"];
+pub const REDELUGE_METHODS: &[&str] = &[
+    "redeluge.get_recent_actions",
+    "redeluge.get_peers",
+    "redeluge.get_tracker_health",
+    "redeluge.get_tracker_info",
+];
 
 /// Everything a call can reach.
 pub struct Core {
@@ -1628,6 +1633,24 @@ impl Rpc for Core {
                 ))
             }
 
+            // What the trackers of one domain are doing, one entry per
+            // announce URL under it. `trackerinfo.rs` says why a sidebar row
+            // is a domain rather than a tracker, and why this reports what
+            // libtorrent already knew instead of scraping for it.
+            "redeluge.get_tracker_info" => {
+                let host = string_arg(&args, 0, "a tracker host")?;
+                let rows = self.tracker_rows().await?;
+                Ok(crate::trackerinfo::detail(&rows, &host))
+            }
+
+            // One word per domain: `ok`, `warning`, `down` or `unknown`. The
+            // sidebar polls this to colour its tracker rows, so it is the
+            // whole answer and nothing per torrent.
+            "redeluge.get_tracker_health" => {
+                let rows = self.tracker_rows().await?;
+                Ok(crate::trackerinfo::health_by_domain(&rows))
+            }
+
             "label.get_config" => {
                 let labels = self.labels().await;
                 Ok(json_to_value(&labels.to_json()))
@@ -2599,6 +2622,50 @@ impl Core {
             (Value::Str("owner".into()), Value::List(owners)),
             (Value::Str("label".into()), Value::List(labels)),
         ]))
+    }
+
+    /// Every torrent, reduced to what a tracker is judged by.
+    ///
+    /// One pass under the session lock for both tracker questions: the health
+    /// of every domain, and the detail of one. Building it twice would mean
+    /// taking the lock twice for the same walk.
+    async fn tracker_rows(&self) -> Result<Vec<crate::trackerinfo::Row>, RpcError> {
+        self.manager
+            .with(|state| {
+                let session_paused = state.session_paused;
+                state
+                    .session
+                    .all_torrent_status()
+                    .into_iter()
+                    .filter_map(|status| {
+                        let torrent = state.torrents.get(&status.info_hash)?;
+                        // The whole list as well as the announced one, because
+                        // the fallback to the first tracker is what the status
+                        // and the sidebar both use.
+                        let trackers = state
+                            .session
+                            .trackers(&status.info_hash)
+                            .unwrap_or_default();
+                        Some(crate::trackerinfo::Row {
+                            state: torrent.state(&status, session_paused),
+                            current: crate::torrent::current_tracker(
+                                &status.current_tracker,
+                                &trackers,
+                            ),
+                            trackers,
+                            tracker_status: torrent.tracker_status.clone(),
+                            size: status.total_wanted,
+                            downloaded: status.all_time_download,
+                            uploaded: status.all_time_upload,
+                            seeds: i64::from(status.num_complete),
+                            peers: i64::from(status.num_incomplete),
+                            next_announce: status.next_announce,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .map_err(|err| RpcError::invalid_argument(err.to_string()))
     }
 
     pub(crate) async fn apply_torrent_options(

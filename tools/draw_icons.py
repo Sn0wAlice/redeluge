@@ -3,9 +3,9 @@
 """Draws the Web UI icons this fork added.
 
 The icons Deluge shipped cover Deluge's interface. The features added here —
-the activity history, the peer ledger, the torrents a tracker has stopped
-recognising — had no icon, and the choice was between borrowing one that means
-something else and drawing three.
+the activity history, the peer ledger, the tracker info window, the torrents a
+tracker has stopped recognising — had no icon, and the choice was between
+borrowing one that means something else and drawing them.
 
 They are drawn rather than downloaded so that the set stays one set. The
 palette is sampled from the icons already shipped, not chosen: the existing
@@ -101,9 +101,32 @@ UNREGISTERED = [
     '.......RRRRRRR..',
 ]
 
+# The letter in the disc, for the tracker info window. An `i` rather than a
+# magnifying glass: the window reports what the daemon already knew, it does not
+# go and look, and a glass promises the second thing.
+TRACKER_INFO = [
+    '................',
+    '.....kkkkkk.....',
+    '...kkBBBBBBkk...',
+    '..kBBBBBBBBBBk..',
+    '.kBBBBBwwBBBBBk.',
+    '.kBBBBBwwBBBBBk.',
+    '.kBBBBBBBBBBBBk.',
+    '.kBBBBwwwwBBBBk.',
+    '.kBBBBBwwBBBBBk.',
+    '.kBBBBBwwBBBBBk.',
+    '..kBBwwwwwwBBk..',
+    '..kBBBBBBBBBBk..',
+    '...kkBBBBBBkk...',
+    '.....kkkkkk.....',
+    '................',
+    '................',
+]
+
 ICONS = {
     'activity': ACTIVITY,
     'peers': PEERS,
+    'tracker_info': TRACKER_INFO,
     'unregistered': UNREGISTERED,
 }
 

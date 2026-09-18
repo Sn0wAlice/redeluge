@@ -68,10 +68,11 @@ before it will let you set a category. See
 `redeluge.*` is the one namespace that is neither Deluge's nor a plugin's. It
 holds what this fork added and Deluge has no equivalent for —
 `redeluge.get_recent_actions`, the short history of what the daemon did without
-being asked, and `redeluge.get_peers`, the running account of what each peer
-has done — and it is separate from `core.*` on purpose, so that no client
-can mistake it for a Deluge method and no future Deluge method can collide with
-it.
+being asked, `redeluge.get_peers`, the running account of what each peer has
+done, and `redeluge.get_tracker_info` and `redeluge.get_tracker_health`, which
+say what the trackers of one domain are doing and which domains are answering
+at all — and it is separate from `core.*` on purpose, so that no client can
+mistake it for a Deluge method and no future Deluge method can collide with it.
 
 ## Logging in
 
