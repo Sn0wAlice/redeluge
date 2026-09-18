@@ -2,11 +2,11 @@ services:
   redeluge:
     build:
       context: .
-      # So a locally built image is labelled like a published one. The
-      # workflow passes the commit as well; here there is not necessarily one.
-      args:
-        VERSION: ${REDELUGE_VERSION:-1.6.1}
-    image: redeluge:${REDELUGE_VERSION:-1.6.1}
+    # A fixed tag, because a locally built image has no version to carry. The
+    # one number that means anything is in Cargo.toml: the binaries report it
+    # and the publish workflow reads it from there. A copy here was only ever a
+    # way for the tag to disagree with what was inside it, which it did.
+    image: redeluge:local
     container_name: redeluge
     restart: unless-stopped
 

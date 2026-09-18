@@ -34,7 +34,7 @@ mod torrent;
 pub use alert::{Alert, AlertKind};
 pub use bridge::ffi::IpRange;
 pub use bridge::HashProgress;
-pub use session::{Session, SessionSettings};
+pub use session::{CreateTorrent, Session, SessionSettings, TorrentFormat};
 pub use settings::Setting;
 pub use torrent::{
     flags, AddTorrent, FileEntry, FlagChange, PeerInfo, TorrentState, TorrentStatus, TrackerEntry,

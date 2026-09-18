@@ -20,6 +20,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .route("/upload", web::post().to(upload::handle))
         .route("/", web::get().to(serve_index))
         .route("/render/{name}", web::get().to(serve_render))
+        .route("/created/{job}", web::get().to(serve_created_torrent))
         .route("/flag/{code}", web::get().to(serve_flag))
         // Anything else is an embedded asset, or the page again so the front
         // end's own routing works on a reload.
@@ -118,6 +119,89 @@ async fn serve_render(path: web::Path<String>, state: web::Data<SharedState>) ->
     }
 }
 
+/// Hands the browser a torrent the daemon has just built.
+///
+/// Not a JSON-RPC result, because a `.torrent` is bytes and the bridge between
+/// the daemon and the browser renders anything that is not text lossily —
+/// `rencode_to_json` is a `from_utf8_lossy`, which for a file of SHA-1 hashes
+/// would replace most of it. So this takes the answer straight off the wire.
+///
+/// The job id is the whole address. It is random, it is only ever handed to the
+/// client that asked for the build over an authenticated connection, and the
+/// daemon forgets it after ten minutes — but the session cookie is checked all
+/// the same, because a Web UI that serves files to anyone who can reach the
+/// port is a Web UI that serves files to anyone who can reach the port.
+async fn serve_created_torrent(
+    request: HttpRequest,
+    path: web::Path<String>,
+    state: web::Data<SharedState>,
+) -> HttpResponse {
+    let state = state.get_ref();
+    if !json_api::is_authenticated(&request, state).await {
+        return HttpResponse::Unauthorized()
+            .insert_header((header::CONTENT_TYPE, "text/plain; charset=utf-8"))
+            .body("not authenticated");
+    }
+
+    let job = path.into_inner();
+    let id = vec![redeluge_rencode::Value::Str(job.clone())];
+
+    // The name first: it is what the file is called once it is saved, and a
+    // browser that saves it as the job id has saved something nobody can find.
+    let name = json_api::call_daemon("redeluge.get_create_torrent", id.clone(), state)
+        .await
+        .and_then(|status| {
+            status
+                .get("name")
+                .and_then(redeluge_rencode::Value::as_str)
+                .map(str::to_owned)
+        });
+
+    match json_api::call_daemon("redeluge.get_created_torrent", id, state).await {
+        Some(redeluge_rencode::Value::Bytes(bytes)) => {
+            let filename = sanitise_filename(name.as_deref().unwrap_or(&job));
+            HttpResponse::Ok()
+                .insert_header((header::CONTENT_TYPE, "application/x-bittorrent"))
+                .insert_header((
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{filename}\""),
+                ))
+                .body(bytes)
+        }
+        // Either it was never built, or the ten minutes ran out. The daemon
+        // cannot tell those apart either, and neither answer is a server error.
+        _ => HttpResponse::NotFound()
+            .insert_header((header::CONTENT_TYPE, "text/plain; charset=utf-8"))
+            .body("no finished torrent under that job id"),
+    }
+}
+
+/// A torrent's own name, made safe to put in a `Content-Disposition`.
+///
+/// The name comes off a path the daemon was asked to build from, so it can hold
+/// anything a filename can — a quote would end the header's quoted string early
+/// and a newline would end the header. Those become underscores rather than
+/// being stripped, so that two names cannot collapse into one.
+fn sanitise_filename(name: &str) -> String {
+    // Trimmed first, then cleaned. The other way round, a name that is nothing
+    // but a newline becomes an underscore before the trim can see it, and the
+    // browser saves a file called `_`.
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return "torrent.torrent".to_owned();
+    }
+
+    let cleaned: String = trimmed
+        .chars()
+        .map(|character| match character {
+            '"' | '\\' | '/' | '\r' | '\n' => '_',
+            other if (other as u32) < 0x20 => '_',
+            other => other,
+        })
+        .collect();
+    format!("{cleaned}.torrent")
+}
+
 /// Serves the flag for a peer's country.
 ///
 /// The peers tab asks for `flag/<code>` per row, which is Deluge's own URL, so
@@ -191,5 +275,40 @@ fn looks_like_a_file(path: &str) -> bool {
     match last.rsplit_once('.') {
         Some((_, extension)) => !extension.is_empty() && extension.len() <= 5,
         None => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_name_becomes_a_filename_with_the_extension_on_it() {
+        assert_eq!(sanitise_filename("Some Release"), "Some Release.torrent");
+    }
+
+    #[test]
+    fn a_name_cannot_break_out_of_the_header_it_is_put_in() {
+        // The name comes off a path the daemon was asked to build from, so it
+        // holds whatever a filename can hold. A quote would end the header's
+        // quoted string early and a newline would end the header.
+        for (name, expected) in [
+            ("a\"b", "a_b.torrent"),
+            ("a\r\nb", "a__b.torrent"),
+            ("a/b", "a_b.torrent"),
+            ("a\\b", "a_b.torrent"),
+            ("a\u{7}b", "a_b.torrent"),
+        ] {
+            assert_eq!(sanitise_filename(name), expected, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn a_name_that_is_nothing_still_saves_as_something() {
+        // A browser handed an empty filename invents one, and what it invents
+        // is usually the last path segment of the URL: the job id.
+        for name in ["", "   ", "\n"] {
+            assert_eq!(sanitise_filename(name), "torrent.torrent", "{name:?}");
+        }
     }
 }

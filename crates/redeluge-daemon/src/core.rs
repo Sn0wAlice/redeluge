@@ -19,6 +19,7 @@ use tokio::sync::Mutex;
 use crate::auth::{AuthLevel, AuthManager};
 use crate::config::Config;
 use crate::events::Event;
+use crate::maketorrent;
 use crate::manager::{restore_request, Manager};
 use crate::prefs;
 use crate::rpc::{CallContext, Rpc, RpcError};
@@ -74,12 +75,28 @@ pub const PLUGIN_METHODS: &[&str] = &[
 /// can collide with one of these. They are advertised for the same reason the
 /// Label plugin's are — a list that does not say what can be called misleads.
 pub const REDELUGE_METHODS: &[&str] = &[
+    "redeluge.create_torrent",
+    "redeluge.get_create_torrent",
+    "redeluge.get_created_torrent",
     "redeluge.get_identity_clients",
     "redeluge.get_recent_actions",
     "redeluge.get_peers",
     "redeluge.get_tracker_health",
     "redeluge.get_tracker_info",
+    "redeluge.list_directory",
 ];
+
+/// The ones of those that a read-only account has no business calling.
+///
+/// The rest report on torrents that account can already see, which is reading.
+/// These two are not that. Building a torrent hashes a directory, writes a file
+/// and can add a torrent to the session; listing a directory hands back the
+/// daemon's filesystem, which is nothing to do with any torrent. Both take the
+/// level Deluge gives the nearest thing it has — `core.create_torrent` and
+/// `core.get_completion_paths` are both `Normal` — rather than a level chosen
+/// here.
+const REDELUGE_PRIVILEGED_METHODS: &[&str] =
+    &["redeluge.create_torrent", "redeluge.list_directory"];
 
 /// Everything a call can reach.
 pub struct Core {
@@ -89,6 +106,16 @@ pub struct Core {
     pub config_dir: PathBuf,
     /// Set when `daemon.shutdown` is called, so the main loop can stop.
     pub shutdown: tokio::sync::Notify,
+    /// The torrents being built, and the finished ones not yet collected.
+    pub creations: crate::maketorrent::Jobs,
+    /// This core, for the work that outlives the call that started it.
+    ///
+    /// Building a torrent runs on its own task and may then add what it built,
+    /// which needs everything an ordinary add needs: the configuration, the
+    /// session, the copy of the file kept for a restart. A weak handle rather
+    /// than a strong one so that a job in flight cannot keep a shut-down daemon
+    /// alive; a job that outlives the core simply stops before the add.
+    me: std::sync::Weak<Self>,
 }
 
 impl Core {
@@ -98,12 +125,14 @@ impl Core {
         auth: AuthManager,
         config_dir: PathBuf,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new_cyclic(|me| Self {
             manager,
             config: Mutex::new(config),
             auth: Mutex::new(auth),
             config_dir,
             shutdown: tokio::sync::Notify::new(),
+            creations: crate::maketorrent::Jobs::default(),
+            me: me.clone(),
         })
     }
 
@@ -613,6 +642,85 @@ impl Core {
         });
         Ok(Value::Str(id))
     }
+
+    /// Builds a `.torrent`, writes it where it was asked for, and seeds it.
+    ///
+    /// The whole of what both create methods do; they differ only in whether
+    /// they wait for it. Hashing reads every byte of the content, so it goes to
+    /// a blocking thread: on the async runtime it would stall every other
+    /// client for as long as the content takes to read.
+    pub async fn build_torrent(
+        &self,
+        request: maketorrent::Request,
+        watching: impl Fn(i64, i64) + Send + 'static,
+    ) -> Result<maketorrent::Outcome, RpcError> {
+        let name = request.name();
+        let parent = request.parent();
+        let manager = self.manager.clone();
+        let build = request.build.clone();
+
+        let torrent_file =
+            tokio::task::spawn_blocking(move || maketorrent::build(&build, &manager, watching))
+                .await
+                .map_err(|err| RpcError::invalid_argument(err.to_string()))?
+                .map_err(RpcError::invalid_argument)?;
+
+        // The infohash comes from libtorrent parsing what was just written,
+        // rather than from this daemon re-reading its own bencode, because it
+        // has no bencode decoder and this is the number the swarm will use.
+        let info_hash = redeluge_libtorrent::Session::torrent_file_info_hash(&torrent_file)
+            .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+
+        let mut written_to = None;
+        if let Some(target) = &request.target {
+            // Blocking, like every other write in this daemon: a `.torrent` is
+            // a few megabytes at the very most, and it has just been preceded
+            // by minutes of hashing.
+            std::fs::write(target, &torrent_file).map_err(|err| {
+                RpcError::invalid_argument(format!("could not write {target}: {err}"))
+            })?;
+            written_to = Some(target.clone());
+        }
+
+        let mut torrent_id = None;
+        if request.add_to_session {
+            let mut add = AddTorrent::from_file(torrent_file.clone(), parent.clone());
+            // Every piece was hashed a moment ago. Seed mode tells libtorrent
+            // to trust that rather than read the whole content a second time,
+            // which for a large directory is the difference between seeding now
+            // and seeding in ten minutes.
+            add.flags = add.flags.set_to(flags::SEED_MODE, true);
+
+            let mut options = self.torrent_defaults().await;
+            options.save_path = Some(parent.clone());
+            options.filename = format!("{name}.torrent");
+            // Whatever `add_paused` says. Asking for a torrent to be created
+            // and added is asking for it to be seeded; a paused one seeds
+            // nothing and the tracker never hears of it.
+            options.paused = false;
+
+            match self.add(add, options).await {
+                Ok(Value::Str(id)) => torrent_id = Some(id),
+                Ok(_) => {}
+                // The file is built and possibly written; failing the whole
+                // call over the add would throw that away. The caller is told
+                // by the absent id, and the reason is in the log.
+                Err(err) => tracing::warn!(
+                    name = %name,
+                    error = %err.message,
+                    "the torrent was created but could not be added"
+                ),
+            }
+        }
+
+        Ok(maketorrent::Outcome {
+            name,
+            info_hash,
+            torrent_file,
+            written_to,
+            torrent_id,
+        })
+    }
 }
 
 /// Whether the identity is drawn anew for each torrent added.
@@ -733,9 +841,13 @@ impl Rpc for Core {
         }
         // Reading what the daemon did to its own torrents is reading, and a
         // read-only account is entitled to know why something it can see is
-        // paused.
+        // paused. The few that are more than that are listed on their own.
         if REDELUGE_METHODS.contains(&method) {
-            return Some(AuthLevel::ReadOnly);
+            return Some(if REDELUGE_PRIVILEGED_METHODS.contains(&method) {
+                AuthLevel::Normal
+            } else {
+                AuthLevel::ReadOnly
+            });
         }
         // core.get_auth_levels_mappings is level 0 in the Python daemon, which
         // makes it reachable before a client has proved anything. Raised here,
@@ -1245,6 +1357,14 @@ impl Rpc for Core {
                 Ok(Value::List(glob_directory(&pattern)))
             }
 
+            // What the create dialog browses with. Deliberately not a change to
+            // `core.get_completion_paths`: that one's shape is Deluge's and a
+            // client written against it would not survive a new one.
+            "redeluge.list_directory" => {
+                let path = args.first().and_then(Value::as_str).unwrap_or("/");
+                Ok(list_directory(path))
+            }
+
             "core.get_completion_paths" => {
                 let request = args.first().cloned().unwrap_or(Value::Dict(Vec::new()));
                 let path = request
@@ -1305,94 +1425,76 @@ impl Rpc for Core {
                 self.prefetch_metadata(&uri, timeout as u64).await
             }
 
+            // Deluge's own, which answers when the file is finished. A caller
+            // that blocks on it blocks its own connection and nothing else,
+            // because the daemon serves one call at a time per connection. The
+            // Web UI has exactly one connection and uses the method below.
             "core.create_torrent" => {
-                let path = string_arg(&args, 0, "a path")?;
-                let trackers: Vec<String> = args
-                    .get(1)
-                    .and_then(Value::as_list)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(|item| item.as_str().map(str::to_owned))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let piece_length = args
-                    .get(2)
-                    .and_then(Value::as_i64)
-                    .unwrap_or(32 * 1024)
-                    .clamp(16 * 1024, 64 * 1024 * 1024) as i32;
-                let comment = args.get(3).and_then(Value::as_str).unwrap_or("").to_owned();
-                let target = args.get(4).and_then(Value::as_str).map(str::to_owned);
-                let web_seeds: Vec<String> = args
-                    .get(5)
-                    .and_then(Value::as_list)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(|item| item.as_str().map(str::to_owned))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let private = args.get(6).and_then(Value::as_bool).unwrap_or(false);
-                let creator = args
-                    .get(7)
-                    .and_then(Value::as_str)
-                    .unwrap_or(concat!("redeluge ", env!("CARGO_PKG_VERSION")))
-                    .to_owned();
+                let request = maketorrent::Request::from_positional(&args)
+                    .map_err(RpcError::invalid_argument)?;
+                let wanted_a_file = request.target.is_some();
+                let outcome = self.build_torrent(request, |_, _| {}).await?;
 
-                // Hashing reads every byte of the content, which can take
-                // minutes. On the async runtime that would stall every other
-                // client, so it goes to a blocking thread.
-                //
-                // Progress crosses back from the hashing loop in C++. It is
-                // throttled to a hundred events for the whole run: a torrent
-                // can have hundreds of thousands of pieces, and one event each
-                // would drown every client to tell them about a progress bar.
-                let manager = self.manager.clone();
-                let built = tokio::task::spawn_blocking(move || {
-                    let mut last_reported = -1i64;
-                    let mut progress =
-                        redeluge_libtorrent::HashProgress::new(Box::new(move |piece, total| {
-                            let total = i64::from(total).max(1);
-                            let piece = i64::from(piece) + 1;
-                            let step = (total / 100).max(1);
-                            if piece % step != 0 && piece != total {
-                                return;
-                            }
-                            if piece == last_reported {
-                                return;
-                            }
-                            last_reported = piece;
-                            manager.announce(Event::CreateTorrentProgress {
-                                piece_count: piece,
-                                num_pieces: total,
-                            });
-                        }));
+                if wanted_a_file {
+                    // Deluge answers nothing when it wrote the file, and the
+                    // file itself when it did not. Clients branch on that.
+                    Ok(Value::None)
+                } else {
+                    Ok(Value::Bytes(outcome.torrent_file))
+                }
+            }
 
-                    redeluge_libtorrent::Session::create_torrent_with_progress(
-                        &path,
-                        piece_length,
-                        &comment,
-                        &creator,
-                        private,
-                        &trackers,
-                        &web_seeds,
-                        &mut progress,
-                    )
-                })
-                .await
-                .map_err(|err| RpcError::invalid_argument(err.to_string()))?
-                .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+            // The same work, started rather than waited for.
+            //
+            // Answers with a job id as soon as the arguments are known to be
+            // good. Progress arrives as `CreateTorrentProgressEvent`, and
+            // `redeluge.get_create_torrent` says how it ended.
+            "redeluge.create_torrent" => {
+                let request = maketorrent::Request::from_options(args.first())
+                    .map_err(RpcError::invalid_argument)?;
+                let core = self
+                    .me
+                    .upgrade()
+                    .ok_or_else(|| RpcError::invalid_argument("the daemon is shutting down"))?;
 
-                match target {
-                    Some(path) if !path.is_empty() => {
-                        std::fs::write(&path, &built).map_err(|err| {
-                            RpcError::invalid_argument(format!("could not write {path}: {err}"))
-                        })?;
-                        Ok(Value::None)
-                    }
-                    _ => Ok(Value::Bytes(built)),
+                let job = core.creations.start(&request.name());
+                let watched = job.clone();
+                let watcher = Arc::clone(&core);
+                tokio::spawn(async move {
+                    let noting = {
+                        let core = Arc::clone(&watcher);
+                        let job = watched.clone();
+                        move |piece, pieces| core.creations.note_progress(&job, piece, pieces)
+                    };
+                    let state = match core.build_torrent(request, noting).await {
+                        Ok(outcome) => maketorrent::State::Done(outcome),
+                        Err(err) => maketorrent::State::Failed(err.message.clone()),
+                    };
+                    core.creations.finish(&watched, state);
+                });
+
+                Ok(Value::Str(job))
+            }
+
+            "redeluge.get_create_torrent" => {
+                let job = string_arg(&args, 0, "a job id")?;
+                self.creations
+                    .status(&job)
+                    .ok_or_else(|| RpcError::invalid_argument("no such torrent is being created"))
+            }
+
+            // The finished file, for whoever is going to hand it to a browser.
+            //
+            // Separate from the status because it is bytes: the Web UI's bridge
+            // renders anything that is not text lossily, so it takes this one
+            // straight from the wire rather than through the JSON conversion.
+            "redeluge.get_created_torrent" => {
+                let job = string_arg(&args, 0, "a job id")?;
+                match self.creations.file(&job) {
+                    Some((_, bytes)) => Ok(Value::Bytes(bytes)),
+                    None => Err(RpcError::invalid_argument(
+                        "no finished torrent under that job id",
+                    )),
                 }
             }
 
@@ -2072,6 +2174,103 @@ pub(crate) fn free_space(path: &str) -> i64 {
 }
 
 /// Total size of a file, or of everything under a directory.
+/// One directory, listed for something that has to show it to a person.
+///
+/// `core.get_completion_paths` exists and is not this: it completes a path a
+/// person is typing, and it answers with directories only, because that is all
+/// a download location can be. Choosing what to make a torrent from is the
+/// other case — a single file is a perfectly good torrent — so this answers
+/// with both, and says which is which.
+///
+/// Hidden entries are left out. The builder skips them too, so offering one
+/// would be offering a torrent that comes back empty.
+///
+/// An unreadable directory answers with no entries rather than an error: the
+/// daemon runs as its own user and a browser walking a filesystem will meet
+/// directories it cannot open. That is a fact about the directory, not a
+/// failure of the call.
+fn list_directory(path: &str) -> Value {
+    let requested = if path.is_empty() { "/" } else { path };
+    let mut here = std::path::Path::new(requested).to_path_buf();
+    // A file is not a directory to list; the one it sits in is what was meant.
+    if here.is_file() {
+        if let Some(parent) = here.parent() {
+            here = parent.to_path_buf();
+        }
+    }
+
+    let mut directories: Vec<Value> = Vec::new();
+    let mut files: Vec<Value> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&here) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            // Following the link, so that a symlinked library reads as the
+            // directory it points at rather than as a file of no size.
+            let Ok(meta) = std::fs::metadata(entry.path()) else {
+                continue;
+            };
+            let directory = meta.is_dir();
+            let item = Value::Dict(vec![
+                (Value::Str("name".into()), Value::Str(name)),
+                (
+                    Value::Str("path".into()),
+                    Value::Str(entry.path().display().to_string()),
+                ),
+                (
+                    Value::Str("kind".into()),
+                    Value::Str(if directory { "dir" } else { "file" }.into()),
+                ),
+                // Only for a file. A directory's size means walking all of it,
+                // which is `core.get_path_size` and is asked for one directory
+                // at a time rather than for every row of a listing.
+                (
+                    Value::Str("size".into()),
+                    if directory {
+                        Value::None
+                    } else {
+                        Value::Int(meta.len() as i64)
+                    },
+                ),
+            ]);
+            if directory {
+                directories.push(item);
+            } else {
+                files.push(item);
+            }
+        }
+    }
+
+    let sort_key = |item: &Value| {
+        item.get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_lowercase()
+    };
+    directories.sort_by_key(sort_key);
+    files.sort_by_key(sort_key);
+    directories.append(&mut files);
+
+    Value::Dict(vec![
+        (
+            Value::Str("path".into()),
+            Value::Str(here.display().to_string()),
+        ),
+        (
+            Value::Str("parent".into()),
+            match here.parent() {
+                Some(parent) => Value::Str(parent.display().to_string()),
+                // The root has nowhere above it, and a browser needs to be
+                // told that rather than offered a button that does nothing.
+                None => Value::None,
+            },
+        ),
+        (Value::Str("entries".into()), Value::List(directories)),
+    ])
+}
+
 fn path_size(path: &str) -> i64 {
     let path = std::path::Path::new(path);
     let Ok(meta) = std::fs::metadata(path) else {

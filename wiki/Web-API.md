@@ -48,7 +48,7 @@ never in the status code, because that is what the shipped front end expects.
 | `core.*` | forwarded to the daemon | 70 |
 | `daemon.*` | forwarded to the daemon | 4 |
 | `label.*` | forwarded to the daemon | 8 |
-| `redeluge.*` | forwarded to the daemon, this fork's own | 2 |
+| `redeluge.*` | forwarded to the daemon, this fork's own | 9 |
 
 Ask the server itself for the list:
 
@@ -74,6 +74,59 @@ say what the trackers of one domain are doing and which domains are answering
 at all, and `redeluge.get_identity_clients`, the clients this daemon can claim
 to be — and it is separate from `core.*` on purpose, so that no client can
 mistake it for a Deluge method and no future Deluge method can collide with it.
+
+Three of them exist because a Deluge method could not be used from a browser.
+
+### Making a torrent
+
+`core.create_torrent` is Deluge's and answers when the file is finished. That
+is fine for a script with a connection of its own, and unusable from the Web UI:
+the daemon serves one call at a time per connection, the interface has one, and
+hashing a directory takes minutes.
+
+`redeluge.create_torrent` starts the same work and answers at once with a job
+id. It takes one dictionary rather than Deluge's twelve positional arguments:
+
+| Key | |
+|---|---|
+| `path` | a file, or a directory taken whole and recursively (required) |
+| `trackers` | announce URLs, one tier each, in order |
+| `webseeds` | URL seeds |
+| `piece_length` | bytes, a power of two; absent or `0` lets libtorrent choose |
+| `comment`, `created_by` | written into the file |
+| `private` | keeps it off the DHT and PEX |
+| `torrent_format` | `v1` (the default), `v2` or `hybrid` |
+| `target` | a path on the daemon's disk to write it to |
+| `add_to_session` | add it and start seeding the content it was built from |
+
+`redeluge.get_create_torrent` takes the job id and answers `state` — `running`,
+`done` or `failed` — with `progress` and, once it is done, the `info_hash` and
+where the file went. `redeluge.get_created_torrent` hands back the file itself,
+for ten minutes after it was built.
+
+`CreateTorrentProgressEvent` carries the same progress to anything subscribed
+to it, throttled to about a hundred events for the whole run however many
+pieces the content has.
+
+Hidden files are left out, which is what every torrent creator does: a
+`.DS_Store` in a torrent is noise nobody wants to seed.
+
+`redeluge.list_directory` is what the dialog browses the daemon's disk with. It
+takes a path and answers `{path, parent, entries}`, each entry carrying `name`,
+`path`, `kind` — `dir` or `file` — and, for a file, its `size`. Asking about a
+file lists the directory it is in. `parent` is absent at the root. It exists
+beside `core.get_completion_paths` rather than replacing it: that method
+completes a path someone is typing and offers directories only, because that is
+all a download location can be, and a single file is a perfectly good torrent.
+
+The finished file does not come back through JSON-RPC. It is bytes, and this
+server renders anything that is not text lossily on its way to the browser, so
+`GET /created/<job>` serves it instead, with the session cookie checked like
+any other call:
+
+```bash
+curl -sO -J -b cookies.txt http://127.0.0.1:8112/created/770b93e3231ab337
+```
 
 ## Logging in
 

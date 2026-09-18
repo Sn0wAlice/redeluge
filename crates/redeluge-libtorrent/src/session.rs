@@ -13,6 +13,70 @@ use crate::settings::Setting;
 use crate::torrent::{AddTorrent, FileEntry, FlagChange, PeerInfo, TorrentStatus, TrackerEntry};
 use crate::Error;
 
+/// Which hashes a new torrent carries.
+///
+/// libtorrent 2.0 writes both when it is not told otherwise, and a hybrid
+/// torrent is refused by trackers that only know v1. Deluge writes v1, so that
+/// is the default here: a torrent a private tracker rejects is a worse
+/// surprise than one without the newer hashes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TorrentFormat {
+    #[default]
+    V1,
+    V2,
+    Hybrid,
+}
+
+impl TorrentFormat {
+    /// The tag the bridge carries. Kept next to the C++ that reads it.
+    pub fn as_i32(self) -> i32 {
+        match self {
+            Self::V1 => 0,
+            Self::V2 => 1,
+            Self::Hybrid => 2,
+        }
+    }
+
+    /// The names the RPC uses, which are Deluge's own spelling.
+    ///
+    /// Anything else is v1, for the same reason the C++ falls back to it.
+    pub fn from_name(name: &str) -> Self {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "v2" => Self::V2,
+            "hybrid" => Self::Hybrid,
+            _ => Self::V1,
+        }
+    }
+
+    pub fn as_name(self) -> &'static str {
+        match self {
+            Self::V1 => "v1",
+            Self::V2 => "v2",
+            Self::Hybrid => "hybrid",
+        }
+    }
+}
+
+/// What a `.torrent` is built from.
+///
+/// A struct rather than nine positional arguments, because the call already
+/// had eight and every one of them is easy to pass in the wrong order.
+#[derive(Debug, Clone, Default)]
+pub struct CreateTorrent {
+    /// A file, or a directory taken whole and recursively.
+    pub path: String,
+    /// Zero lets libtorrent choose from the total size. Anything else has to
+    /// be a power of two, which libtorrent enforces rather than rounding.
+    pub piece_length: i32,
+    pub comment: String,
+    pub creator: String,
+    pub private: bool,
+    /// In announce order; the first is tier zero.
+    pub trackers: Vec<String>,
+    pub web_seeds: Vec<String>,
+    pub format: TorrentFormat,
+}
+
 /// Session settings the spike needs.
 ///
 /// The daemon's full settings pack, all 77 keys of it, arrives in phase 3. What
@@ -307,50 +371,27 @@ impl Session {
     ///
     /// Hashes every byte, so this blocks for as long as the content takes to
     /// read. Call it from somewhere that is allowed to block.
-    pub fn create_torrent(
-        path: &str,
-        piece_length: i32,
-        comment: &str,
-        creator: &str,
-        private: bool,
-        trackers: &[String],
-        web_seeds: &[String],
-    ) -> Result<Vec<u8>, Error> {
-        Self::create_torrent_with_progress(
-            path,
-            piece_length,
-            comment,
-            creator,
-            private,
-            trackers,
-            web_seeds,
-            &mut HashProgress::ignored(),
-        )
+    pub fn create_torrent(request: &CreateTorrent) -> Result<Vec<u8>, Error> {
+        Self::create_torrent_with_progress(request, &mut HashProgress::ignored())
     }
 
     /// The same, reporting each piece as it is hashed.
     ///
     /// `progress` is borrowed for the length of the call and is driven from
     /// the hashing loop in C++, so it runs on this thread and must not block.
-    #[allow(clippy::too_many_arguments)]
     pub fn create_torrent_with_progress(
-        path: &str,
-        piece_length: i32,
-        comment: &str,
-        creator: &str,
-        private: bool,
-        trackers: &[String],
-        web_seeds: &[String],
+        request: &CreateTorrent,
         progress: &mut HashProgress,
     ) -> Result<Vec<u8>, Error> {
         ffi::create_torrent(
-            path,
-            piece_length,
-            comment,
-            creator,
-            private,
-            trackers,
-            web_seeds,
+            &request.path,
+            request.piece_length,
+            &request.comment,
+            &request.creator,
+            request.private,
+            &request.trackers,
+            &request.web_seeds,
+            request.format.as_i32(),
             progress,
         )
         .map(|bytes| bytes.into_iter().collect())

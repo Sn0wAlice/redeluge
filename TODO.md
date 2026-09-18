@@ -10,6 +10,32 @@ survives the fixing of it.
 
 ---
 
+## Making a torrent
+
+Done, end to end: the `Create` button beside `Remove` opens a window that
+browses the daemon's disk, hashes what you choose, and hands the file back to
+the browser, writes it on the daemon, seeds it, or all three.
+
+- [x] **A way for the browser to receive the file.** `GET /created/<job>` on
+      the Web UI server, which takes the bytes straight off the wire rather
+      than through `rencode_to_json`, whose `from_utf8_lossy` would replace
+      most of a file of SHA-1 hashes.
+- [x] **The dialog.** `CreateTorrentWindow.js`, two tabs. The toolbar button
+      Deluge shipped hidden is where it always was, unhidden and wired.
+- [x] **A path chooser that can pick a file.** `redeluge.list_directory`, which
+      answers with files as well as directories and says which is which.
+      `core.get_completion_paths` stays as it was: its shape is Deluge's, and a
+      client written against it would not survive a new one.
+- [ ] **One call still monopolises a connection.** `core.create_torrent` blocks
+      the connection it arrived on for the length of the hashing, because the
+      listener awaits each message inline — which also means the event branch
+      of its `select!` is not polled, so progress events to that client queue up
+      behind the call they are about. The job form sidesteps it rather than
+      fixing it; anything else long-running will meet it again.
+- [ ] **`FileBrowser.js` is still a stub** inherited from upstream: forty-three
+      lines, four toolbar buttons, no behaviour. Nothing references it, and the
+      create window has its own browser. It should go, or become the shared one.
+
 ## Phase 1 leftovers
 
 These make the Rust Web UI a complete replacement rather than a working one.

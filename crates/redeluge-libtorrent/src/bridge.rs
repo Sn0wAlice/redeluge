@@ -326,10 +326,13 @@ pub mod ffi {
 
         /// Builds a `.torrent` from a file or directory on disk.
         ///
+        /// A directory is taken whole and recursively; a file is taken alone.
         /// Returns the bencoded file. Hashing every piece is slow and blocking,
         /// so this belongs on a thread that is allowed to block.
         fn create_torrent(
             path: &str,
+            // Zero lets libtorrent choose one from the total size, which is
+            // what a caller with no opinion should send.
             piece_length: i32,
             comment: &str,
             creator: &str,
@@ -338,6 +341,9 @@ pub mod ffi {
             private_torrent: bool,
             trackers: &[String],
             web_seeds: &[String],
+            // 0 for v1, 1 for v2, 2 for both. Not an enum across the bridge
+            // because cxx would need it declared on both sides for one integer.
+            format: i32,
             // Called once per piece as the hashing runs, so a client watching
             // a progress dialog sees it move.
             progress: &mut HashProgress,

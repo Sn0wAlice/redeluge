@@ -17,6 +17,7 @@ pub mod core;
 pub mod events;
 pub mod features;
 pub mod geoip;
+pub mod maketorrent;
 pub mod manager;
 pub mod peers;
 pub mod prefs;

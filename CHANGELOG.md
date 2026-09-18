@@ -8,6 +8,91 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
+## [1.6.2] — 2026-09-18
+
+### Added
+
+- **Making a torrent, from a file or a whole directory.** `core.create_torrent`
+  existed and hashed the content; what it could not do was be used. It answers
+  only when the file is finished, and the daemon serves one call at a time per
+  connection, so the Web UI — which has exactly one — would have frozen for the
+  length of the hashing and then timed out at thirty seconds anyway.
+  `redeluge.create_torrent` starts the work and answers with a job id at once.
+  `redeluge.get_create_torrent` says how far along it is,
+  `redeluge.get_created_torrent` hands back the finished file, and
+  `CreateTorrentProgressEvent` arrives throughout, throttled to a hundred
+  events for a run however many pieces it has. Finished files are kept for ten
+  minutes and eight at a time: a daemon is not a file server.
+- **`add_to_session`**, which Deluge's signature has always had and this
+  ignored. A torrent created with it set is added and starts seeding the
+  content it was built from, in seed mode: every piece was hashed a moment
+  ago, so reading the whole directory a second time to check would be the
+  difference between seeding now and seeding in ten minutes.
+- **`torrent_format`**, likewise ignored. It takes `v1`, `v2` or `hybrid`.
+- **A Create button, beside Remove, that works.** Deluge shipped that button
+  hidden and wired to nothing: its Web UI could not make a torrent, only the
+  GTK client could, so a headless install could not either. It opens a window
+  with two tabs — what to make it from, and what to put in it.
+- **A browser for the daemon's disk**, which is the whole of choosing what to
+  seed when the files are on another machine and there is nothing to upload.
+  It starts at the download location and can climb anywhere the daemon can
+  read. `redeluge.list_directory` answers it; `core.get_completion_paths`
+  could not, because it offers directories only and a single file is a
+  perfectly good torrent.
+- **A Download button beside Create**, enabled once there is something to
+  download. The window sends the file to the browser on its own when it is
+  asked to, but a browser that blocks that leaves nothing to click, and a
+  torrent built while somebody was looking elsewhere has to still be
+  collectable afterwards.
+- **The window fits the browser it is opened in**, at whatever size that is,
+  and again whenever the browser is resized. A window of a fixed size in a
+  shorter browser puts its own buttons below the fold, where no scrollbar
+  reaches them, because it is the window that overflows and not the page.
+- **The finished torrent comes back to the browser** from `GET /created/<job>`,
+  which takes the bytes straight off the wire: a `.torrent` cannot come back
+  through a JSON-RPC result, because the bridge renders anything that is not
+  text lossily. It can equally be written on the daemon, or seeded, or all
+  three at once.
+- **An icon that says what the button does.** Deluge's `create` icon was a page
+  with a pencil, which is every program's "edit a document" and says nothing
+  about hashing a directory; and the set had a drive and a page and nothing in
+  between, so a folder in the new browser would have been a hard disk. Both are
+  drawn now, in `tools/draw_icons.py`, from the palette the shipped icons set.
+
+### Changed
+
+- **The image version is no longer kept in `.env`.** It was a second copy of
+  the number in `Cargo.toml`, maintained by hand, and it disagreed: the
+  shipped example said 1.5.1, a working tree said 1.0.2, and the binaries
+  inside said 1.6.1. A locally built image is tagged `redeluge:local` and
+  carries no version. The publish workflow reads the real one from
+  `Cargo.toml`, as it always did.
+
+### Fixed
+
+- **A torrent made with Deluge's own arguments had no tracker.** Argument one
+  of `core.create_torrent` is the primary tracker and is a *string*; this read
+  it as a list, so a client passing the announce URL exactly as Deluge
+  documents it got a torrent with no tracker in it and no error to say so. The
+  separate `trackers` list, argument eight, was not read at all.
+- **Torrents came out hybrid v1+v2.** libtorrent 2.0 writes both when it is not
+  told which, and a private tracker that only knows v1 refuses the result.
+  Deluge writes v1, so this does now unless `torrent_format` asks otherwise.
+- **The content of a directory directly under the root was hashed from the
+  wrong place.** The parent of `/downloads` came out as `.` rather than `/`,
+  which sent the hasher looking for `./downloads` relative to wherever the
+  daemon was started. In the container that is `/` and the mistake cancels out,
+  which is why it went unnoticed; anywhere else it is a torrent of nothing. A
+  trailing slash on the path had the same effect one level down.
+- **A piece length that was not a power of two** reached libtorrent, which
+  throws rather than rounding, and came back as an exception from C++ with
+  nothing to say which argument was wrong. It is checked by name now, and zero
+  — meaning "choose one from the size" — is accepted instead of being clamped
+  away.
+- **Progress reported every piece for anything under two hundred of them.** The
+  step was rounded down, so a hundred and ninety-nine pieces divided by a
+  hundred is one. The throttle now holds at the bottom of its range too.
+
 ## [1.6.1] — 2026-09-18
 
 ### Fixed

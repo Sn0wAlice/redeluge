@@ -162,6 +162,6 @@ rust::Vec<uint8_t> create_torrent(rust::Str path, int32_t piece_length, rust::St
                                   rust::Str creator, bool private_torrent,
                                   rust::Slice<rust::String const> trackers,
                                   rust::Slice<rust::String const> web_seeds,
-                                  HashProgress& progress);
+                                  int32_t format, HashProgress& progress);
 
 }  // namespace redeluge

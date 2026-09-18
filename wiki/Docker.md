@@ -79,8 +79,11 @@ it was built from are readable without pulling it:
 docker buildx imagetools inspect ghcr.io/sn0walice/redeluge:1.3.1
 ```
 
-`REDELUGE_VERSION` in `.env` tags a locally built image and is the same number.
-It is not the version the daemon reports to clients, which is fixed at `2.2.1`.
+A locally built image is tagged `redeluge:local` and carries no version,
+because there is nothing for it to carry: the one number that means anything is
+in `Cargo.toml`, which is what the binaries report and what the publish
+workflow reads. Since 1.6.0 it is also the version the daemon reports to
+clients, where it used to answer Deluge's `2.2.1`.
 
 ## Coming from the Python daemon
 

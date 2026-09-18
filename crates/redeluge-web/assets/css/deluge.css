@@ -682,6 +682,25 @@ table.x-deluge-tracker-info td {
     background-image: url('../icons/document.png');
 }
 
+/* The create-torrent browser.
+   The files are on the daemon's disk, which this machine cannot see, so this
+   list is the only way to look at them: it has to say at a glance which rows
+   can be opened and which are a torrent on their own. */
+.x-deluge-browse-row {
+    padding-left: 20px;
+    line-height: 16px;
+    background-repeat: no-repeat;
+    background-position: 0 center;
+}
+
+.x-deluge-browse-dir {
+    background-image: url('../icons/folder.png');
+}
+
+.x-deluge-browse-file {
+    background-image: url('../icons/document.png');
+}
+
 .x-deluge-add-file-checkbox {
     margin-top: 2px;
 }

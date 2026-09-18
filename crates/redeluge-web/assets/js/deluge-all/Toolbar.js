@@ -31,14 +31,6 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
                     },
                     new Ext.Toolbar.Separator(),
                     {
-                        id: 'create',
-                        disabled: true,
-                        hidden: true,
-                        text: _('Create'),
-                        iconCls: 'icon-create',
-                        handler: this.onTorrentAction,
-                    },
-                    {
                         id: 'add',
                         disabled: true,
                         text: _('Add'),
@@ -51,6 +43,18 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
                         text: _('Remove'),
                         iconCls: 'icon-remove',
                         handler: this.onTorrentAction,
+                    },
+                    {
+                        // Deluge shipped this button hidden and wired to
+                        // nothing: its Web UI could not make a torrent, only
+                        // the GTK client could, so a headless install could
+                        // not either. It makes one now.
+                        id: 'create',
+                        disabled: true,
+                        text: _('Create'),
+                        iconCls: 'icon-create',
+                        handler: this.onCreateClick,
+                        scope: this,
                     },
                     new Ext.Toolbar.Separator(),
                     {
@@ -157,7 +161,15 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
     // one torrent at a time, only to the ones the queue is managing, and it is
     // the sort of thing somebody does twice a month — none of which earns two
     // permanent buttons beside Pause and Resume.
-    connectedButtons: ['add', 'remove', 'pause', 'resume', 'activity', 'peers'],
+    connectedButtons: [
+        'add',
+        'remove',
+        'create',
+        'pause',
+        'resume',
+        'activity',
+        'peers',
+    ],
 
     initComponent: function () {
         Deluge.Toolbar.superclass.initComponent.call(this);
@@ -226,6 +238,16 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
             deluge.activityWindow = new Deluge.ActivityWindow();
         }
         deluge.activityWindow.show();
+    },
+
+    onCreateClick: function () {
+        // Built when it is first wanted rather than with the interface: it
+        // carries a filesystem browser and a form, and most sessions never
+        // make a torrent.
+        if (!deluge.createTorrentWindow) {
+            deluge.createTorrentWindow = new Deluge.CreateTorrentWindow();
+        }
+        deluge.createTorrentWindow.show();
     },
 
     onPeersClick: function () {

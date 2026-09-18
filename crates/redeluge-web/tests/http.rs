@@ -1150,3 +1150,51 @@ async fn the_web_ui_agrees_that_the_label_plugin_is_enabled() {
     assert_eq!(body["result"]["enabled_plugins"], json!(["Label"]));
     assert_eq!(body["result"]["available_plugins"], json!(["Label"]));
 }
+
+// ------------------------------------------------------- the created torrent
+
+#[actix_web::test]
+async fn a_created_torrent_is_not_served_without_a_session() {
+    // The job id is random and short-lived, but an unattended Web UI that
+    // hands files to anyone who can reach the port is exactly that.
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let state = state(dir.path());
+    let app = booted!(state);
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/created/0123456789abcdef")
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(response.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+}
+
+#[actix_web::test]
+async fn a_job_id_nothing_was_built_under_is_a_404_rather_than_the_page() {
+    // The default service answers an unknown path with the interface, so a
+    // route that fell through would hand the browser HTML where it asked for a
+    // torrent, and it would save it.
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let state = state(dir.path());
+    let app = booted!(state);
+    let session = logged_in(&app).await;
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/created/not-a-job")
+            .insert_header(("Cookie", format!("_session_id={session}")))
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(response.status(), actix_web::http::StatusCode::NOT_FOUND);
+    let body = test::read_body(response).await;
+    assert!(
+        !body.starts_with(b"<!DOCTYPE"),
+        "the page was served instead"
+    );
+}

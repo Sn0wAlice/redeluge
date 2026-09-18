@@ -80,6 +80,41 @@ int require_setting(std::string const& name, uint8_t expected) {
   return index;
 }
 
+/// The directory `set_piece_hashes` resolves the torrent's own name against.
+///
+/// libtorrent hashes `<parent>/<name>/...`, so this has to be everything above
+/// the path the torrent is being built from. Both edge cases used to give the
+/// wrong answer silently rather than fail: a path directly under the root,
+/// `/downloads`, has no parent before the first separator and came out as `.`,
+/// which sends the hasher looking for `./downloads` relative to wherever the
+/// daemon happened to be started. In the container that is `/` and the mistake
+/// cancels out, which is exactly why it went unnoticed.
+std::string parent_of(std::string const& path) {
+  auto const slash = path.find_last_of("/\\");
+  if (slash == std::string::npos) return ".";
+  // Directly under the root: the parent is the separator itself, not nothing.
+  if (slash == 0) return path.substr(0, 1);
+  return path.substr(0, slash);
+}
+
+/// The torrent format, as the RPC names it.
+///
+/// libtorrent 2.0 writes both v1 and v2 when it is not told otherwise, and a
+/// hybrid torrent is refused by trackers that only know v1. Deluge produces v1
+/// and every client written against it expects that, so v1 is what an
+/// unrecognised value falls back to: a torrent nobody can use is worse than one
+/// that does not carry the newer hashes.
+lt::create_flags_t format_flags(int32_t format) {
+  switch (format) {
+    case 1:
+      return lt::create_torrent::v2_only;
+    case 2:
+      return {};  // Both, which is libtorrent's own default.
+    default:
+      return lt::create_torrent::v1_only;
+  }
+}
+
 std::shared_ptr<lt::torrent_info> parse_torrent_bytes(uint8_t const* data,
                                                       std::size_t size) {
   if (size == 0) throw std::runtime_error("torrent file is empty");
@@ -366,9 +401,14 @@ rust::Vec<uint8_t> create_torrent(rust::Str path, int32_t piece_length, rust::St
                                   rust::Str creator, bool private_torrent,
                                   rust::Slice<rust::String const> trackers,
                                   rust::Slice<rust::String const> web_seeds,
-                                  HashProgress& progress) {
-  std::string const root = to_string(path);
+                                  int32_t format, HashProgress& progress) {
+  std::string root = to_string(path);
   if (root.empty()) throw std::runtime_error("a path is required");
+  // A trailing separator would make the parent below the content itself, and
+  // the hasher would then look for the tree one level too deep.
+  while (root.size() > 1 && (root.back() == '/' || root.back() == '\\')) {
+    root.pop_back();
+  }
 
   lt::file_storage storage;
   lt::error_code ec;
@@ -383,7 +423,7 @@ rust::Vec<uint8_t> create_torrent(rust::Str path, int32_t piece_length, rust::St
     throw std::runtime_error("no files found at " + root);
   }
 
-  lt::create_torrent builder(storage, piece_length);
+  lt::create_torrent builder(storage, piece_length, format_flags(format));
   if (!comment.empty()) builder.set_comment(to_string(comment).c_str());
   if (!creator.empty()) builder.set_creator(to_string(creator).c_str());
   builder.set_priv(private_torrent);
@@ -395,13 +435,9 @@ rust::Vec<uint8_t> create_torrent(rust::Str path, int32_t piece_length, rust::St
 
   // Hashing reads every byte, which is why the Rust side runs this where
   // blocking is allowed.
-  std::string const parent =
-      root.substr(0, root.find_last_of("/\\") == std::string::npos
-                         ? 0
-                         : root.find_last_of("/\\"));
   int const total_pieces = builder.num_pieces();
   lt::set_piece_hashes(
-      builder, parent.empty() ? "." : parent,
+      builder, parent_of(root),
       [&progress, total_pieces](lt::piece_index_t piece) {
         progress.note_piece(static_cast<int32_t>(piece), total_pieces);
       },

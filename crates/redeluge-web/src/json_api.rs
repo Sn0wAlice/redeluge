@@ -411,7 +411,7 @@ async fn forward(method: &str, params: &[Json], state: &SharedState) -> ApiResul
     }
 }
 
-async fn call_daemon(method: &str, args: Vec<Value>, state: &SharedState) -> Option<Value> {
+pub async fn call_daemon(method: &str, args: Vec<Value>, state: &SharedState) -> Option<Value> {
     let guard = state.daemon.read().await;
     let connection = guard.as_ref()?;
     match connection.client.call(method, args).await {

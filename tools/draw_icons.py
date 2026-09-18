@@ -146,9 +146,57 @@ DEAD = [
     '................',
 ]
 
+# Making a torrent: the page, and a plus where something is being added to it.
+# Deluge shipped a page with a pencil here, which is every program's "edit a
+# document" and says nothing about hashing a directory. A plus is the one mark
+# that reads at sixteen pixels as "there will be a new one of these".
+CREATE = [
+    '................',
+    '.kkkkkkkkk......',
+    '.kwwwwwwwkk.....',
+    '.kwwwwwwwwkk....',
+    '.kwwwwwwwwwk....',
+    '.kwddddwwwwk....',
+    '.kwwwwwwwwwk....',
+    '.kwddddddwwk....',
+    '.kwwww..BBBBB...',
+    '.kwddd.BBBwBBB..',
+    '.kwwww.BBBwBBB..',
+    '.kwddd.BwwwwwB..',
+    '.kwwww.BBBwBBB..',
+    '.kkkkk.BBBwBBB..',
+    '........BBBBB...',
+    '................',
+]
+
+# A folder, for the browser that chooses what to make a torrent from. The set
+# had a drive and a page and nothing in between, so a directory in that list
+# was either a hard disk or a document. Blue rather than the usual amber: the
+# palette is the one the shipped icons set, and it has no amber in it.
+FOLDER = [
+    '................',
+    '................',
+    '..kkkkk.........',
+    '.kbbbbbkkkkkkk..',
+    '.kbbbbbbbbbbbbk.',
+    '.kbbbbbbbbbbbbk.',
+    '.kBBBBBBBBBBBBk.',
+    '.kBBBBBBBBBBBBk.',
+    '.kBBBBBBBBBBBBk.',
+    '.kBBBBBBBBBBBBk.',
+    '.kBBBBBBBBBBBBk.',
+    '.kBBBBBBBBBBBBk.',
+    '..kkkkkkkkkkkk..',
+    '................',
+    '................',
+    '................',
+]
+
 ICONS = {
     'activity': ACTIVITY,
+    'create': CREATE,
     'dead': DEAD,
+    'folder': FOLDER,
     'peers': PEERS,
     'tracker_info': TRACKER_INFO,
     'unregistered': UNREGISTERED,
