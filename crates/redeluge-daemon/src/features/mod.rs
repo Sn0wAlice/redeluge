@@ -47,6 +47,7 @@ pub fn spawn(core: Arc<Core>) {
     tokio::spawn(rotate_idle_downloads(Arc::clone(&core)));
     tokio::spawn(guard_disk_space(Arc::clone(&core)));
     tokio::spawn(apply_tracker_rules(Arc::clone(&core)));
+    tokio::spawn(remove_stuck_downloads(Arc::clone(&core)));
     tokio::spawn(keep_the_peer_ledger(Arc::clone(&core)));
     tokio::spawn(announce_torrents(Arc::clone(&core)));
     tokio::spawn(watch_for_a_test_message(Arc::clone(&core)));
@@ -1202,8 +1203,42 @@ async fn start_tracker_move(core: &Core, candidate: &TrackerMove, at: f64) {
 
 /// Removes a torrent a tracker's rule is done with.
 async fn remove_for_tracker(core: &Core, removal: &TrackerRemoval, at: f64) {
-    let id = removal.id.as_str();
     let with_data = removal.with_data;
+    remove_for_rule(
+        core,
+        &removal.id,
+        &removal.name,
+        with_data,
+        rule::TRACKER,
+        format!(
+            "{} says its finished torrents go, {}",
+            removal.host,
+            if with_data {
+                "with their files"
+            } else {
+                "keeping their files"
+            }
+        ),
+        at,
+    )
+    .await;
+}
+
+/// Removes a torrent because a rule said so.
+///
+/// One path for every removal nobody pressed a button for: the announcements,
+/// the state write and what the history records cannot drift apart between one
+/// rule and the next, and the next rule to delete something has one place to
+/// hook into rather than fifty lines to copy.
+async fn remove_for_rule(
+    core: &Core,
+    id: &str,
+    name: &str,
+    with_data: bool,
+    which: &'static str,
+    detail: String,
+    at: f64,
+) {
     // Announced before and after, like `core.remove_torrent`, because a client
     // holding the torrent's details has to be told to let go of them before
     // they stop existing.
@@ -1227,30 +1262,191 @@ async fn remove_for_tracker(core: &Core, removal: &TrackerRemoval, at: f64) {
 
     match removed {
         Ok(Ok(())) => {
-            tracing::info!(torrent = %id, tracker = %removal.host, data = with_data,
-                "removed: the tracker's rule for finished torrents");
+            tracing::info!(torrent = %id, rule = which, data = with_data,
+                reason = %detail, "removed by a rule");
             record(
                 core,
-                Action::new(rule::TRACKER, did::REMOVED, at)
-                    .torrent(id, &removal.name)
-                    .detail(format!(
-                        "{} says its finished torrents go, {}",
-                        removal.host,
-                        if with_data {
-                            "with their files"
-                        } else {
-                            "keeping their files"
-                        }
-                    )),
+                Action::new(which, did::REMOVED, at)
+                    .torrent(id, name)
+                    .detail(detail),
             );
             core.manager.announce(Event::TorrentRemoved {
                 torrent_id: id.to_owned(),
             });
         }
-        Ok(Err(err)) => tracing::warn!(torrent = %id, error = %err,
-            "could not remove a torrent its tracker's rule is due to remove"),
+        Ok(Err(err)) => tracing::warn!(torrent = %id, rule = which, error = %err,
+            "could not remove a torrent a rule is due to remove"),
         Err(err) => tracing::warn!(error = %err, "the torrent manager is not answering"),
     }
+}
+
+// ------------------------------------------------------- downloads that stall
+
+/// Throws away the downloads of a label that never start.
+///
+/// A torrent that has been trying for hours and has not got a single byte is
+/// not slow, it is dead: a magnet nobody is seeding, a `.torrent` for content
+/// that has left the swarm, a private tracker that has stopped answering for
+/// it. It sits in the list looking exactly like one that is merely between
+/// peers, and the only way to tell is to remember when it was added.
+///
+/// So the rule is per label, off until somebody turns it on by name, and the
+/// state it acts on is deliberately narrow — [`decide_stuck_removals`] says
+/// what it will not take. It is the second rule in the daemon that deletes
+/// files nobody pressed a button for, and like the first it is written to be
+/// boring.
+///
+/// A minute between passes, the same as the tracker rules, and for the same
+/// reason: the delay is in hours, so anything more eager is only work.
+async fn remove_stuck_downloads(core: Arc<Core>) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+
+        let settings = label::Settings::from_config(setting(&core, "label").await.as_ref());
+        // Nothing configured is the normal case, and what is behind this check
+        // is a status sweep of the whole library.
+        if !settings.any_stuck_rule() {
+            continue;
+        }
+
+        let now = now();
+        let removals = match core
+            .manager
+            .with(move |state| decide_stuck_removals(state, &settings))
+            .await
+        {
+            Ok(removals) => removals,
+            Err(err) => {
+                tracing::warn!(error = %err, "the torrent manager is not answering");
+                continue;
+            }
+        };
+
+        for removal in removals {
+            remove_for_rule(
+                &core,
+                &removal.id,
+                &removal.name,
+                removal.with_data,
+                rule::LABEL,
+                format!(
+                    "{} takes downloads that have done nothing {}, {}",
+                    removal.label,
+                    describe_delay(removal.hours),
+                    if removal.with_data {
+                        "with their files"
+                    } else {
+                        "keeping their files"
+                    }
+                ),
+                now,
+            )
+            .await;
+        }
+    }
+}
+
+/// A torrent a label's rule has given up on.
+struct StuckRemoval {
+    id: String,
+    /// Carried with the id because after a removal there is nothing left to
+    /// look the name up in, and the history has to say what went.
+    name: String,
+    label: String,
+    hours: f64,
+    with_data: bool,
+}
+
+/// One pass over the library: which downloads their label has given up on.
+///
+/// What this will not take, each for a reason:
+///
+/// * A torrent that has **downloaded anything at all**. The rule is about
+///   downloads that never started, not slow ones, and one byte is the
+///   difference between a dead swarm and a bad week.
+/// * A **paused** torrent, including one the queue is holding back. Somebody
+///   paused it, or the daemon did, and neither is the torrent failing.
+/// * A **finished** one. A torrent whose files are all deselected is finished
+///   with nothing downloaded, and it is finished on purpose.
+/// * One that is **checking** or **moving**. Neither has had a chance to
+///   download yet, and removing a torrent out from under libtorrent's own file
+///   handling is how half of it ends up in each place.
+///
+/// The clock is `active_time`, which libtorrent counts in seconds the torrent
+/// spent active and keeps across restarts. Wall-clock time since it was added
+/// would count the weekend it spent paused and the day it spent in the queue,
+/// and a rule that deletes things must not count time when nothing was being
+/// tried.
+fn decide_stuck_removals(
+    state: &mut crate::manager::SessionState,
+    settings: &label::Settings,
+) -> Vec<StuckRemoval> {
+    use redeluge_libtorrent::TorrentState as LtState;
+
+    let mut out = Vec::new();
+
+    for status in state.session.all_torrent_status() {
+        let Some(torrent) = state.torrents.get(&status.info_hash) else {
+            continue;
+        };
+        let Some(options) = settings.options(&torrent.options.label) else {
+            continue;
+        };
+        if !options.removes_stuck() {
+            continue;
+        }
+
+        if status.total_done > 0 || status.is_finished || status.is_paused {
+            continue;
+        }
+        if status.moving_storage
+            || matches!(
+                status.state,
+                LtState::CheckingFiles | LtState::CheckingResumeData
+            )
+        {
+            continue;
+        }
+        if (status.active_time as f64) < options.stuck_after() {
+            continue;
+        }
+
+        out.push(StuckRemoval {
+            id: status.info_hash.clone(),
+            name: torrent.display_name(&status),
+            label: torrent.options.label.clone(),
+            // What was enforced rather than what was stored: the delay is
+            // clamped on the way in, and a history line that quotes a figure
+            // the rule did not use is a line that will be argued with.
+            hours: options.stuck_after() / 3600.0,
+            with_data: options.stuck_remove_data,
+        });
+    }
+
+    out
+}
+
+/// A delay as the clause that finishes the sentence the history keeps.
+///
+/// A clause rather than a number, because the two cases do not take the same
+/// preposition: a rule with no delay is not waiting *for* anything, it takes a
+/// torrent that has never moved a byte since it started.
+fn describe_delay(hours: f64) -> String {
+    if hours <= 0.0 {
+        return "since they started".to_owned();
+    }
+    if (hours - 1.0).abs() < f64::EPSILON {
+        return "for an hour".to_owned();
+    }
+    format!("for {} hours", trim_number(hours))
+}
+
+/// A number without the trailing zeroes a float prints, so a history line says
+/// `4 hours` rather than `4 hours` spelled `4.000000000000001`.
+fn trim_number(value: f64) -> String {
+    let text = format!("{value:.2}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    text.to_owned()
 }
 
 /// Free space on the filesystem a path is on, or would be created on.
@@ -2017,5 +2213,18 @@ mod tests {
         let (weekday, hour) = local_weekday_and_hour();
         assert!(weekday < scheduler::DAYS);
         assert!(hour < scheduler::HOURS);
+    }
+
+    #[test]
+    fn a_delay_reads_as_words_in_the_history() {
+        // The line has to say what the rule was, because after a removal the
+        // rule is the only thing left explaining the gap in the list. Each
+        // answer has to finish the sentence it is dropped into: "... have done
+        // nothing {}, with their files".
+        assert_eq!(describe_delay(0.0), "since they started");
+        assert_eq!(describe_delay(1.0), "for an hour");
+        assert_eq!(describe_delay(4.0), "for 4 hours");
+        // A float that came back from JSON, rather than `4.000000000000001`.
+        assert_eq!(describe_delay(0.5), "for 0.5 hours");
     }
 }

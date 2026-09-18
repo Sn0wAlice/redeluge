@@ -30,10 +30,10 @@ Ext.ns('Deluge');
 Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
     title: _('Label Settings'),
     width: 470,
-    // Tall enough for the four boxes without scrolling, which is the whole
-    // point of separating them: a group you have to scroll to find is a group
-    // you did not know was there.
-    height: 540,
+    // Tall enough for the boxes without scrolling, which is the whole point of
+    // separating them: a group you have to scroll to find is a group you did
+    // not know was there. It scrolls anyway on a short screen.
+    height: 660,
     layout: 'fit',
     buttonAlign: 'right',
     closeAction: 'hide',
@@ -100,7 +100,36 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
             width: 220,
         });
 
-        // The fourth box is not a group: it has no switch, because it is the
+        var stuck = this.group('apply_stuck', _('Downloads that never start'));
+        this.fields.stuck_hours = stuck.add(
+            this.spinner(_('Stuck at 0% for (hours):'), 1, 1, 0)
+        );
+        stuck.add({
+            xtype: 'label',
+            text: _(
+                'Counted in time spent trying, not on the clock: a torrent that sat in the queue or was paused overnight has not been failing for a night. Anything that has downloaded even one byte is left alone.'
+            ),
+            style: 'display: block; margin: 2px 0 6px 0; color: #666;',
+        });
+        this.fields.stuck_remove_data = stuck.add({
+            xtype: 'checkbox',
+            hideLabel: true,
+            boxLabel: _('Delete their files as well'),
+            handler: this.onSwitched,
+            scope: this,
+        });
+        // Shown only while it is ticked: a warning that is always there is one
+        // nobody reads by the third time they open this window.
+        this.stuckWarning = stuck.add({
+            xtype: 'label',
+            hidden: true,
+            text: _(
+                'The files will be deleted from disk. There is no undo, and nothing else is asked first. A torrent at 0% has downloaded nothing, so this is usually an empty directory.'
+            ),
+            style: 'display: block; margin: 2px 0 0 18px; color: #a03030;',
+        });
+
+        // The last box is not a group: it has no switch, because it is the
         // one option here that does nothing to the torrents. It decides what
         // the list shows, so it says so in a legend rather than in a switch.
         var view = this.form.add({
@@ -153,14 +182,16 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
     /**
      * A number field, since this window needs six of them.
      */
-    spinner: function (caption, precision, increment) {
+    spinner: function (caption, precision, increment, minValue) {
         return {
             xtype: 'spinnerfield',
             fieldLabel: caption,
             labelSeparator: '',
             width: 80,
             decimalPrecision: precision,
-            minValue: -1,
+            // -1 for the limits, where it means "no limit". A delay has no
+            // such reading, so its floor is passed in as zero.
+            minValue: minValue === undefined ? -1 : minValue,
             maxValue: 9999999,
             incrementValue: increment || 1,
         };
@@ -206,12 +237,24 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
             if (field.getXType() === 'checkbox') {
                 field.setValue(value === true);
             } else if (field.getXType() === 'spinnerfield') {
-                field.setValue(Deluge.number(value, -1));
+                field.setValue(Deluge.number(value, this.defaultOf(name)));
             } else {
                 field.setValue(value === undefined ? '' : value);
             }
         }
         this.onSwitched();
+    },
+
+    /**
+     * What a number field reads as when the stored options do not have it.
+     *
+     * The daemon's own default, not a blank and not -1 for everything: an
+     * entry written by an older build has only the keys somebody set, and a
+     * delay that arrived as -1 would be a rule that fires immediately.
+     */
+    defaultOf: function (name) {
+        var defaults = Deluge.LabelSettingsWindow.DEFAULTS;
+        return defaults[name] === undefined ? -1 : defaults[name];
     },
 
     /**
@@ -228,6 +271,13 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
                 this
             );
         }
+
+        if (this.stuckWarning) {
+            this.stuckWarning.setVisible(
+                this.fields.apply_stuck.getValue() === true &&
+                    this.fields.stuck_remove_data.getValue() === true
+            );
+        }
     },
 
     options: function () {
@@ -239,7 +289,10 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
             } else if (field.getXType() === 'spinnerfield') {
                 // A blank number field reads as NaN and serialises as null,
                 // which the daemon has had to defend against once already.
-                options[name] = Deluge.number(field.getValue(), -1);
+                options[name] = Deluge.number(
+                    field.getValue(),
+                    this.defaultOf(name)
+                );
             } else {
                 options[name] = field.getValue() || '';
             }
@@ -308,6 +361,23 @@ Deluge.LabelSettingsWindow.GROUPS = {
     ],
     apply_queue: ['stop_at_ratio', 'stop_ratio', 'remove_at_ratio'],
     apply_move_completed: ['move_completed_path'],
+    apply_stuck: ['stuck_hours', 'stuck_remove_data'],
+};
+
+/**
+ * What a number field reads as when the label's options do not carry it.
+ *
+ * The daemon's defaults. -1 means "no limit" for the four limits and two is
+ * the ratio the plugin has always started at; a delay starts at zero, which
+ * means the next sweep rather than never.
+ */
+Deluge.LabelSettingsWindow.DEFAULTS = {
+    max_download_speed: -1,
+    max_upload_speed: -1,
+    max_connections: -1,
+    max_upload_slots: -1,
+    stop_ratio: 2,
+    stuck_hours: 0,
 };
 
 /**

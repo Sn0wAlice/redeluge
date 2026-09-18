@@ -27,6 +27,20 @@ talking to.
   the second. Neither announces or scrapes: every figure is one libtorrent was
   already holding, because opening a window is not a reason to send a tracker
   several hundred requests.
+- **A label can throw away downloads that never start.** Under *Downloads that
+  never start* in a label's settings: a torrent of that label which has been
+  trying for the set number of hours and has not downloaded a single byte is
+  removed, with its files unless you say otherwise. A dead magnet looks exactly
+  like a torrent between peers, and the only way to tell was to remember when
+  it was added.
+- The delay is counted in time the torrent spent trying, not on the clock, so a
+  queue or a weekend of being paused does not count towards it. It will not
+  take a torrent that downloaded anything at all, one that is paused, one that
+  is finished with every file deselected, or one that is checking or moving.
+  Removals are recorded in *Activity*, under a new **Label** rule.
+- Deleting the files is on by default here, unlike the tracker rule's
+  equivalent: that one removes torrents that finished, where the files are the
+  point, and this one removes torrents that downloaded nothing.
 
 ### Changed
 

@@ -60,6 +60,34 @@ pub struct Options {
     #[serde(default)]
     pub move_completed_path: String,
 
+    /// Throw away a download that never starts.
+    ///
+    /// The one rule here that deletes something nobody pressed a button for,
+    /// so it is off until somebody turns it on for a label by name, and the
+    /// state it acts on is deliberately narrow: nothing downloaded at all,
+    /// while the torrent was actually trying. See [`Options::removes_stuck`].
+    #[serde(default)]
+    pub apply_stuck: bool,
+
+    /// How long it has to have been trying, in hours.
+    ///
+    /// Counted in time the torrent spent active, not on the wall clock: a
+    /// torrent that sat in the queue for a day, or that somebody paused over
+    /// the weekend, has not been failing for a day.
+    #[serde(default)]
+    pub stuck_hours: f64,
+
+    /// Delete its files along with it.
+    ///
+    /// On by default, which the tracker rule's equivalent is not, and the
+    /// difference is the point: that one removes torrents that finished, where
+    /// the files are the whole reason they exist. This one removes torrents
+    /// that downloaded nothing, where "its files" is an empty directory and
+    /// whatever libtorrent preallocated. Leaving those behind is how a
+    /// download directory fills with the skeletons of torrents that never ran.
+    #[serde(default = "yes")]
+    pub stuck_remove_data: bool,
+
     /// Keep these torrents out of the list until somebody asks for them.
     ///
     /// Not something the label does to its torrents: nothing is paused, moved
@@ -88,6 +116,15 @@ fn minus_one_float() -> f64 {
 fn two() -> f64 {
     2.0
 }
+fn yes() -> bool {
+    true
+}
+
+/// Ten years, the ceiling on the stuck delay. The same ceiling the tracker
+/// rules use, for the same reason: anything longer is a typo, and a typo in
+/// this direction is harmless.
+const MAX_STUCK_HOURS: f64 = 87_600.0;
+const HOUR: f64 = 3600.0;
 
 impl Default for Options {
     fn default() -> Self {
@@ -106,6 +143,9 @@ impl Default for Options {
             apply_move_completed: false,
             move_completed: false,
             move_completed_path: String::new(),
+            apply_stuck: false,
+            stuck_hours: 0.0,
+            stuck_remove_data: true,
             hide_by_default: false,
             auto_add: false,
             auto_add_trackers: Vec::new(),
@@ -156,6 +196,30 @@ impl Options {
         }
 
         out
+    }
+
+    /// Whether this label throws away downloads that never start.
+    ///
+    /// The switch alone, because zero hours is a legitimate thing to ask for:
+    /// it means the next sweep takes anything that has done nothing since it
+    /// was started, which is what somebody watching a dead tracker's torrents
+    /// pile up actually wants.
+    pub fn removes_stuck(&self) -> bool {
+        self.apply_stuck
+    }
+
+    /// How long a torrent has to have been trying, in seconds.
+    ///
+    /// Bounded here rather than where it is stored, because it comes from a
+    /// client: a negative delay would read as "already due", and a `NaN` delay
+    /// compares false against everything, which makes a rule that is on look
+    /// broken instead of saying why.
+    pub fn stuck_after(&self) -> f64 {
+        if self.stuck_hours.is_finite() {
+            self.stuck_hours.clamp(0.0, MAX_STUCK_HOURS) * HOUR
+        } else {
+            0.0
+        }
     }
 }
 
@@ -221,6 +285,15 @@ impl Settings {
         self.labels.get(id)
     }
 
+    /// Whether any label at all throws away downloads that never start.
+    ///
+    /// Checked before the sweep walks the library, because nothing configured
+    /// is the normal case and a status pass over three thousand torrents once
+    /// a minute is not free.
+    pub fn any_stuck_rule(&self) -> bool {
+        self.labels.values().any(Options::removes_stuck)
+    }
+
     /// The options this build stores and does not yet act on.
     ///
     /// Kept as a function rather than a comment so the answer is checkable: a
@@ -278,6 +351,97 @@ mod tests {
         assert_eq!(settings.names(), vec!["radarr".to_owned()]);
         assert!(settings.remove("radarr"));
         assert!(!settings.remove("radarr"));
+    }
+
+    #[test]
+    fn a_stuck_delay_from_a_client_is_bounded() {
+        // It comes over the API, so it comes from anywhere. A negative delay
+        // would read as "already due" and a NaN one compares false against
+        // everything, which makes a rule that is on look broken rather than
+        // say why.
+        let bad = Options {
+            apply_stuck: true,
+            stuck_hours: -5.0,
+            ..Options::default()
+        };
+        assert_eq!(bad.stuck_after(), 0.0);
+
+        let worse = Options {
+            stuck_hours: f64::NAN,
+            ..bad.clone()
+        };
+        assert_eq!(worse.stuck_after(), 0.0);
+
+        let silly = Options {
+            stuck_hours: 1_000_000.0,
+            ..bad.clone()
+        };
+        assert_eq!(silly.stuck_after(), MAX_STUCK_HOURS * HOUR);
+
+        let ordinary = Options {
+            stuck_hours: 4.0,
+            ..bad
+        };
+        assert_eq!(ordinary.stuck_after(), 4.0 * 3600.0);
+    }
+
+    #[test]
+    fn a_stuck_rule_of_zero_hours_is_a_rule() {
+        // Zero means the next sweep takes anything that has done nothing since
+        // it started, which is what somebody watching a dead tracker's
+        // torrents pile up is asking for. Only the switch decides.
+        let options = Options {
+            apply_stuck: true,
+            stuck_hours: 0.0,
+            ..Options::default()
+        };
+        assert!(options.removes_stuck());
+        assert_eq!(options.stuck_after(), 0.0);
+        assert!(!Options::default().removes_stuck());
+    }
+
+    #[test]
+    fn the_stuck_rule_takes_the_files_unless_told_not_to() {
+        // The opposite default to the tracker rule's, and deliberately: that
+        // one removes torrents that finished, where the files are the point.
+        // This one removes torrents that downloaded nothing.
+        assert!(Options::default().stuck_remove_data);
+
+        // An entry written by an older build has no key for it, and must not
+        // read as "keep the files" by accident of serde's bool default.
+        let stored = json!({"labels": {"dead": {"apply_stuck": true}}});
+        let settings = Settings::from_config(Some(&stored));
+        let options = settings.options("dead").expect("the label");
+        assert!(options.stuck_remove_data);
+    }
+
+    #[test]
+    fn the_sweep_is_skipped_when_no_label_asks_for_it() {
+        // Behind this check is a status pass over the whole library, once a
+        // minute, for a feature almost nobody turns on.
+        let mut settings = Settings::default();
+        settings.add("films");
+        assert!(!settings.any_stuck_rule());
+
+        settings
+            .labels
+            .get_mut("films")
+            .expect("the label")
+            .apply_stuck = true;
+        assert!(settings.any_stuck_rule());
+    }
+
+    #[test]
+    fn the_stuck_rule_is_not_a_torrent_option() {
+        // It is something the daemon does to the torrent, not a setting the
+        // torrent carries. Sending it to `core.set_torrent_options` would be
+        // an unknown key at best.
+        let options = Options {
+            apply_stuck: true,
+            stuck_hours: 4.0,
+            ..Options::default()
+        };
+        assert!(options.to_torrent_options().is_empty());
     }
 
     #[test]

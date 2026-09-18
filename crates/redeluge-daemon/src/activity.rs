@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! What the daemon did without being asked.
 //!
-//! Six things in this daemon act on their own: the queue's share-ratio rule,
-//! the idle rule, the disk-space rule, the schedule, and a tracker's rules for
-//! labelling, moving and removing. Two of them move or delete files. Until
+//! Seven things in this daemon act on their own: the queue's share-ratio rule,
+//! the idle rule, the disk-space rule, the schedule, a tracker's rules for
+//! labelling, moving and removing, and a label's rule for downloads that never
+//! start. Three of them move or delete files. Until
 //! this existed, the only trace any of them left was a line in the log, which
 //! on a container install means `docker logs` and knowing to look.
 //!
@@ -29,6 +30,7 @@ pub const CAPACITY: usize = 200;
 /// Which rule acted. Kept short because the interface groups by it.
 pub mod rule {
     pub const TRACKER: &str = "tracker";
+    pub const LABEL: &str = "label";
     pub const IDLE: &str = "idle";
     pub const DISK: &str = "disk";
     pub const SCHEDULE: &str = "schedule";

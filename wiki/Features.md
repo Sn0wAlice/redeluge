@@ -86,9 +86,11 @@ nothing is the default rather than an accident:
 | `apply_max` | `max_download_speed`, `max_upload_speed`, `max_connections`, `max_upload_slots`, `prioritize_first_last` |
 | `apply_queue` | `is_auto_managed`, `stop_at_ratio`, `stop_ratio`, `remove_at_ratio` |
 | `apply_move_completed` | `move_completed`, `move_completed_path` |
+| `apply_stuck` | `stuck_hours`, `stuck_remove_data` — see below; it is the one that deletes |
 
-They are applied when a torrent joins the label and when the label's options
-change. `auto_add` and `auto_add_trackers` are stored and reported so a client
+The first three are applied when a torrent joins the label and when the label's
+options change. The fourth is not a torrent option at all: it is something the
+daemon does on a sweep, once a minute, and it is described on its own below. `auto_add` and `auto_add_trackers` are stored and reported so a client
 that sets them does not lose them, and nothing acts on them yet.
 
 ### Hiding a label by default
@@ -107,6 +109,43 @@ those torrents, because asking for a label outranks hiding it. Ticking it in
 the header menu shows it for the rest of the session. The sidebar's count still
 counts them, every other client still sees them, and the daemon still runs
 them.
+
+### Throwing away downloads that never start
+
+One more option, under *Downloads that never start*, and the only one here that
+deletes anything: `apply_stuck` removes a torrent of this label that has been
+trying for `stuck_hours` and has not downloaded a single byte.
+
+A torrent in that state is not slow, it is dead — a magnet nobody is seeding, a
+`.torrent` for content that has left the swarm, a tracker that has stopped
+answering for it. In the list it looks exactly like one that is merely between
+peers, and the only way to tell them apart is to remember when it was added.
+
+The delay is counted in **time the torrent spent trying**, not on the wall
+clock. A torrent that sat in the queue for a day, or that was paused over the
+weekend, has not been failing for a day: libtorrent's `active_time` is the
+clock, and it survives a restart.
+
+It is narrow on purpose. It will not take:
+
+| | |
+|---|---|
+| A torrent that downloaded **anything at all** | One byte is the difference between a dead swarm and a bad week |
+| A **paused** one, including one the queue is holding back | Somebody paused it, or the daemon did, and neither is the torrent failing |
+| A **finished** one | A torrent with every file deselected is finished at zero bytes, on purpose |
+| One **checking** or **moving** | Neither has had a chance to download, and removing a torrent out from under libtorrent's file handling is how half of it ends up in each place |
+
+`stuck_remove_data` deletes the files too, and unlike the tracker rule's
+equivalent it is **on by default**. The difference is the point: that rule
+removes torrents that finished, where the files are the whole reason they
+exist; this one removes torrents that downloaded nothing, where "its files" is
+an empty directory and whatever was preallocated. Leaving those behind is how a
+download directory fills with the skeletons of torrents that never ran.
+
+`stuck_hours` of zero is a rule, not an off switch: it means the next sweep
+takes anything that has done nothing since it started. The switch is what
+decides. Removals are recorded in *Activity* under the **Label** rule, with the
+label and the delay that took it.
 
 ### Compatibility with Radarr, Sonarr and the rest
 
@@ -439,9 +478,10 @@ torrent is one the peer also carries elsewhere — not a count. The `peers` key 
 
 ## What the daemon did on its own
 
-Six things here act without being asked: the share-ratio rule, the idle rule,
-the disk-space rule, the schedule, and a tracker's rules for labelling, moving
-and removing. Two of them move or delete files.
+Seven things here act without being asked: the share-ratio rule, the idle rule,
+the disk-space rule, the schedule, a tracker's rules for labelling, moving and
+removing, and a label's rule for downloads that never start. Three of them move
+or delete files.
 
 **Activity**, in the toolbar, is the short history of what they did — newest
 first, with the torrent, the rule and why. It is not a log viewer: it answers
@@ -452,6 +492,7 @@ the torrents rather than in `docker logs`.
 | | |
 |---|---|
 | Tracker | Labelled, moved or removed by a tracker's rule |
+| Label | Removed by a label's rule for downloads that never start |
 | Idle | Paused for transferring nothing while something was queued, or let go again |
 | Disk | Paused because the disk it writes to is nearly full, or let go once there was room |
 | Ratio | Stopped or removed at its share ratio |

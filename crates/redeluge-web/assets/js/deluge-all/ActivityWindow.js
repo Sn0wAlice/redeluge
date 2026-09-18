@@ -5,9 +5,10 @@
  *
  * What the daemon did without being asked.
  *
- * Six things here act on their own: the share-ratio rule, the idle rule, the
- * disk-space rule, the schedule, and a tracker's rules for labelling, moving
- * and removing. Two of them move or delete files. Until this window existed
+ * Seven things here act on their own: the share-ratio rule, the idle rule, the
+ * disk-space rule, the schedule, a tracker's rules for labelling, moving and
+ * removing, and a label's rule for downloads that never start. Three of them
+ * move or delete files. Until this window existed
  * the only trace any of them left was a line in the daemon's log, which on a
  * container install means knowing to run `docker logs`.
  *
@@ -177,6 +178,7 @@ Deluge.ActivityWindow = Ext.extend(Ext.Window, {
     renderRule: function (value) {
         var names = {
             tracker: _('Tracker'),
+            label: _('Label'),
             idle: _('Idle'),
             disk: _('Disk'),
             schedule: _('Schedule'),

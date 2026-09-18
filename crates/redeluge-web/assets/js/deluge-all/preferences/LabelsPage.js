@@ -193,6 +193,7 @@ Deluge.preferences.Labels = Ext.extend(Ext.Panel, {
         if (options.apply_max) parts.push(_('bandwidth'));
         if (options.apply_queue) parts.push(_('seeding'));
         if (options.apply_move_completed) parts.push(_('move on completion'));
+        if (options.apply_stuck) parts.push(_('removes stuck downloads'));
         if (options.hide_by_default) parts.push(_('hidden by default'));
         return parts.length ? parts.join(', ') : _('nothing');
     },
