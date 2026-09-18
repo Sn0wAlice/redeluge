@@ -374,7 +374,6 @@ mod tests {
             mode: CUSTOM.to_owned(),
             user_agent: "Transmission/4.0.5".to_owned(),
             peer_id: "-TR4050-".to_owned(),
-            ..Settings::default()
         };
         let resolved = settings.resolve(&honest_for_test());
         assert_eq!(resolved.user_agent, "Transmission/4.0.5");

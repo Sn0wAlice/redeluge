@@ -279,6 +279,61 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
             ctCls: 'x-deluge-indent-checkbox',
         });
 
+        // ------------------------------------ downloads that never get going
+        fieldset = this.add({
+            xtype: 'fieldset',
+            border: false,
+            title: _('Remove Downloads That Get Nowhere'),
+            autoHeight: true,
+            labelWidth: 210,
+            style: 'padding-top: 5px; margin-bottom: 0px',
+        });
+        fieldset.add({
+            xtype: 'label',
+            text: _(
+                'A torrent that has been trying for hours without a single byte arriving is not slow, it is dead: a magnet nobody seeds, or content that has left the swarm. This throws those away. A label can set its own rule, or turn this off for its torrents.'
+            ),
+            style: 'display: block; margin-bottom: 6px; color: #666;',
+        });
+
+        this.stuck = {};
+        this.stuck.enabled = fieldset.add({
+            xtype: 'checkbox',
+            hideLabel: true,
+            boxLabel: _('Remove a download that stops getting anywhere'),
+            handler: this.onStuckToggled,
+            scope: this,
+        });
+        this.stuck.hours = fieldset.add(
+            this.idleSpinner(_('Nothing arriving for (hours):'), 1)
+        );
+        this.stuck.max_progress = fieldset.add(
+            this.idleSpinner(_('And no further along than (%):'), 0)
+        );
+        fieldset.add({
+            xtype: 'label',
+            text: _(
+                'Zero per cent takes only what never started, which is the safe reading and the default. Raising it puts torrents that did start and then stalled in scope — at a hundred, one stalled at 90% goes the same way. The hours are counted in time spent trying, so a torrent that sat in the queue or was paused overnight has not been failing for a night.'
+            ),
+            style: 'display: block; margin: 2px 0 6px 0; color: #666;',
+        });
+        this.stuck.remove_data = fieldset.add({
+            xtype: 'checkbox',
+            hideLabel: true,
+            boxLabel: _('Delete their files as well'),
+            ctCls: 'x-deluge-indent-checkbox',
+            handler: this.onStuckToggled,
+            scope: this,
+        });
+        this.stuckWarning = fieldset.add({
+            xtype: 'label',
+            hidden: true,
+            text: _(
+                'The files will be deleted from disk. There is no undo, and nothing else is asked first.'
+            ),
+            style: 'display: block; margin: 2px 0 0 18px; color: #a03030;',
+        });
+
         this.on('show', this.onPageShow, this);
     },
 
@@ -299,6 +354,7 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
     },
 
     onPageShow: function () {
+        this.loadStuck();
         if (this.idleLoaded) return;
         this.idleLoaded = true;
         deluge.client.core.get_config_value('idle_pause', {
@@ -354,7 +410,23 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
     onApply: function () {
         // Nothing read yet means nothing of this page's to write. The other
         // feature pages learned this the hard way: Preferences applies every
-        // page on OK, and an unread page holds defaults.
+        // page on OK, and an unread page holds defaults. Each block guards
+        // itself, because one that failed to read must not ride out on the
+        // other one having succeeded.
+        if (this.stuckLoaded) {
+            deluge.client.core.set_config({
+                stuck: {
+                    enabled: this.stuck.enabled.getValue() === true,
+                    hours: Deluge.number(this.stuck.hours.getValue(), 0),
+                    max_progress: Deluge.number(
+                        this.stuck.max_progress.getValue(),
+                        0
+                    ),
+                    remove_data: this.stuck.remove_data.getValue() === true,
+                },
+            });
+        }
+
         if (!this.idleLoaded) return;
 
         deluge.client.core.set_config({
@@ -375,5 +447,49 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
     onStopRatioCheck: function (e, checked) {
         this.stopRatio.setDisabled(!checked);
         this.removeAtRatio.setDisabled(!checked);
+    },
+
+    /**
+     * Reads the daemon's own stuck rule. Its own call, because it is a feature
+     * key rather than one of the settings the options manager carries.
+     */
+    loadStuck: function () {
+        if (this.stuckLoaded) return;
+        this.stuckLoaded = true;
+        deluge.client.core.get_config_value('stuck', {
+            success: function (settings) {
+                settings = settings || {};
+                this.stuck.enabled.setValue(settings['enabled'] === true);
+                this.stuck.hours.setValue(Deluge.number(settings['hours'], 0));
+                this.stuck.max_progress.setValue(
+                    Deluge.number(settings['max_progress'], 0)
+                );
+                this.stuck.remove_data.setValue(
+                    settings['remove_data'] !== false
+                );
+                this.onStuckToggled();
+            },
+            failure: function () {
+                // The daemon may not be connected. Leaving the boxes at their
+                // defaults is right; writing them back is not, which is what
+                // `stuckLoaded` guards on the way out.
+                this.stuckLoaded = false;
+            },
+            scope: this,
+        });
+    },
+
+    /**
+     * The numbers mean nothing until the switch is on, and the warning is only
+     * worth reading while the thing it warns about is armed.
+     */
+    onStuckToggled: function () {
+        var on = this.stuck.enabled.getValue() === true;
+        this.stuck.hours.setDisabled(!on);
+        this.stuck.max_progress.setDisabled(!on);
+        this.stuck.remove_data.setDisabled(!on);
+        this.stuckWarning.setVisible(
+            on && this.stuck.remove_data.getValue() === true
+        );
     },
 });

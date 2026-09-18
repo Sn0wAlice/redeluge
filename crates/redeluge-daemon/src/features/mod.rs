@@ -26,6 +26,7 @@ pub mod identity;
 pub mod idlepause;
 pub mod label;
 pub mod scheduler;
+pub mod stuck;
 pub mod tracker;
 pub mod webhook;
 
@@ -1303,17 +1304,19 @@ async fn remove_stuck_downloads(core: Arc<Core>) {
     loop {
         tokio::time::sleep(Duration::from_secs(60)).await;
 
-        let settings = label::Settings::from_config(setting(&core, "label").await.as_ref());
+        let labels = label::Settings::from_config(setting(&core, "label").await.as_ref());
+        let global = stuck::Settings::from_config(setting(&core, "stuck").await.as_ref()).rule();
         // Nothing configured is the normal case, and what is behind this check
-        // is a status sweep of the whole library.
-        if !settings.any_stuck_rule() {
+        // is a status sweep of the whole library. The clocks are kept by that
+        // same sweep, so when nothing is watching there is nothing to keep.
+        if global.is_none() && !labels.any_stuck_rule() {
             continue;
         }
 
         let now = now();
         let removals = match core
             .manager
-            .with(move |state| decide_stuck_removals(state, &settings))
+            .with(move |state| decide_stuck_removals(state, &labels, global))
             .await
         {
             Ok(removals) => removals,
@@ -1332,7 +1335,11 @@ async fn remove_stuck_downloads(core: Arc<Core>) {
                 rule::LABEL,
                 format!(
                     "{} takes downloads that have done nothing {}, {}",
-                    removal.label,
+                    if removal.scope.is_empty() {
+                        "this daemon".to_owned()
+                    } else {
+                        removal.scope.clone()
+                    },
                     describe_delay(removal.hours),
                     if removal.with_data {
                         "with their files"
@@ -1353,18 +1360,26 @@ struct StuckRemoval {
     /// Carried with the id because after a removal there is nothing left to
     /// look the name up in, and the history has to say what went.
     name: String,
-    label: String,
+    /// The label whose rule took it, or empty for the daemon's own rule. The
+    /// history line says which, because "why did that go" has two answers now.
+    scope: String,
     hours: f64,
     with_data: bool,
 }
 
-/// One pass over the library: which downloads their label has given up on.
+/// One pass over the library: which downloads have stopped getting anywhere.
+///
+/// Every torrent is measured, and which rule measures it is the most specific
+/// one that exists: its label's, if that label has one, otherwise the global
+/// rule. A label that has the rule off is a deliberate exemption from the
+/// global one, not a fall-through — a label is how somebody says "these are
+/// different", and it would be a poor rule that ignored them saying it.
 ///
 /// What this will not take, each for a reason:
 ///
-/// * A torrent that has **downloaded anything at all**. The rule is about
-///   downloads that never started, not slow ones, and one byte is the
-///   difference between a dead swarm and a bad week.
+/// * A torrent that got **further along than the rule allows**. The ceiling
+///   defaults to nothing at all, so out of the box this is still only about
+///   downloads that never started.
 /// * A **paused** torrent, including one the queue is holding back. Somebody
 ///   paused it, or the daemon did, and neither is the torrent failing.
 /// * A **finished** one. A torrent whose files are all deselected is finished
@@ -1372,57 +1387,79 @@ struct StuckRemoval {
 /// * One that is **checking** or **moving**. Neither has had a chance to
 ///   download yet, and removing a torrent out from under libtorrent's own file
 ///   handling is how half of it ends up in each place.
+/// * One whose clock has not been set yet, which is every torrent on the first
+///   pass after a start. `stuck.rs` says why that direction is the safe one.
 ///
-/// The clock is `active_time`, which libtorrent counts in seconds the torrent
-/// spent active and keeps across restarts. Wall-clock time since it was added
-/// would count the weekend it spent paused and the day it spent in the queue,
-/// and a rule that deletes things must not count time when nothing was being
-/// tried.
+/// The marks are updated here as well, because the decision and the clock have
+/// to be taken from the same status: reading them in two passes would let a
+/// byte arrive between the two and be counted in neither.
 fn decide_stuck_removals(
     state: &mut crate::manager::SessionState,
-    settings: &label::Settings,
+    labels: &label::Settings,
+    global: Option<stuck::Rule>,
 ) -> Vec<StuckRemoval> {
     use redeluge_libtorrent::TorrentState as LtState;
 
     let mut out = Vec::new();
+    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     for status in state.session.all_torrent_status() {
         let Some(torrent) = state.torrents.get(&status.info_hash) else {
             continue;
         };
-        let Some(options) = settings.options(&torrent.options.label) else {
-            continue;
-        };
-        if !options.removes_stuck() {
-            continue;
-        }
+        let label = torrent.options.label.clone();
+        let name = torrent.display_name(&status);
+        seen.insert(status.info_hash.clone());
 
-        if status.total_done > 0 || status.is_finished || status.is_paused {
-            continue;
-        }
-        if status.moving_storage
-            || matches!(
+        // The clock, whether or not any rule is watching it: a rule turned on
+        // this afternoon should not find every torrent already overdue.
+        let mark = stuck::mark_for(
+            status.total_done,
+            status.active_time,
+            state.progress_marks.get(&status.info_hash),
+        );
+
+        let rule = labels
+            .options(&label)
+            .map(|options| options.stuck_rule())
+            .unwrap_or(global);
+
+        let takeable = !status.is_finished
+            && !status.is_paused
+            && !status.moving_storage
+            && !matches!(
                 status.state,
                 LtState::CheckingFiles | LtState::CheckingResumeData
-            )
-        {
-            continue;
-        }
-        if (status.active_time as f64) < options.stuck_after() {
-            continue;
+            );
+
+        if let (Some(rule), true) = (rule, takeable) {
+            if stuck::is_stuck(
+                status.progress,
+                status.active_time,
+                state.progress_marks.get(&status.info_hash),
+                &rule,
+            ) {
+                out.push(StuckRemoval {
+                    id: status.info_hash.clone(),
+                    name,
+                    scope: if labels.options(&label).is_some() {
+                        label
+                    } else {
+                        String::new()
+                    },
+                    hours: rule.seconds() / 3600.0,
+                    with_data: rule.remove_data,
+                });
+            }
         }
 
-        out.push(StuckRemoval {
-            id: status.info_hash.clone(),
-            name: torrent.display_name(&status),
-            label: torrent.options.label.clone(),
-            // What was enforced rather than what was stored: the delay is
-            // clamped on the way in, and a history line that quotes a figure
-            // the rule did not use is a line that will be argued with.
-            hours: options.stuck_after() / 3600.0,
-            with_data: options.stuck_remove_data,
-        });
+        state.progress_marks.insert(status.info_hash, mark);
     }
+
+    // A torrent removed while this map was not looking would sit here for
+    // ever. `forget` covers the ordinary removal; this covers every other way
+    // one can leave.
+    state.progress_marks.retain(|id, _| seen.contains(id));
 
     out
 }

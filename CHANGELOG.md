@@ -27,6 +27,21 @@ talking to.
   the second. Neither announces or scrapes: every figure is one libtorrent was
   already holding, because opening a window is not a reason to send a tracker
   several hundred requests.
+- **The rule for downloads that get nowhere is no longer a label's alone.**
+  Preferences, Queue carries it for every torrent; a label still sets its own,
+  and a label with the rule off is an exemption from the daemon's rule rather
+  than a fall-through.
+- It also stopped being about zero per cent. What it measures is bytes
+  arriving, so a torrent that got 3% in the first minute and has not moved
+  since is in scope — up to `max_progress`, which is zero by default and keeps
+  the original behaviour exactly. Deleting a torrent that is 90% done and
+  stalled is a different decision from deleting one that never began.
+- The clock is a mark per torrent, taken at the `active_time` where its byte
+  count last moved, rather than libtorrent's wall-clock `time_since_download`:
+  a torrent paused over a weekend came back three days stale and would have
+  been deleted on the first sweep after it resumed, having had no chance at
+  all. The marks are in memory, so a restart sets every clock again — for a
+  rule that deletes files, waiting longer than asked is the direction to err.
 - **A label can throw away downloads that never start.** Under *Downloads that
   never start* in a label's settings: a torrent of that label which has been
   trying for the set number of hours and has not downloaded a single byte is

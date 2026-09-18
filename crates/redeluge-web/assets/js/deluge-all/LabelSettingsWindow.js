@@ -102,12 +102,15 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
 
         var stuck = this.group('apply_stuck', _('Downloads that never start'));
         this.fields.stuck_hours = stuck.add(
-            this.spinner(_('Stuck at 0% for (hours):'), 1, 1, 0)
+            this.spinner(_('Nothing arriving for (hours):'), 1, 1, 0)
+        );
+        this.fields.stuck_max_progress = stuck.add(
+            this.spinner(_('And no further along than (%):'), 0, 1, 0)
         );
         stuck.add({
             xtype: 'label',
             text: _(
-                'Counted in time spent trying, not on the clock: a torrent that sat in the queue or was paused overnight has not been failing for a night. Anything that has downloaded even one byte is left alone.'
+                'Zero per cent takes only what never started, which is the default. Raising it puts torrents that did start and then stalled in scope. The hours are counted in time spent trying, so a torrent that sat in the queue or was paused overnight has not been failing for a night.'
             ),
             style: 'display: block; margin: 2px 0 6px 0; color: #666;',
         });
@@ -361,7 +364,7 @@ Deluge.LabelSettingsWindow.GROUPS = {
     ],
     apply_queue: ['stop_at_ratio', 'stop_ratio', 'remove_at_ratio'],
     apply_move_completed: ['move_completed_path'],
-    apply_stuck: ['stuck_hours', 'stuck_remove_data'],
+    apply_stuck: ['stuck_hours', 'stuck_max_progress', 'stuck_remove_data'],
 };
 
 /**
@@ -378,6 +381,7 @@ Deluge.LabelSettingsWindow.DEFAULTS = {
     max_upload_slots: -1,
     stop_ratio: 2,
     stuck_hours: 0,
+    stuck_max_progress: 0,
 };
 
 /**

@@ -426,6 +426,12 @@ pub fn defaults(config_dir: &Path) -> Vec<(String, Json)> {
                 "anonymous_mode": false,
             }),
         ),
+        // Downloads that stop getting anywhere. Off, and a label can ask for
+        // something different for its own torrents.
+        (
+            "stuck".into(),
+            crate::features::stuck::Settings::default_json(),
+        ),
         // What this client tells the swarm it is. `show` is the truth, which
         // is what a daemon nobody has configured has to be.
         (

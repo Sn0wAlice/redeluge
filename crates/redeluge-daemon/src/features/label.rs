@@ -77,6 +77,14 @@ pub struct Options {
     #[serde(default)]
     pub stuck_hours: f64,
 
+    /// How far along a torrent of this label may be and still be taken.
+    ///
+    /// Percent. Zero, the default, is the rule this started as: only torrents
+    /// that never downloaded a byte. A hundred takes anything that has stalled
+    /// for the delay, whatever it got to first.
+    #[serde(default)]
+    pub stuck_max_progress: f64,
+
     /// Delete its files along with it.
     ///
     /// On by default, which the tracker rule's equivalent is not, and the
@@ -120,12 +128,6 @@ fn yes() -> bool {
     true
 }
 
-/// Ten years, the ceiling on the stuck delay. The same ceiling the tracker
-/// rules use, for the same reason: anything longer is a typo, and a typo in
-/// this direction is harmless.
-const MAX_STUCK_HOURS: f64 = 87_600.0;
-const HOUR: f64 = 3600.0;
-
 impl Default for Options {
     fn default() -> Self {
         Self {
@@ -145,6 +147,7 @@ impl Default for Options {
             move_completed_path: String::new(),
             apply_stuck: false,
             stuck_hours: 0.0,
+            stuck_max_progress: 0.0,
             stuck_remove_data: true,
             hide_by_default: false,
             auto_add: false,
@@ -208,18 +211,17 @@ impl Options {
         self.apply_stuck
     }
 
-    /// How long a torrent has to have been trying, in seconds.
+    /// This label's answer to the stuck rule: its own, or none.
     ///
-    /// Bounded here rather than where it is stored, because it comes from a
-    /// client: a negative delay would read as "already due", and a `NaN` delay
-    /// compares false against everything, which makes a rule that is on look
-    /// broken instead of saying why.
-    pub fn stuck_after(&self) -> f64 {
-        if self.stuck_hours.is_finite() {
-            self.stuck_hours.clamp(0.0, MAX_STUCK_HOURS) * HOUR
-        } else {
-            0.0
-        }
+    /// `None` means the torrents of this label are exempt — including from the
+    /// daemon's own rule. A label is how somebody says "these are different",
+    /// and a rule that overrode them saying it would be a poor rule.
+    pub fn stuck_rule(&self) -> Option<super::stuck::Rule> {
+        self.apply_stuck.then_some(super::stuck::Rule {
+            hours: self.stuck_hours,
+            max_progress: self.stuck_max_progress,
+            remove_data: self.stuck_remove_data,
+        })
     }
 }
 
@@ -354,50 +356,29 @@ mod tests {
     }
 
     #[test]
-    fn a_stuck_delay_from_a_client_is_bounded() {
-        // It comes over the API, so it comes from anywhere. A negative delay
-        // would read as "already due" and a NaN one compares false against
-        // everything, which makes a rule that is on look broken rather than
-        // say why.
-        let bad = Options {
+    fn a_label_hands_its_own_rule_to_the_sweep() {
+        // The arithmetic is `stuck.rs`'s and tested there. What a label owes
+        // is the three numbers, unchanged.
+        let options = Options {
             apply_stuck: true,
-            stuck_hours: -5.0,
+            stuck_hours: 4.0,
+            stuck_max_progress: 5.0,
+            stuck_remove_data: false,
             ..Options::default()
         };
-        assert_eq!(bad.stuck_after(), 0.0);
-
-        let worse = Options {
-            stuck_hours: f64::NAN,
-            ..bad.clone()
-        };
-        assert_eq!(worse.stuck_after(), 0.0);
-
-        let silly = Options {
-            stuck_hours: 1_000_000.0,
-            ..bad.clone()
-        };
-        assert_eq!(silly.stuck_after(), MAX_STUCK_HOURS * HOUR);
-
-        let ordinary = Options {
-            stuck_hours: 4.0,
-            ..bad
-        };
-        assert_eq!(ordinary.stuck_after(), 4.0 * 3600.0);
+        let rule = options.stuck_rule().expect("a rule");
+        assert_eq!(rule.hours, 4.0);
+        assert_eq!(rule.max_progress, 5.0);
+        assert!(!rule.remove_data);
+        assert_eq!(rule.seconds(), 4.0 * 3600.0);
     }
 
     #[test]
-    fn a_stuck_rule_of_zero_hours_is_a_rule() {
-        // Zero means the next sweep takes anything that has done nothing since
-        // it started, which is what somebody watching a dead tracker's
-        // torrents pile up is asking for. Only the switch decides.
-        let options = Options {
-            apply_stuck: true,
-            stuck_hours: 0.0,
-            ..Options::default()
-        };
-        assert!(options.removes_stuck());
-        assert_eq!(options.stuck_after(), 0.0);
-        assert!(!Options::default().removes_stuck());
+    fn a_label_with_the_rule_off_is_an_exemption_not_a_gap() {
+        // `None` is read by the sweep as "these torrents are not the daemon's
+        // rule's business either". A label is how somebody says these are
+        // different, and this is that sentence in one value.
+        assert!(Options::default().stuck_rule().is_none());
     }
 
     #[test]

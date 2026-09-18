@@ -499,10 +499,12 @@ const ADDED_BY_REDELUGE: &[&str] = &[
     "blocklist",
     "countrydb",
     "disk_space",
+    "identity",
     "idle_pause",
     "label",
     "peers",
     "scheduler",
+    "stuck",
     "tracker",
     "webhook",
 ];
@@ -563,6 +565,32 @@ fn each_feature_is_off_until_someone_turns_it_on() {
                 config.get(key).and_then(|value| value.get("enabled")),
                 Some(&json!(true)),
                 "`disk_space` guards against a full disk and is on"
+            );
+            continue;
+        }
+        // Not a switch either: it chooses between four ways of answering
+        // "what client is this?", and the one it starts on is the truth. There
+        // is nothing to turn on, and nothing here is off.
+        // Off, like the rest. It deletes files, so it is the last key here
+        // that should ever ship armed.
+        if *key == "stuck" {
+            assert_eq!(
+                config.get(key).and_then(|value| value.get("enabled")),
+                Some(&json!(false)),
+                "`stuck` removes torrents and must not ship on"
+            );
+            assert_eq!(
+                config.get(key).and_then(|value| value.get("max_progress")),
+                Some(&json!(0.0)),
+                "`stuck` should start scoped to downloads that never began"
+            );
+            continue;
+        }
+        if *key == "identity" {
+            assert_eq!(
+                config.get(key).and_then(|value| value.get("mode")),
+                Some(&json!("show")),
+                "`identity` should tell the truth out of the box"
             );
             continue;
         }

@@ -72,6 +72,13 @@ pub struct SessionState {
     /// first time again, and re-applying a rule that has not changed writes
     /// the same numbers.
     pub tracker_limits: BTreeMap<String, String>,
+    /// Where each torrent's byte count last moved, in its own active seconds.
+    ///
+    /// The clock the stuck rule measures from. Not saved, deliberately: a
+    /// restart sets every clock again, so the rule that deletes files waits
+    /// longer than asked rather than shorter. `stuck.rs` says why the wall
+    /// clock will not do.
+    pub progress_marks: BTreeMap<String, crate::features::stuck::Mark>,
     /// What each peer has done, across connections and restarts.
     ///
     /// Written by the sampler on the async side and saved from this thread on
@@ -138,6 +145,11 @@ impl SessionState {
         let _ = std::fs::remove_file(torrent_file_path(&state_dir, id));
         let _ = std::fs::remove_file(state_dir.join("resume").join(format!("{id}.resume")));
         self.resume_data.remove(id);
+        // Keyed by infohash, which comes back if the same torrent is added
+        // again. Leaving the old mark behind would hand the new one a clock
+        // that had already been running for hours.
+        self.progress_marks.remove(id);
+        self.tracker_limits.remove(id);
     }
 
     /// The status of one torrent, or None when it is gone.
@@ -309,6 +321,7 @@ impl Manager {
             low_space: false,
             paused_by_session: std::collections::BTreeSet::new(),
             tracker_limits: BTreeMap::new(),
+            progress_marks: BTreeMap::new(),
             activity: std::sync::Arc::clone(&activity),
             peers: std::sync::Arc::clone(&peers),
             countries: None,

@@ -110,27 +110,51 @@ the header menu shows it for the rest of the session. The sidebar's count still
 counts them, every other client still sees them, and the daemon still runs
 them.
 
-### Throwing away downloads that never start
+### Throwing away downloads that get nowhere
 
-One more option, under *Downloads that never start*, and the only one here that
-deletes anything: `apply_stuck` removes a torrent of this label that has been
-trying for `stuck_hours` and has not downloaded a single byte.
+The rule that removes a torrent which has stopped receiving bytes. It is set in
+two places, and the more specific one wins:
+
+| Where | Key | Covers |
+|---|---|---|
+| Preferences, Queue | `stuck` | Every torrent, unless its label says otherwise |
+| A label's settings | `apply_stuck` and friends | The torrents of that label |
+
+A label that has the rule **off** is an exemption, not a fall-through: its
+torrents are out of scope of the daemon's rule too. A label is how somebody
+says "these are different", and it would be a poor rule that ignored them
+saying it.
 
 A torrent in that state is not slow, it is dead — a magnet nobody is seeding, a
 `.torrent` for content that has left the swarm, a tracker that has stopped
 answering for it. In the list it looks exactly like one that is merely between
-peers, and the only way to tell them apart is to remember when it was added.
+peers, and the only way to tell them apart is to remember how long it has been
+that way.
+
+Two numbers say when to act:
+
+| | |
+|---|---|
+| `hours` / `stuck_hours` | How long without a byte arriving |
+| `max_progress` / `stuck_max_progress` | How far along a torrent may be and still be taken, in per cent |
+
+`max_progress` is zero by default, which means **only torrents that never
+started** — deleting one that is 90% done and stalled is a different decision
+from deleting one that never began, and the difference is yours to make. At a
+hundred, anything that has stalled for the delay is in scope.
 
 The delay is counted in **time the torrent spent trying**, not on the wall
 clock. A torrent that sat in the queue for a day, or that was paused over the
-weekend, has not been failing for a day: libtorrent's `active_time` is the
-clock, and it survives a restart.
+weekend, has not been failing for a day. The daemon records the `active_time`
+at which each torrent's byte count last moved and measures from there; those
+marks are in memory, so a restart sets every clock again and the rule waits
+longer than asked rather than shorter.
 
 It is narrow on purpose. It will not take:
 
 | | |
 |---|---|
-| A torrent that downloaded **anything at all** | One byte is the difference between a dead swarm and a bad week |
+| A torrent **further along than `max_progress`** | Out of the box that is anything which downloaded a single byte |
 | A **paused** one, including one the queue is holding back | Somebody paused it, or the daemon did, and neither is the torrent failing |
 | A **finished** one | A torrent with every file deselected is finished at zero bytes, on purpose |
 | One **checking** or **moving** | Neither has had a chance to download, and removing a torrent out from under libtorrent's file handling is how half of it ends up in each place |
@@ -142,10 +166,12 @@ exist; this one removes torrents that downloaded nothing, where "its files" is
 an empty directory and whatever was preallocated. Leaving those behind is how a
 download directory fills with the skeletons of torrents that never ran.
 
-`stuck_hours` of zero is a rule, not an off switch: it means the next sweep
-takes anything that has done nothing since it started. The switch is what
-decides. Removals are recorded in *Activity* under the **Label** rule, with the
-label and the delay that took it.
+| One whose clock has **not been set yet** | Every torrent on the first sweep after a start; that is where its clock begins |
+
+A delay of zero is a rule, not an off switch: it means the next sweep takes
+anything that has done nothing since its clock was set. The switch is what
+decides. Removals are recorded in *Activity* under the **Label** rule, naming
+the label that took it or *this daemon* for the global one.
 
 ### Compatibility with Radarr, Sonarr and the rest
 
