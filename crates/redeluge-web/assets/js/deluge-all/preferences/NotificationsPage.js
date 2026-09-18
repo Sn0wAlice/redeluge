@@ -167,7 +167,7 @@ Deluge.preferences.Notifications = Ext.extend(Ext.Panel, {
         this.result = this.add({
             xtype: 'label',
             text: '',
-            style: 'display: block; margin: 0 0 6px 0; color: #666;',
+            style: 'display: block; margin: 0 0 6px 0; opacity: 0.72;',
         });
 
         this.add({
@@ -175,7 +175,7 @@ Deluge.preferences.Notifications = Ext.extend(Ext.Panel, {
             text: _(
                 'Discord takes a channel webhook URL. ntfy takes the topic URL you would open in the app. Gotify takes the server URL and an application token. Webhook posts one JSON object to anything else.'
             ),
-            style: 'display: block; margin: 0 0 8px 0; color: #666;',
+            style: 'display: block; margin: 0 0 8px 0; opacity: 0.72;',
         });
 
         this.on('show', this.onPageShow, this);

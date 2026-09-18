@@ -49,7 +49,7 @@ Deluge.preferences.Labels = Ext.extend(Ext.Panel, {
             text: _(
                 'A label groups torrents. Put a torrent in one from its Options tab, or let another program do it: this is the Label plugin’s own list, so anything that speaks Deluge’s API sees the same labels. Pick one and press Edit for what it applies to the torrents in it.'
             ),
-            style: 'display: block; margin-bottom: 6px; color: #666;',
+            style: 'display: block; margin-bottom: 6px; opacity: 0.72;',
         });
 
         this.store = new Ext.data.ArrayStore({

@@ -307,15 +307,27 @@ async fn a_read_only_account_cannot_change_anything() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_daemon_reports_a_version_clients_recognise() {
+async fn the_daemon_reports_this_forks_own_version() {
+    // This test used to assert the opposite, and the reason it did is worth
+    // keeping: a client compares this against what it knows how to speak, so
+    // Deluge's `2.2.1` was reported on purpose, and answering anything else
+    // can make Radarr, Sonarr, the GTK client or a thin client refuse to
+    // connect. That was traded away deliberately in 1.6.0 — the fork reports
+    // itself now — and this test holds the new answer so the swap cannot be
+    // undone by accident in either direction.
     let (core, _dir) = daemon().await;
     let version = core.version();
 
-    // A client compares this against what it knows how to speak. Reporting
-    // this crate's own version makes every one of them refuse to connect.
-    assert!(
-        version.starts_with("2."),
-        "clients expect a Deluge 2 version, got {version}"
+    assert_eq!(
+        version,
+        env!("CARGO_PKG_VERSION"),
+        "the daemon should report this crate's version"
+    );
+    // The daemon still answers Deluge's API; only the number changed.
+    assert_eq!(
+        redeluge_daemon::core::EMULATED_PLUGIN,
+        "Label",
+        "the plugin this daemon answers for is unchanged"
     );
 }
 

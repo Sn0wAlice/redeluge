@@ -157,7 +157,13 @@ impl SessionState {
         self.session.torrent_status(id).ok()
     }
 
-    /// Writes the torrent list. JSON, not pickle: see the wiki, Migration Phase 3.
+    /// Writes the torrent list.
+    ///
+    /// JSON rather than the Python pickle Deluge wrote: a pickle names the
+    /// class it came from, so nothing but Python can read one, and writing a
+    /// pickle reader in Rust would be a bad idea. `tools/migrate_state.py`
+    /// converts an existing list once, which is what the wiki's *Migrating
+    /// from Deluge* describes.
     pub fn save_state(&mut self) -> std::io::Result<()> {
         if !self.dirty {
             return Ok(());

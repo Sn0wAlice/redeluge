@@ -17,13 +17,17 @@ use redeluge_web::state::{AppState, EventQueue, Settings, SharedState};
 use redeluge_web::{assets, bootstrap, hostlist};
 use tokio::sync::{Mutex, RwLock};
 
-/// The version the Web UI reports, matching what the daemon tells clients.
+/// The version the Web UI reports, which is this fork's own.
 ///
-/// Not this crate's own version: clients compare it against the Deluge they
-/// know how to speak, and a page titled with redeluge's own number is a page
-/// that looks broken.
-/// Keep "dev" out of it, or the Web UI asks for unbundled source assets.
-const DELUGE_COMPATIBLE_VERSION: &str = "2.2.1";
+/// Compiled in rather than read from the environment. It used to be an
+/// override, from a time when the number in the page and the number the daemon
+/// reported were two different things; now that they are one thing, a second
+/// source is only a way for them to disagree — and they did, leaving a page
+/// titled with whatever a stale `REDELUGE_VERSION` happened to say.
+///
+/// The image still takes a `VERSION` build argument, for the registry labels.
+/// That is what it is for and it says nothing about what is running.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -123,12 +127,15 @@ async fn main() -> std::io::Result<()> {
             .and_then(|seconds| u64::try_from(seconds).ok())
             .map(Duration::from_secs)
             .unwrap_or(DEFAULT_SESSION_TIMEOUT),
-        theme: web_config.string("theme").unwrap_or("gray").to_owned(),
+        theme: web_config
+            .string("theme")
+            .unwrap_or(redeluge_web::routes::DEFAULT_THEME)
+            .to_owned(),
         default_daemon: web_config
             .string("default_daemon")
             .filter(|value| !value.is_empty())
             .map(str::to_owned),
-        version: env_or("REDELUGE_VERSION", DELUGE_COMPATIBLE_VERSION),
+        version: VERSION.to_owned(),
     };
 
     let password =

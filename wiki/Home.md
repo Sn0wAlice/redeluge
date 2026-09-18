@@ -52,7 +52,6 @@ existing installation.
 |---|---|
 | [Architecture](Architecture) | The crates, the FFI boundary, the contract |
 | [Building and Testing](Building-and-Testing) | The build, and the gate that has to stay green |
-| [Migration Overview](Migration-Overview) | How Python came out, phase by phase |
 
 ## What is not here
 

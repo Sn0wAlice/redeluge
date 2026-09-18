@@ -175,7 +175,7 @@ Deluge.preferences.AutoAdd = Ext.extend(Ext.Panel, {
             text: _(
                 'A file is added once its size has stopped changing, so a torrent still being written is left alone. Only .torrent and .magnet files are read.'
             ),
-            style: 'display: block; margin: 0 0 8px 0; color: #666;',
+            style: 'display: block; margin: 0 0 8px 0; opacity: 0.72;',
         });
 
         this.on('show', this.onPageShow, this);

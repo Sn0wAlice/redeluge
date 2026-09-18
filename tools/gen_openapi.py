@@ -21,6 +21,7 @@ serialiser for one file would add a dependency the gate would have to install.
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -28,9 +29,14 @@ ROOT = Path(__file__).resolve().parent.parent
 CONTRACT = ROOT / 'contract' / 'rpc-api.json'
 OUTPUT = ROOT / 'docs' / 'openapi.yaml'
 
-# The daemon reports this to clients, and it is the version of the API rather
-# than of this fork: a client checks it to decide what it may call.
-API_VERSION = '2.2.1'
+# The daemon reports this to clients. It used to be Deluge's version, on the
+# grounds that a client checks it to decide what it may call; it is this fork's
+# own now, and is read from the workspace manifest so a release cannot forget.
+API_VERSION = re.search(
+    r'^version = "([^"]+)"',
+    (ROOT / 'Cargo.toml').read_text(),
+    re.MULTILINE,
+).group(1)
 
 AUTH_LEVELS = {
     0: 'none, answered before a session exists',

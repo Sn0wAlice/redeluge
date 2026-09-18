@@ -27,11 +27,14 @@ use crate::torrent::{Torrent, TorrentOptions};
 
 /// The daemon's version, as reported to clients.
 ///
-/// Deluge's own version rather than this crate's: clients compare it against
-/// what they know how to speak, and telling them redeluge's own number makes
-/// every one of them refuse to connect. Not written out here, so a release
-/// does not have to remember to edit a comment.
-pub const REPORTED_VERSION: &str = "2.2.1";
+/// This fork's own, taken from the crate so a release cannot forget to change
+/// it. It used to answer Deluge's `2.2.1`, and the cost of not doing that any
+/// more is worth writing down rather than discovering: a client that checks
+/// the version to decide whether it can speak to this daemon — Radarr, Sonarr,
+/// the GTK client, any thin client — sees a number it does not recognise and
+/// can refuse to connect. The API it is checking about has not changed; only
+/// the name on it has.
+pub const REPORTED_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The one plugin this daemon answers for, by the name Deluge gave it.
 pub const EMULATED_PLUGIN: &str = "Label";
@@ -1335,7 +1338,7 @@ impl Rpc for Core {
                 let creator = args
                     .get(7)
                     .and_then(Value::as_str)
-                    .unwrap_or(concat!("redeluge ", "2.2.1"))
+                    .unwrap_or(concat!("redeluge ", env!("CARGO_PKG_VERSION")))
                     .to_owned();
 
                 // Hashing reads every byte of the content, which can take
@@ -1953,7 +1956,7 @@ async fn fetch(url: &str) -> Result<Vec<u8>, RpcError> {
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
-        .user_agent(concat!("redeluge/", "2.2.1"))
+        .user_agent(concat!("redeluge/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
 

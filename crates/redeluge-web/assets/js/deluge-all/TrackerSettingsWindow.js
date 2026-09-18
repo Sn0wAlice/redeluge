@@ -68,7 +68,7 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
             text: _(
                 'These apply to every torrent that announces to this tracker, whenever it was added. Each is off until you turn it on, and no other tracker is affected.'
             ),
-            style: 'display: block; margin: 0 4px 6px 4px; color: #666;',
+            style: 'display: block; margin: 0 4px 6px 4px; opacity: 0.72;',
         });
 
         // Every field in the window by its setting name, and the switches by
@@ -149,7 +149,7 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
                             hidden: true,
                             text: spec.warn,
                             style:
-                                'display: block; margin: 2px 0 0 18px; color: #a03030;',
+                                'display: block; margin: 2px 0 0 18px; color: #e6381f;',
                         }),
                     });
                 }
@@ -161,7 +161,7 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
             set.add({
                 xtype: 'label',
                 text: rule.note,
-                style: 'display: block; margin: 4px 0 0 0; color: #666;',
+                style: 'display: block; margin: 4px 0 0 0; opacity: 0.72;',
             });
         }
 

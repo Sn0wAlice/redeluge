@@ -160,7 +160,7 @@ dictionary the client sends wins over them, which is Deluge's order.
 | `port` | `8112` | |
 | `interface` | `0.0.0.0` | |
 | `base` | `/` | Path prefix, for a reverse proxy subpath |
-| `theme` | `gray` | One of `gray`, `blue`, `access` |
+| `theme` | `dark` | `dark` or `white`. The names `gray`, `blue` and `access` are the old ones and are still accepted; they are stored as the new one |
 | `language` | `""` | Always empty: there is one language |
 | `session_timeout` | `3600` | Seconds |
 | `poll_interval` | `2000` | How often the interface polls, in milliseconds; Preferences, Interface |

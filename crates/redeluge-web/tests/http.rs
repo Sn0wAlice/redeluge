@@ -30,9 +30,9 @@ fn state(config_dir: &std::path::Path) -> SharedState {
             port: 0,
             base: "/".to_owned(),
             session_timeout: Duration::from_secs(3600),
-            theme: "gray".to_owned(),
+            theme: "dark".to_owned(),
             default_daemon: None,
-            version: "2.2.1".to_owned(),
+            version: "1.6.0".to_owned(),
         },
         password: RwLock::new(hash_password(PASSWORD).expect("hashable")),
         sessions: Mutex::new(Sessions::new()),
@@ -406,7 +406,7 @@ async fn the_advertised_method_list_is_what_the_server_answers() {
 async fn the_theme_list_is_pairs_not_names() {
     // The interface loads these into a combo whose store has two fields. A
     // flat list of strings makes ExtJS read each string as a row and take its
-    // first character as the value, so choosing "gray" set the theme to "g".
+    // first character as the value, so choosing "dark" set the theme to "d".
     let dir = tempfile::tempdir().unwrap();
     let app = booted!(state(dir.path()));
     let session = logged_in(&app).await;
@@ -426,7 +426,8 @@ async fn the_theme_list_is_pairs_not_names() {
         .iter()
         .filter_map(|theme| theme[0].as_str())
         .collect();
-    assert!(names.contains(&"gray"), "{names:?}");
+    // Two, named for what they are.
+    assert_eq!(names, vec!["dark", "white"], "{names:?}");
 }
 
 #[actix_web::test]
@@ -436,13 +437,13 @@ async fn the_label_of_a_theme_is_its_name_capitalised() {
     let session = logged_in(&app).await;
 
     let (body, _) = call(&app, "web.get_themes", json!([]), Some(&session)).await;
-    let gray = body["result"]
+    let dark = body["result"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|theme| theme[0] == json!("gray"))
-        .expect("the gray theme");
-    assert_eq!(gray[1], json!("Gray"));
+        .find(|theme| theme[0] == json!("dark"))
+        .expect("the dark theme");
+    assert_eq!(dark[1], json!("Dark"));
 }
 
 #[actix_web::test]
@@ -463,11 +464,34 @@ async fn a_theme_that_exists_is_accepted_and_kept() {
     let app = booted!(state(dir.path()));
     let session = logged_in(&app).await;
 
-    let (body, _) = call(&app, "web.set_theme", json!(["blue"]), Some(&session)).await;
+    let (body, _) = call(&app, "web.set_theme", json!(["white"]), Some(&session)).await;
     assert_eq!(body["error"], Json::Null, "{body}");
 
     let (body, _) = call(&app, "web.get_config", json!([]), Some(&session)).await;
-    assert_eq!(body["result"]["theme"], json!("blue"));
+    assert_eq!(body["result"]["theme"], json!("white"));
+}
+
+#[actix_web::test]
+async fn the_themes_this_fork_used_to_ship_still_answer_to_their_old_names() {
+    // Two light themes and a dark one became one of each. A client that
+    // remembers `gray`, or a `web.conf` written before the rename, must not
+    // land on a stylesheet that is gone: that would change the colour of
+    // somebody's interface on an upgrade, including turning a dark one light.
+    let dir = tempfile::tempdir().unwrap();
+    let app = booted!(state(dir.path()));
+    let session = logged_in(&app).await;
+
+    for (old, new) in [("gray", "white"), ("blue", "white"), ("access", "dark")] {
+        let (body, _) = call(&app, "web.set_theme", json!([old]), Some(&session)).await;
+        assert_eq!(body["error"], Json::Null, "{old}: {body}");
+
+        let (body, _) = call(&app, "web.get_config", json!([]), Some(&session)).await;
+        assert_eq!(
+            body["result"]["theme"],
+            json!(new),
+            "{old} should become {new}"
+        );
+    }
 }
 
 #[actix_web::test]

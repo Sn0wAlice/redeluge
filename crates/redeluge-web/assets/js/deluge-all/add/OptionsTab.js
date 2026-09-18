@@ -60,7 +60,7 @@ Deluge.add.OptionsTab = Ext.extend(Ext.form.FormPanel, {
         this.space = fieldset.add({
             xtype: 'label',
             text: '',
-            style: 'display: block; margin: 2px 0 0 2px; color: #666;',
+            style: 'display: block; margin: 2px 0 0 2px; opacity: 0.72;',
         });
         var fieldset = this.add({
             xtype: 'fieldset',

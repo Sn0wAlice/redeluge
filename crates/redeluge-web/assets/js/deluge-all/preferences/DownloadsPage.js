@@ -134,7 +134,7 @@ Deluge.preferences.Downloads = Ext.extend(Ext.FormPanel, {
             text: _(
                 'A disk that fills up puts every download into Error, one after another, and each one has to be restarted by hand. This stops them first and starts them again when there is room.'
             ),
-            style: 'display: block; margin-bottom: 6px; color: #666;',
+            style: 'display: block; margin-bottom: 6px; opacity: 0.72;',
         });
 
         this.space = {};

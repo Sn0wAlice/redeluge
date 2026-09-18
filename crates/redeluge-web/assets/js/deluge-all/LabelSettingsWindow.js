@@ -112,7 +112,7 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
             text: _(
                 'Zero per cent takes only what never started, which is the default. Raising it puts torrents that did start and then stalled in scope. The hours are counted in time spent trying, so a torrent that sat in the queue or was paused overnight has not been failing for a night.'
             ),
-            style: 'display: block; margin: 2px 0 6px 0; color: #666;',
+            style: 'display: block; margin: 2px 0 6px 0; opacity: 0.72;',
         });
         this.fields.stuck_action = stuck.add({
             xtype: 'combo',
@@ -157,7 +157,7 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
             text: _(
                 'The files will be deleted from disk. There is no undo, and nothing else is asked first. A torrent at 0% has downloaded nothing, so this is usually an empty directory.'
             ),
-            style: 'display: block; margin: 2px 0 0 18px; color: #a03030;',
+            style: 'display: block; margin: 2px 0 0 18px; color: #e6381f;',
         });
 
         // The last box is not a group: it has no switch, because it is the
@@ -180,7 +180,7 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
             text: _(
                 'They are still there: pick the label in the sidebar to see them, or tick it under Show labels in the Label column’s header menu.'
             ),
-            style: 'display: block; margin: 2px 0 0 0; color: #666;',
+            style: 'display: block; margin: 2px 0 0 0; opacity: 0.72;',
         });
     },
 

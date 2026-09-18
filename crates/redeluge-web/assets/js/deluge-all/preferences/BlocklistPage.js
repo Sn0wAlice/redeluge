@@ -66,7 +66,7 @@ Deluge.preferences.Blocklist = Ext.extend(Ext.form.FormPanel, {
         source.add({
             xtype: 'label',
             text: _('Plain, gzipped or zipped. PeerGuardian and eMule formats are read.'),
-            style: 'display: block; margin: 4px 0 8px 155px; color: #666;',
+            style: 'display: block; margin: 4px 0 8px 155px; opacity: 0.72;',
         });
 
         this.check_after_days = source.add({
@@ -81,7 +81,7 @@ Deluge.preferences.Blocklist = Ext.extend(Ext.form.FormPanel, {
         source.add({
             xtype: 'label',
             text: _('Zero never fetches it again, which pins a list you provided yourself.'),
-            style: 'display: block; margin: 4px 0 8px 155px; color: #666;',
+            style: 'display: block; margin: 4px 0 8px 155px; opacity: 0.72;',
         });
 
         this.timeout = source.add({
@@ -122,7 +122,7 @@ Deluge.preferences.Blocklist = Ext.extend(Ext.form.FormPanel, {
         allowed.add({
             xtype: 'label',
             text: _('One address or range per line, such as 10.0.0.1 or 10.0.0.0 - 10.255.255.255.'),
-            style: 'display: block; margin: 4px 0 8px 0; color: #666;',
+            style: 'display: block; margin: 4px 0 8px 0; opacity: 0.72;',
         });
 
         var status = this.add({
@@ -136,7 +136,7 @@ Deluge.preferences.Blocklist = Ext.extend(Ext.form.FormPanel, {
         this.status = status.add({
             xtype: 'label',
             text: _('Not loaded.'),
-            style: 'display: block; color: #666;',
+            style: 'display: block; opacity: 0.72;',
         });
 
         // There is no RPC method for "fetch now", and there should not be: the

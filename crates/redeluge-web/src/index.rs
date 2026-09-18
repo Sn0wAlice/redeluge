@@ -52,8 +52,8 @@ impl ScriptSet {
 
 /// What makes one build's asset URLs different from another's.
 ///
-/// The reported version is the same `2.2.1` for every build, so it cannot be
-/// the key on its own. A digest over every embedded asset is, and it has to be
+/// The reported version moves once a release, not once a build, so it cannot
+/// be the key on its own. A digest over every embedded asset is, and it has to be
 /// every one: this used to be the size of the JavaScript bundle alone, and the
 /// same key then went on the URL of the stylesheets, the icons and the other
 /// script bundle too. A fix confined to any of those left every URL unchanged,

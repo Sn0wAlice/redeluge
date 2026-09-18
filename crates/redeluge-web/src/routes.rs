@@ -12,7 +12,7 @@ use crate::state::SharedState;
 use crate::{assets, index, json_api, upload};
 
 /// The theme every install has, and what an unknown one falls back to.
-pub const DEFAULT_THEME: &str = "gray";
+pub const DEFAULT_THEME: &str = "dark";
 
 /// Registers every route. The binary and the tests both call this.
 pub fn configure(cfg: &mut web::ServiceConfig) {
@@ -54,9 +54,8 @@ async fn serve_index(request: HttpRequest, state: web::Data<SharedState>) -> Htt
         "sidebar_multiple_filters": true,
         "show_session_speed": false,
         "base": state.settings.base,
-        // What clients are told is Deluge's `2.2.1`, because that is what they
-        // expect to be talking to. This is the fork's own version, and the
-        // only place it is shown is the About window.
+        // The fork's own version, which since 1.6.0 is also what the daemon
+        // reports to clients. Shown in the About window.
         "redeluge_version": env!("CARGO_PKG_VERSION"),
         "first_login": false,
         // The poll loop reads this before `web.get_config` has answered, so it

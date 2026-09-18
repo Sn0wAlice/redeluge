@@ -821,6 +821,24 @@ pub async fn poll_interval(state: &SharedState) -> u64 {
         .unwrap_or(DEFAULT)
 }
 
+/// What the three themes this fork used to ship are called now.
+///
+/// Two light themes and a dark one became one of each, named for what they
+/// are. Without this table an upgrade would find a stylesheet that is gone,
+/// fall back to the default, and change the colour of somebody's interface
+/// for no reason they could see — including turning a dark one light.
+fn renamed_theme(name: &str) -> Option<&'static str> {
+    match name {
+        // ExtJS's accessibility theme, which is the dark one.
+        "access" => Some("dark"),
+        // Both of the light ones. `blue` is the one that survived, because its
+        // images are `images/default`, which the other stylesheets share and
+        // which has to ship either way.
+        "blue" | "gray" => Some("white"),
+        _ => None,
+    }
+}
+
 /// The theme in force: what was configured, if it has a stylesheet.
 pub async fn current_theme(state: &SharedState) -> String {
     let configured = state
@@ -832,10 +850,12 @@ pub async fn current_theme(state: &SharedState) -> String {
         .to_owned();
 
     if crate::assets::contains(&format!("themes/css/xtheme-{configured}.css")) {
-        configured
-    } else {
-        crate::routes::DEFAULT_THEME.to_owned()
+        return configured;
     }
+    if let Some(renamed) = renamed_theme(&configured) {
+        return renamed.to_owned();
+    }
+    crate::routes::DEFAULT_THEME.to_owned()
 }
 
 /// Every theme that has a stylesheet, sorted.
@@ -866,11 +886,16 @@ async fn web_set_theme(call: &JsonRequest, state: &SharedState) -> ApiResult {
         .and_then(Json::as_str)
         .ok_or_else(|| ApiError::local("web.set_theme takes a name"))?;
 
-    // A theme with no stylesheet would leave the page asking for a file that
-    // does not exist, which is worse than ignoring the request.
-    if !crate::assets::contains(&format!("themes/css/xtheme-{theme}.css")) {
-        return Err(ApiError::local(format!("no such theme: {theme}")));
-    }
+    // An old name is taken and stored as the new one, so a client that
+    // remembers `gray` does not get an error for a theme that still exists
+    // under another name.
+    let theme = if crate::assets::contains(&format!("themes/css/xtheme-{theme}.css")) {
+        theme
+    } else {
+        // A theme with no stylesheet would leave the page asking for a file
+        // that does not exist, which is worse than ignoring the request.
+        renamed_theme(theme).ok_or_else(|| ApiError::local(format!("no such theme: {theme}")))?
+    };
 
     let mut config = state.web_config.write().await;
     config

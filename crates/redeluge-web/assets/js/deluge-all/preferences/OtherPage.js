@@ -49,7 +49,7 @@ Deluge.preferences.Other = Ext.extend(Ext.form.FormPanel, {
             text: _(
                 'Peers show the flag of their country, which needs a database. Deluge pointed at a system file in a format retired in 2019, so there has been nothing to read for years.'
             ),
-            style: 'display: block; margin-bottom: 6px; color: #666;',
+            style: 'display: block; margin-bottom: 6px; opacity: 0.72;',
         });
         optMan.bind(
             'geoip_db_location',
@@ -82,12 +82,12 @@ Deluge.preferences.Other = Ext.extend(Ext.form.FormPanel, {
             text: _(
                 'The default is DB-IP\u2019s free country database, which is CC BY 4.0 and needs no account. {YYYY-MM} in the address is filled in: the file is published monthly.'
             ),
-            style: 'display: block; margin: 2px 0 6px 0; color: #666;',
+            style: 'display: block; margin: 2px 0 6px 0; opacity: 0.72;',
         });
         this.db.status = fieldset.add({
             xtype: 'label',
             text: _('Not downloaded.'),
-            style: 'display: block; color: #666;',
+            style: 'display: block; opacity: 0.72;',
         });
 
         this.setDatabaseEnabled(false);

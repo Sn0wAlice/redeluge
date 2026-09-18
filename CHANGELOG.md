@@ -3,9 +3,22 @@
 All notable changes to this project are documented in this file. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-redeluge numbers its own releases from 1.0.0. The version the daemon reports
-to clients stays `2.2.1`, because that is the Deluge a client expects to be
-talking to.
+redeluge numbers its own releases from 1.0.0, and since 1.6.0 that is also the
+version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
+a client that checks the version to decide whether it can speak to this daemon
+may refuse the new one.
+
+## [1.6.1] — 2026-09-18
+
+### Fixed
+
+- **The page was titled with whatever `REDELUGE_VERSION` said**, which was a
+  stale number from a container's environment rather than the version actually
+  running. That override made sense while the page's number and the daemon's
+  were two different things; now that they are one, a second source was only a
+  way for them to disagree. The interface reports the compiled version. The
+  image still takes a `VERSION` build argument for its registry labels, which
+  is a different question and says nothing about what is running.
 
 ## [1.6.0] — 2026-09-18
 
@@ -97,6 +110,35 @@ talking to.
   hiding.
 
 ### Changed
+
+- **The daemon reports its own version, not Deluge's.** It answered `2.2.1`
+  because that is what a client checks to decide whether it can speak to it;
+  it answers this fork's number now, everywhere it is asked — `daemon.info`,
+  `daemon.get_version`, the OpenAPI document and the interface. **A client that
+  gates on the version can refuse to connect**: Radarr, Sonarr, the GTK client
+  and thin clients all look at it. The API they are checking about has not
+  changed, only the name on it. The recorded protocol corpora keep Deluge's
+  number, because they are captures of Deluge's wire format rather than
+  statements about this daemon, and the fork point in the README is attribution
+  and stays.
+- **Two themes, named for what they are: `dark` and `white`.** The three that
+  were shipped were ExtJS's, named after its own palettes — `blue`, `gray` and
+  `access`, the last of which is the dark one and says so nowhere. `access`
+  became `dark`, `blue` became `white`, and `gray` is gone: it was the second
+  light theme, and its images were 420 KB that `blue`'s were not, since those
+  are `images/default`, which the other stylesheets share and which ships
+  either way. The old names are still accepted and stored as the new one, so
+  nobody's interface changes colour on the upgrade.
+- **The interface stopped painting light colours on a dark theme.** This sheet
+  is loaded before the theme and knows nothing about it, so every fixed light
+  background it wrote was a white rectangle across `dark`'s near-black page —
+  which is what the new settings boxes looked like. Backgrounds and borders are
+  translucent greys now, secondary text is dimmed rather than greyed, and the
+  warning red is the brighter of the two from `alert.png`. Twelve files, most
+  of them older than the boxes that made it visible.
+- The archived record of the Python-to-Rust port — the migration overview and
+  its six phases — is out of the wiki. *Migrating from Deluge*, which is how
+  somebody moves an existing installation across, stays.
 
 - **Hiding the client identity is its own Preferences page**, no longer a
   fieldset inside the proxy widget. It has nothing to do with proxying: it

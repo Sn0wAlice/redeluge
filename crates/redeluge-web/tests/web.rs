@@ -28,7 +28,7 @@ fn a_two_object_config_file_parses() {
   "format": 2
 }{
   "port": 8112,
-  "theme": "gray",
+  "theme": "dark",
   "https": false
 }"#,
     );
@@ -39,7 +39,7 @@ fn a_two_object_config_file_parses() {
         Some(2)
     );
     assert_eq!(config.integer("port"), Some(8112));
-    assert_eq!(config.string("theme"), Some("gray"));
+    assert_eq!(config.string("theme"), Some("dark"));
     assert_eq!(config.boolean("https"), Some(false));
     assert_eq!(config.string("absent"), None);
 }
@@ -215,7 +215,7 @@ fn the_web_ui_assets_were_embedded() {
         "js/extjs/ext-all-debug.js",
         "js/extjs/ext-extensions-debug.js",
         "css/deluge.css",
-        "themes/css/xtheme-gray.css",
+        "themes/css/xtheme-dark.css",
         "render/tab_status.html",
         "icons/deluge.png",
     ] {
@@ -510,17 +510,17 @@ fn the_page_renders_with_every_script_and_stylesheet_it_needs() {
     let html = render_index(
         template,
         "/",
-        "2.2.1",
-        "gray",
-        &json!({"theme": "gray", "base": "/"}),
+        "1.6.0",
+        "dark",
+        &json!({"theme": "dark", "base": "/"}),
         false,
     )
     .expect("the shipped template must render");
 
-    assert!(html.contains("<title>RE:deluge Web UI 2.2.1</title>"));
+    assert!(html.contains("<title>RE:deluge Web UI 1.6.0</title>"));
     assert!(html.contains("js/gettext.js"));
     assert!(html.contains("js/deluge-all.js"));
-    assert!(html.contains("themes/css/xtheme-gray.css"));
+    assert!(html.contains("themes/css/xtheme-dark.css"));
     assert!(html.contains("Deluge.debug = false"));
     assert!(!html.contains("${"), "an unrendered marker survived");
 }
@@ -533,8 +533,8 @@ fn a_base_path_reaches_every_asset_url() {
     let html = render_index(
         template,
         "/deluge/",
-        "2.2.1",
-        "gray",
+        "1.6.0",
+        "dark",
         &json!({"base": "/deluge/"}),
         false,
     )
@@ -834,9 +834,9 @@ fn the_settings_redeluge_added_have_somewhere_to_be_set() {
 
 /// The fork is named where a person reads it, and not where a client does.
 ///
-/// The daemon reports Deluge's `2.2.1` and answers Deluge's API, so every
-/// protocol-facing string stays as it was. The interface is the one place that
-/// says which program this actually is.
+/// The daemon answers Deluge's API, so every protocol-facing *method* stays as
+/// it was. The version it reports is this fork's own, and the interface says
+/// the fork's name outright.
 #[test]
 fn the_interface_is_named_after_the_fork() {
     let bundle = assets::get("js/deluge-all.js").expect("the minified bundle");
@@ -873,8 +873,8 @@ fn the_asset_urls_are_keyed_on_every_asset() {
     let page = render_index(
         &String::from_utf8_lossy(assets::get("index.html").expect("the page")),
         "/",
-        "2.2.1",
-        "gray",
+        "1.6.0",
+        "dark",
         &json!({}),
         false,
     )
@@ -889,7 +889,7 @@ fn the_asset_urls_are_keyed_on_every_asset() {
         .expect("an asset URL carries a key");
 
     assert!(
-        key.starts_with("2.2.1-"),
+        key.starts_with("1.6.0-"),
         "the key should start with the version, got {key}"
     );
 
@@ -904,7 +904,7 @@ fn the_asset_urls_are_keyed_on_every_asset() {
     {
         assert_ne!(
             key,
-            format!("2.2.1-{length}"),
+            format!("1.6.0-{length}"),
             "the key is one asset's length, so a change to any other is invisible"
         );
     }

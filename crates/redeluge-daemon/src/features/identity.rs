@@ -289,7 +289,7 @@ mod tests {
     fn honest_for_test() -> Identity {
         Identity {
             anonymous: false,
-            user_agent: "redeluge/2.2.1 libtorrent/2.0.11.0".to_owned(),
+            user_agent: "redeluge/1.6.0 libtorrent/2.0.11.0".to_owned(),
             fingerprint: "-LT20B0-".to_owned(),
         }
     }

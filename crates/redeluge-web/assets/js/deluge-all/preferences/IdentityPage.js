@@ -72,7 +72,7 @@ Deluge.preferences.Identity = Ext.extend(Ext.form.FormPanel, {
                     xtype: 'label',
                     text: mode.hint,
                     style:
-                        'display: block; margin: 1px 0 0 18px; color: #666;',
+                        'display: block; margin: 1px 0 0 18px; opacity: 0.72;',
                 });
                 // Kept, because this one is filled in from the daemon once the
                 // list of clients arrives.
@@ -131,7 +131,7 @@ Deluge.preferences.Identity = Ext.extend(Ext.form.FormPanel, {
             text: _(
                 'The prefix is the first bytes of every peer id this daemon sends, conventionally eight characters like -qB4650-. Anything past twenty is cut off. Leave a box empty to keep this daemon’s real value for that half.'
             ),
-            style: 'display: block; margin: 4px 0 0 0; color: #666;',
+            style: 'display: block; margin: 4px 0 0 0; opacity: 0.72;',
         });
 
         // The honest half, and the reason this page is not called Privacy.
@@ -148,7 +148,7 @@ Deluge.preferences.Identity = Ext.extend(Ext.form.FormPanel, {
                     text: _(
                         'It does not hide your address. Every peer and tracker still sees the packets arrive from your IP, whichever name they are told. This page changes what the client says, not where it says it from — that is the proxy, on its own page.'
                     ),
-                    style: 'display: block; color: #666;',
+                    style: 'display: block; opacity: 0.72;',
                 },
             ],
         });

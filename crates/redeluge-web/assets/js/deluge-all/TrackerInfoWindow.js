@@ -192,7 +192,7 @@ Deluge.TrackerInfoWindow = Ext.extend(Ext.Window, {
                 info.peers || 0
             )
         );
-        rows += this.row(_('Size'), fsize(info.size || 0));
+        rows += this.row(_('Size'), this.size(info.size));
         rows += this.transfer(info);
         if (info.unregistered) {
             rows += this.row(
@@ -254,7 +254,7 @@ Deluge.TrackerInfoWindow = Ext.extend(Ext.Window, {
                 ? ftime(tracker.next_announce)
                 : this.quiet(_('none due'))
         );
-        rows += this.row(_('Size'), fsize(tracker.size || 0));
+        rows += this.row(_('Size'), this.size(tracker.size));
         rows += this.transfer(tracker);
         if (tracker.unregistered) {
             rows += this.row(
@@ -365,10 +365,22 @@ Deluge.TrackerInfoWindow = Ext.extend(Ext.Window, {
         var ratio = down > 0 ? (up / down).toFixed(3) : _('∞');
         if (down <= 0 && up <= 0) ratio = '—';
         return (
-            this.row(_('Downloaded'), fsize(down)) +
-            this.row(_('Uploaded'), fsize(up)) +
+            this.row(_('Downloaded'), this.size(down)) +
+            this.row(_('Uploaded'), this.size(up)) +
             this.row(_('Ratio'), String(ratio))
         );
+    },
+
+    /**
+     * A size, where zero is a size.
+     *
+     * `fsize(0)` answers the empty string, which in a two-column table reads
+     * as "not known" rather than "none" — and the difference matters here,
+     * since a tracker nothing announces to has genuinely moved nothing.
+     */
+    size: function (bytes) {
+        var value = Number(bytes) || 0;
+        return value > 0 ? fsize(value) : this.quiet(_('nothing'));
     },
 
     row: function (label, value) {

@@ -472,9 +472,14 @@ dl.singleline dd {
  * load order.
  */
 .x-deluge-option-group.x-fieldset {
-    border: 1px solid #d8dae3;
+    /* Translucent grey rather than a colour, because this sheet is loaded
+       before the theme and knows nothing about it: `access` is a dark theme
+       with a near-black body, and a fixed light background painted white
+       rectangles across it. A grey at low alpha darkens a light theme and
+       lightens a dark one, which is what both wanted. */
+    border: 1px solid rgba(127, 127, 127, 0.35);
     border-radius: 3px;
-    background-color: #fbfbfc;
+    background-color: rgba(127, 127, 127, 0.06);
     padding: 6px 8px 4px 8px;
     margin: 0 2px 8px 2px;
 }
@@ -483,14 +488,16 @@ dl.singleline dd {
    is where the fields it governs begin. The colour is the one the theme gives
    a fieldset's legend, because that is what this is standing in for. */
 .x-deluge-group-switch {
-    border-bottom: 1px solid #e6e7ed;
+    border-bottom: 1px solid rgba(127, 127, 127, 0.25);
     padding-bottom: 5px;
     margin-bottom: 6px;
 }
 
+/* Bold, and whatever colour the theme is already writing in. The legend blue
+   this used is the light theme's, and on the dark one it was a heading you had
+   to look for. Weight carries the same meaning in both. */
 .x-deluge-group-switch .x-form-cb-label {
     font-weight: bold;
-    color: #15428b;
 }
 
 /* Sidebar styles */
@@ -562,7 +569,7 @@ dl.singleline dd {
 /* A tracker failing on every torrent it has is the one thing in this list
    worth reading before the counts beside it. */
 #sidebar .x-deluge-tracker-down {
-    color: #a9100f;
+    color: #e6381f;
 }
 
 /* Tracker info window.
@@ -574,9 +581,9 @@ dl.singleline dd {
 .x-deluge-tracker-banner {
     padding: 8px 10px;
     margin-bottom: 10px;
-    border: 1px solid #d0d0d0;
+    border: 1px solid rgba(127, 127, 127, 0.35);
     border-left-width: 4px;
-    background-color: #f7f7f7;
+    background-color: rgba(127, 127, 127, 0.08);
 }
 
 .x-deluge-tracker-banner .x-deluge-tracker-state {
@@ -584,15 +591,18 @@ dl.singleline dd {
     margin-right: 8px;
 }
 
+/* Secondary text is dimmed rather than greyed: a fixed mid grey is either too
+   light on a light theme or too dark on a dark one, and this is the same
+   relationship to the body colour in both. */
 .x-deluge-tracker-banner .x-deluge-tracker-subject {
-    color: #555555;
+    opacity: 0.75;
     word-break: break-all;
 }
 
 .x-deluge-tracker-banner .x-deluge-tracker-detail,
 .x-deluge-tracker-banner .x-deluge-tracker-message {
     margin-top: 4px;
-    color: #555555;
+    opacity: 0.75;
 }
 
 /* What the tracker itself said, verbatim: the exact sentence is the thing
@@ -612,11 +622,14 @@ dl.singleline dd {
 
 .x-deluge-tracker-banner.x-deluge-tracker-down {
     border-left-color: #e6381f;
-    background-color: #fdf2f0;
+    /* The alert red at low alpha, so it tints whatever is behind it. */
+    background-color: rgba(230, 56, 31, 0.12);
 }
 
+/* The brighter of the two reds from alert.png. Its shadow, #a9100f, is legible
+   on white and nearly invisible on the dark theme's near-black. */
 .x-deluge-tracker-banner.x-deluge-tracker-down .x-deluge-tracker-state {
-    color: #a9100f;
+    color: #e6381f;
 }
 
 .x-deluge-tracker-banner.x-deluge-tracker-unknown {
@@ -634,7 +647,7 @@ table.x-deluge-tracker-info th {
     white-space: nowrap;
     width: 130px;
     padding: 3px 10px 3px 0;
-    color: #555555;
+    opacity: 0.75;
     font-weight: normal;
 }
 
@@ -649,11 +662,11 @@ table.x-deluge-tracker-info td {
 }
 
 .x-deluge-tracker-bad {
-    color: #a9100f;
+    color: #e6381f;
 }
 
 .x-deluge-tracker-quiet {
-    color: #888888;
+    opacity: 0.6;
 }
 
 /* MessageBox icon styles */
@@ -854,7 +867,7 @@ table.x-deluge-tracker-info td {
 
 .x-deluge-schedule th {
     font-weight: normal;
-    color: #555;
+    opacity: 0.75;
     padding: 1px 4px;
     text-align: center;
 }
@@ -862,7 +875,9 @@ table.x-deluge-tracker-info td {
 .x-deluge-schedule td {
     width: 34px;
     height: 14px;
-    border: 1px solid #fff;
+    /* Translucent, so the gap between two coloured cells is whatever the theme
+       is drawing behind them rather than a white grid on a black page. */
+    border: 1px solid rgba(127, 127, 127, 0.3);
     cursor: pointer;
 }
 
@@ -881,7 +896,7 @@ table.x-deluge-tracker-info td {
 .x-deluge-schedule-key {
     margin-top: 6px;
     font-size: 11px;
-    color: #555;
+    opacity: 0.75;
 }
 
 .x-deluge-schedule-key span {

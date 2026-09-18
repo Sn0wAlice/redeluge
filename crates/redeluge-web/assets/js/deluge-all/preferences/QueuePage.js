@@ -249,7 +249,7 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
             text: _(
                 'A download that is transferring nothing still holds a place in the queue. This gives that place to a torrent that is waiting, and gives it back later.'
             ),
-            style: 'display: block; margin-bottom: 6px; color: #666;',
+            style: 'display: block; margin-bottom: 6px; opacity: 0.72;',
         });
 
         this.idle = {};
@@ -293,7 +293,7 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
             text: _(
                 'A torrent that has been trying for hours without a single byte arriving is not slow, it is dead: a magnet nobody seeds, or content that has left the swarm. A label can set its own rule, or turn this off for its torrents. Nothing is acted on while its tracker is failing every announce — an outage is not a dead swarm.'
             ),
-            style: 'display: block; margin-bottom: 6px; color: #666;',
+            style: 'display: block; margin-bottom: 6px; opacity: 0.72;',
         });
 
         this.stuck = {};
@@ -315,7 +315,7 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
             text: _(
                 'Zero per cent takes only what never started, which is the safe reading and the default. Raising it puts torrents that did start and then stalled in scope — at a hundred, one stalled at 90% goes the same way. The hours are counted in time spent trying, so a torrent that sat in the queue or was paused overnight has not been failing for a night.'
             ),
-            style: 'display: block; margin: 2px 0 6px 0; color: #666;',
+            style: 'display: block; margin: 2px 0 6px 0; opacity: 0.72;',
         });
         this.stuck.action = fieldset.add({
             xtype: 'combo',
@@ -350,7 +350,7 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
             text: _(
                 'A label whose own rule is off is an exemption, so filing paused torrents in one is how they stop being looked at every minute — and how you find them again to decide.'
             ),
-            style: 'display: block; margin: 2px 0 6px 0; color: #666;',
+            style: 'display: block; margin: 2px 0 6px 0; opacity: 0.72;',
         });
         this.stuck.remove_data = fieldset.add({
             xtype: 'checkbox',
@@ -366,7 +366,7 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
             text: _(
                 'The files will be deleted from disk. There is no undo, and nothing else is asked first.'
             ),
-            style: 'display: block; margin: 2px 0 0 18px; color: #a03030;',
+            style: 'display: block; margin: 2px 0 0 18px; color: #e6381f;',
         });
 
         this.on('show', this.onPageShow, this);
