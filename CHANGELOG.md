@@ -28,6 +28,17 @@ talking to.
   already holding, because opening a window is not a reason to send a tracker
   several hundred requests.
 
+### Changed
+
+- **A label's settings are a window of their own**, reached from *Edit* in
+  Preferences, Labels or by right-clicking the label in the sidebar. They used
+  to sit under the list, filled in when you selected a row — so reading what a
+  label applied was the same gesture as arming an Apply that would write it
+  back, and the form belonged to whichever row had been touched last. The
+  Preferences page is now the register it always described itself as: Add,
+  Edit, Rename, Remove. Double-clicking a row opens its settings rather than
+  the rename prompt, which has a button of its own.
+
 ## [1.5.1] — 2026-09-16
 
 ### Added

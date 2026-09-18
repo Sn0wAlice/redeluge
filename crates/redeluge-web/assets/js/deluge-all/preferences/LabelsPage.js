@@ -12,6 +12,12 @@
  * a nicety. Radarr and Sonarr ask the daemon for the list, and a label with
  * nothing in it yet is exactly the one they are about to start using.
  *
+ * What each label *applies* is not here. It was, under the grid, filled in
+ * when you selected a row — which made selecting a label an edit rather than a
+ * look, and left an Apply armed with whichever row had been touched last. It
+ * lives in `Deluge.LabelSettingsWindow` now, one window per label, reached
+ * from the Edit button here and from the label's own row in the sidebar.
+ *
  * It talks to `label.*`, which is the Label plugin's own API, so everything
  * this page does can also be done by anything else that speaks it.
  */
@@ -41,7 +47,7 @@ Deluge.preferences.Labels = Ext.extend(Ext.Panel, {
         intro.add({
             xtype: 'label',
             text: _(
-                'A label groups torrents. Put a torrent in one from its Options tab, or let another program do it: this is the Label plugin’s own list, so anything that speaks Deluge’s API sees the same labels.'
+                'A label groups torrents. Put a torrent in one from its Options tab, or let another program do it: this is the Label plugin’s own list, so anything that speaks Deluge’s API sees the same labels. Pick one and press Edit for what it applies to the torrents in it.'
             ),
             style: 'display: block; margin-bottom: 6px; color: #666;',
         });
@@ -87,6 +93,12 @@ Deluge.preferences.Labels = Ext.extend(Ext.Panel, {
                     scope: this,
                 },
                 {
+                    text: _('Edit'),
+                    iconCls: 'x-deluge-preferences',
+                    handler: this.onEditLabel,
+                    scope: this,
+                },
+                {
                     text: _('Rename'),
                     iconCls: 'icon-edit',
                     handler: this.onRenameLabel,
@@ -100,124 +112,16 @@ Deluge.preferences.Labels = Ext.extend(Ext.Panel, {
                 },
             ],
         });
-        this.grid.on('rowdblclick', this.onRenameLabel, this);
+        // Double-clicking a row opens it, which is what double-clicking a row
+        // means everywhere else. Renaming has a button of its own.
+        this.grid.on('rowdblclick', this.onEditLabel, this);
         this.grid.getSelectionModel().on('selectionchange', this.onSelect, this);
 
-        this.options = this.add({
-            xtype: 'fieldset',
-            border: false,
-            title: _('What this label applies'),
-            autoHeight: true,
-            labelWidth: 170,
-            style: 'padding-top: 5px; margin-bottom: 0px;',
-        });
-
-        this.fields = {};
-
-        this.fields.apply_max = this.options.add({
-            xtype: 'checkbox',
-            hideLabel: true,
-            boxLabel: _('Bandwidth limits'),
-            handler: this.onGroupToggled,
-            scope: this,
-        });
-        this.fields.max_download_speed = this.options.add(
-            this.spinner(_('Maximum download (KiB/s):'), 1)
-        );
-        this.fields.max_upload_speed = this.options.add(
-            this.spinner(_('Maximum upload (KiB/s):'), 1)
-        );
-        this.fields.max_connections = this.options.add(
-            this.spinner(_('Maximum connections:'), 0)
-        );
-        this.fields.max_upload_slots = this.options.add(
-            this.spinner(_('Maximum upload slots:'), 0)
-        );
-
-        this.fields.apply_queue = this.options.add({
-            xtype: 'checkbox',
-            hideLabel: true,
-            boxLabel: _('Seeding rules'),
-            style: 'margin-top: 6px',
-            handler: this.onGroupToggled,
-            scope: this,
-        });
-        this.fields.stop_at_ratio = this.options.add({
-            xtype: 'checkbox',
-            hideLabel: true,
-            boxLabel: _('Stop seeding at ratio'),
-            ctCls: 'x-deluge-indent-checkbox',
-        });
-        this.fields.stop_ratio = this.options.add(
-            this.spinner(_('Ratio:'), 1, 0.1)
-        );
-        this.fields.remove_at_ratio = this.options.add({
-            xtype: 'checkbox',
-            hideLabel: true,
-            boxLabel: _('Remove the torrent at that ratio'),
-            ctCls: 'x-deluge-indent-checkbox',
-        });
-
-        this.fields.apply_move_completed = this.options.add({
-            xtype: 'checkbox',
-            hideLabel: true,
-            boxLabel: _('Move on completion'),
-            style: 'margin-top: 6px',
-            handler: this.onGroupToggled,
-            scope: this,
-        });
-        this.fields.move_completed_path = this.options.add({
-            xtype: 'textfield',
-            fieldLabel: _('Move to:'),
-            labelSeparator: '',
-            width: 220,
-        });
-
-        // Its own fieldset, because it is the one option here that does
-        // nothing to the torrents: it decides what the list shows.
-        var view = this.add({
-            xtype: 'fieldset',
-            border: false,
-            title: _('In the torrent list'),
-            autoHeight: true,
-            labelWidth: 170,
-            style: 'padding-top: 5px; margin-bottom: 0px;',
-        });
-        this.fields.hide_by_default = view.add({
-            xtype: 'checkbox',
-            hideLabel: true,
-            boxLabel: _('Hide these torrents unless asked for'),
-        });
-        view.add({
-            xtype: 'label',
-            text: _(
-                'They are still there: pick the label in the sidebar to see them, or tick it under Show labels in the Label column’s header menu.'
-            ),
-            style: 'display: block; margin: 2px 0 0 0; color: #666;',
-        });
-
-        this.setOptionsEnabled(false);
         this.on('show', this.onPageShow, this);
     },
 
-    /**
-     * A number field, since this page needs six of them.
-     */
-    spinner: function (caption, precision, increment) {
-        return {
-            xtype: 'spinnerfield',
-            fieldLabel: caption,
-            labelSeparator: '',
-            width: 80,
-            decimalPrecision: precision,
-            minValue: -1,
-            maxValue: 9999999,
-            incrementValue: increment || 1,
-        };
-    },
-
     // The card layout fires `show` on every switch back; reading once is
-    // enough, and Apply writes.
+    // enough, and every button here reloads after it has changed something.
     onPageShow: function () {
         if (this.loaded) return;
         this.loaded = true;
@@ -270,16 +174,14 @@ Deluge.preferences.Labels = Ext.extend(Ext.Panel, {
         var keep = this.keepSelected;
         this.store.loadData(rows);
 
-        // Applying reloads, and losing the selection would leave the options
-        // below belonging to nothing a moment after they were edited.
+        // A reload that dropped the selection would move the buttons' target
+        // out from under whoever is using them.
         if (keep) {
             var index = this.store.find('label', keep);
             if (index > -1) {
                 this.grid.getSelectionModel().selectRow(index);
-                return;
             }
         }
-        this.setOptionsEnabled(false);
     },
 
     /**
@@ -300,52 +202,26 @@ Deluge.preferences.Labels = Ext.extend(Ext.Panel, {
         return record ? record.get('label') : null;
     },
 
+    /**
+     * Selecting a row now only says which row the buttons act on. It used to
+     * fill in a form, which meant you could not read what a label applied
+     * without arming an Apply that would write it back.
+     */
     onSelect: function () {
-        var name = this.selected();
-        this.keepSelected = name;
-        if (!name) {
-            this.setOptionsEnabled(false);
-            return;
-        }
-        var options = this.config[name] || {};
-        for (var key in this.fields) {
-            var value = options[key];
-            this.fields[key].setValue(value === undefined ? '' : value);
-        }
-        this.setOptionsEnabled(true);
-    },
-
-    setOptionsEnabled: function (on) {
-        for (var key in this.fields) {
-            this.fields[key].setDisabled(!on);
-        }
-        if (on) this.onGroupToggled();
+        this.keepSelected = this.selected();
     },
 
     /**
-     * A group's fields mean nothing until its switch is on, so they follow it.
+     * Opens the selected label's settings, in the window the sidebar opens too.
      */
-    onGroupToggled: function () {
-        var groups = {
-            apply_max: [
-                'max_download_speed',
-                'max_upload_speed',
-                'max_connections',
-                'max_upload_slots',
-            ],
-            apply_queue: ['stop_at_ratio', 'stop_ratio', 'remove_at_ratio'],
-            apply_move_completed: ['move_completed_path'],
-        };
-        for (var group in groups) {
-            var on = this.fields[group].getValue() === true;
-            Ext.each(
-                groups[group],
-                function (name) {
-                    this.fields[name].setDisabled(!on);
-                },
-                this
-            );
-        }
+    onEditLabel: function () {
+        var name = this.selected();
+        if (!name) return;
+        var window = Deluge.LabelSettingsWindow.open(name);
+        // The grid's last column says what each label applies, so it is out of
+        // date the moment the window writes. Listened to once per opening.
+        window.un('saved', this.reload, this);
+        window.on('saved', this.reload, this, { single: true });
     },
 
     onAddLabel: function () {
@@ -456,49 +332,5 @@ Deluge.preferences.Labels = Ext.extend(Ext.Panel, {
             },
             this
         );
-    },
-
-    onApply: function () {
-        // Nothing has been read yet, so there is nothing of this page's to
-        // write; see the other feature pages for why that matters.
-        if (!this.loaded) return;
-        var name = this.selected();
-        if (!name) return;
-
-        var options = {};
-        for (var key in this.fields) {
-            var field = this.fields[key];
-            var value = field.getValue();
-            if (field.getXType() === 'checkbox') {
-                options[key] = value === true;
-            } else if (field.getXType() === 'spinnerfield') {
-                options[key] = Deluge.number(value, -1);
-            } else {
-                options[key] = value || '';
-            }
-        }
-        // The plugin keeps these two together, and the path is meaningless
-        // without the switch that turns moving on.
-        options['move_completed'] = options['apply_move_completed'];
-
-        // The list is showing whatever was decided when the page loaded, so
-        // turning hiding on or off here has to reach it now. Without this the
-        // checkbox appears to do nothing until the next reload.
-        if (deluge.torrents && deluge.torrents.setLabelHidden) {
-            deluge.torrents.setLabelHidden(
-                name,
-                options['hide_by_default'] === true
-            );
-        }
-
-        deluge.client.label.set_options(name, options, {
-            success: this.reload,
-            failure: this.reload,
-            scope: this,
-        });
-    },
-
-    onOk: function () {
-        this.onApply();
     },
 });

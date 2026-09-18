@@ -44,8 +44,11 @@ carries* is a torrent option, set on the torrent. *Which labels exist* is a
 register kept under the `label` key of `core.conf`, because a label has to be
 able to exist before anything is in it.
 
-**In the Web UI**: Preferences, Labels manages the register, with Add, Rename
-and Remove and the per-label rules. A torrent is put in a label three ways:
+**In the Web UI**: Preferences, Labels manages the register, with Add, Edit,
+Rename and Remove. What a label *applies* opens in a window of its own, from
+*Edit* there or by right-clicking the label in the sidebar and choosing
+*Settings*, so reading what a label does is no longer the same gesture as
+selecting it to be written back. A torrent is put in a label three ways:
 right-click it in the list and pick one under *Label*, which is the quickest
 and works on a whole selection at once; in the Add dialog under Options; or in
 the torrent's own Options tab. The Label column of the list shows which, and
@@ -73,8 +76,10 @@ now carries a `label` category next to state, tracker and owner.
 ### What a label applies
 
 A label can impose settings on the torrents in it, which is what the plugin's
-own options did. Three groups, each behind its own switch, so a label that
-names a group and changes nothing is the default rather than an accident:
+own options did. They are set in the label's own window — from *Edit* in
+Preferences, Labels, or by right-clicking the label in the sidebar. Three
+groups, each behind its own switch, so a label that names a group and changes
+nothing is the default rather than an accident:
 
 | Switch | What it then applies |
 |---|---|

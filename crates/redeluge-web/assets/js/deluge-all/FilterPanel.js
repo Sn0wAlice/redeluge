@@ -88,12 +88,15 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
         });
         this.relayEvents(this.list, ['selectionchange']);
 
-        // Right-clicking a tracker opens what the daemon does with that
-        // tracker's torrents; right-clicking Unregistered offers to throw the
-        // whole group away. A label's options are in Preferences, where the
-        // list of labels is managed anyway, and the other rows have nothing to
-        // offer.
-        if (this.filterType == 'tracker_host' || this.filterType == 'state') {
+        // Right-clicking a tracker or a label opens what that group applies to
+        // its torrents; right-clicking Unregistered offers to throw the whole
+        // group away. The other lists have nothing to offer: an owner is not
+        // something this daemon lets you set rules on.
+        if (
+            this.filterType == 'tracker_host' ||
+            this.filterType == 'label' ||
+            this.filterType == 'state'
+        ) {
             this.list.on('contextmenu', this.onContextMenu, this);
         }
     },
@@ -123,11 +126,11 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
             return;
         }
 
-        // `All` is every tracker at once, and the empty row is the torrents
-        // that have no tracker. Neither is something a rule can be set on.
+        // `All` is every tracker or label at once, and the empty row is the
+        // torrents that have none. Neither is something a rule can be set on.
         if (!value || value == 'All') return;
         this.menuHost = value;
-        this.showMenu(e, 'tracker');
+        this.showMenu(e, this.filterType == 'label' ? 'label' : 'tracker');
     },
 
     /**
@@ -136,37 +139,52 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
     showMenu: function (e, kind) {
         if (!this.menus) this.menus = {};
         if (!this.menus[kind]) {
-            this.menus[kind] =
-                kind == 'unregistered'
-                    ? new Ext.menu.Menu({
-                          items: [
-                              {
-                                  text: _('Remove these torrents...'),
-                                  iconCls: 'icon-remove',
-                                  handler: this.onRemoveUnregistered,
-                                  scope: this,
-                              },
-                          ],
-                      })
-                    : new Ext.menu.Menu({
-                          items: [
-                              // Above Settings, because looking is what you do
-                              // first and changing what happens to a hundred
-                              // torrents is what you do after.
-                              {
-                                  text: _('Info...'),
-                                  iconCls: 'icon-tracker-info',
-                                  handler: this.onInfoClick,
-                                  scope: this,
-                              },
-                              {
-                                  text: _('Settings...'),
-                                  iconCls: 'x-deluge-preferences',
-                                  handler: this.onSettingsClick,
-                                  scope: this,
-                              },
-                          ],
-                      });
+            if (kind == 'unregistered') {
+                this.menus[kind] = new Ext.menu.Menu({
+                    items: [
+                        {
+                            text: _('Remove these torrents...'),
+                            iconCls: 'icon-remove',
+                            handler: this.onRemoveUnregistered,
+                            scope: this,
+                        },
+                    ],
+                });
+            } else if (kind == 'label') {
+                // The same window the Edit button in Preferences opens, on the
+                // row the label already has here: a label's settings belong to
+                // the label, not to the page that happens to list it.
+                this.menus[kind] = new Ext.menu.Menu({
+                    items: [
+                        {
+                            text: _('Settings...'),
+                            iconCls: 'x-deluge-preferences',
+                            handler: this.onLabelSettingsClick,
+                            scope: this,
+                        },
+                    ],
+                });
+            } else {
+                this.menus[kind] = new Ext.menu.Menu({
+                    items: [
+                        // Above Settings, because looking is what you do first
+                        // and changing what happens to a hundred torrents is
+                        // what you do after.
+                        {
+                            text: _('Info...'),
+                            iconCls: 'icon-tracker-info',
+                            handler: this.onInfoClick,
+                            scope: this,
+                        },
+                        {
+                            text: _('Settings...'),
+                            iconCls: 'x-deluge-preferences',
+                            handler: this.onSettingsClick,
+                            scope: this,
+                        },
+                    ],
+                });
+            }
         }
         this.menus[kind].showAt(e.getXY());
     },
@@ -210,6 +228,11 @@ Deluge.FilterPanel = Ext.extend(Ext.Panel, {
         }
         this.menus = null;
         Deluge.FilterPanel.superclass.onDestroy.call(this);
+    },
+
+    onLabelSettingsClick: function () {
+        if (!this.menuHost) return;
+        Deluge.LabelSettingsWindow.open(this.menuHost);
     },
 
     onInfoClick: function () {

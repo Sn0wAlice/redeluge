@@ -453,6 +453,40 @@ dl.singleline dd {
     padding-left: 10px;
 }
 
+/* One box per group of settings, in the label settings window.
+ *
+ * The three groups were three checkboxes in one fieldset with their fields
+ * indented under them, which is a distinction you have to go looking for: at a
+ * glance the window was one column of a dozen controls. A box each, with the
+ * switch that governs the group as its heading, says which fields a switch
+ * owns without anybody counting indents.
+ *
+ * The selector carries `.x-fieldset` so it outranks `.x-fieldset-noborder`,
+ * which is a single class like this one and would otherwise win or lose on
+ * load order.
+ */
+.x-deluge-option-group.x-fieldset {
+    border: 1px solid #d8dae3;
+    border-radius: 3px;
+    background-color: #fbfbfc;
+    padding: 6px 8px 4px 8px;
+    margin: 0 2px 8px 2px;
+}
+
+/* The switch is the box's heading, so it is set like one and the rule under it
+   is where the fields it governs begin. The colour is the one the theme gives
+   a fieldset's legend, because that is what this is standing in for. */
+.x-deluge-group-switch {
+    border-bottom: 1px solid #e6e7ed;
+    padding-bottom: 5px;
+    margin-bottom: 6px;
+}
+
+.x-deluge-group-switch .x-form-cb-label {
+    font-weight: bold;
+    color: #15428b;
+}
+
 /* Sidebar styles */
 #sidebar .x-grid3-col-filter {
     height: 16px;
