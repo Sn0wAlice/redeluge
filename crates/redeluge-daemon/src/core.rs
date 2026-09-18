@@ -71,6 +71,7 @@ pub const PLUGIN_METHODS: &[&str] = &[
 /// can collide with one of these. They are advertised for the same reason the
 /// Label plugin's are — a list that does not say what can be called misleads.
 pub const REDELUGE_METHODS: &[&str] = &[
+    "redeluge.get_identity_clients",
     "redeluge.get_recent_actions",
     "redeluge.get_peers",
     "redeluge.get_tracker_health",
@@ -203,7 +204,12 @@ impl Core {
     pub async fn apply_config(&self) {
         let settings = {
             let config = self.config.lock().await;
-            prefs::to_settings(&config)
+            let mut settings = prefs::to_settings(&config);
+            // Appended rather than folded in: in `rotate` this draws a client,
+            // so it is a different answer every time it is called, and the
+            // torrent add path calls it again on its own.
+            settings.extend(prefs::identity_settings(&config));
+            settings
         };
         let count = settings.len();
 
@@ -521,7 +527,7 @@ impl Core {
         let torrent_file = request.torrent_file.clone();
 
         // Read before the session is locked, because both want the config.
-        let (queue_to_top, keep_a_copy) = {
+        let (queue_to_top, keep_a_copy, identity) = {
             let config = self.config.lock().await;
             (
                 config.boolean("queue_new_to_top").unwrap_or(false),
@@ -534,6 +540,10 @@ impl Core {
                             .unwrap_or_default()
                             .to_owned()
                     }),
+                // Drawn here, once, for this torrent. In every mode but
+                // `rotate` this is the same answer the session already has and
+                // applying it again costs a settings pack nobody notices.
+                rotates(&config).then(|| prefs::identity_settings(&config)),
             )
         };
         let copy_name = stored.filename.clone();
@@ -541,6 +551,18 @@ impl Core {
         let id = self
             .manager
             .with(move |state| {
+                // Before the add, and inside the same turn of the session
+                // thread, because libtorrent builds this torrent's peer id
+                // from the fingerprint as it stands at the moment of the add.
+                // Anything between the two would hand this torrent the
+                // identity drawn for the next one.
+                if let Some(identity) = identity {
+                    if let Err(err) = state.session.apply_settings(&identity) {
+                        tracing::warn!(error = %err,
+                            "could not draw an identity for this torrent; it takes the last one");
+                    }
+                }
+
                 let id = state.session.add_torrent(&request)?;
 
                 if !torrent_file.is_empty() {
@@ -588,6 +610,16 @@ impl Core {
         });
         Ok(Value::Str(id))
     }
+}
+
+/// Whether the identity is drawn anew for each torrent added.
+///
+/// Read from the configuration rather than remembered, because the mode can
+/// change between two adds and the second one should honour it.
+fn rotates(config: &Config) -> bool {
+    crate::features::identity::Settings::from_config(config.get("identity"))
+        .sane()
+        .rotates()
 }
 
 fn string_arg(args: &[Value], index: usize, what: &str) -> Result<String, RpcError> {
@@ -1632,6 +1664,33 @@ impl Rpc for Core {
                         .collect(),
                 ))
             }
+
+            // The clients the `rotate` identity draws from, so the interface
+            // can name them and the custom boxes can be filled from one
+            // without anybody typing a fingerprint by hand. Static, but the
+            // list belongs to the daemon that uses it rather than to a copy in
+            // the Web UI that would drift from it.
+            "redeluge.get_identity_clients" => Ok(Value::List(
+                crate::features::identity::CREDIBLE
+                    .iter()
+                    .map(|client| {
+                        Value::Dict(vec![
+                            (
+                                Value::Str("name".into()),
+                                Value::Str(client.name.to_owned()),
+                            ),
+                            (
+                                Value::Str("user_agent".into()),
+                                Value::Str(client.user_agent.to_owned()),
+                            ),
+                            (
+                                Value::Str("peer_id".into()),
+                                Value::Str(client.fingerprint.to_owned()),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            )),
 
             // What the trackers of one domain are doing, one entry per
             // announce URL under it. `trackerinfo.rs` says why a sidebar row

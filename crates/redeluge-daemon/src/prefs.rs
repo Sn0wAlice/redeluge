@@ -184,7 +184,27 @@ fn proxy_settings(config: &Config) -> Vec<Setting> {
             "proxy_tracker_connections",
             boolean("proxy_tracker_connections", true),
         ),
-        Setting::boolean("anonymous_mode", boolean("anonymous_mode", false)),
+    ]
+}
+
+/// The two strings and the flag that say what this client is.
+///
+/// Separate from the proxy block above because they have nothing to do with
+/// proxying: they change what this daemon says about itself, which happens the
+/// same way whether a proxy is configured or not.
+///
+/// In `rotate` this draws, so calling it again answers again. That is the
+/// point: the caller applies it once more before each torrent is added, and
+/// libtorrent builds that torrent's peer id from whatever the setting says at
+/// that moment.
+pub fn identity_settings(config: &Config) -> Vec<Setting> {
+    let settings = crate::features::identity::Settings::from_config(config.get("identity")).sane();
+    let chosen = settings.resolve(&crate::features::identity::honest());
+
+    vec![
+        Setting::string("user_agent", chosen.user_agent),
+        Setting::string("peer_fingerprint", chosen.fingerprint),
+        Setting::boolean("anonymous_mode", chosen.anonymous),
     ]
 }
 

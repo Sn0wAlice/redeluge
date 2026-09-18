@@ -70,3 +70,12 @@ impl Error {
 pub fn libtorrent_version() -> String {
     bridge::ffi::libtorrent_version()
 }
+
+/// A client fingerprint in the usual `-XX1234-` form, as libtorrent writes it.
+///
+/// libtorrent's own function rather than a local one: the version digits are
+/// base 36, so 2.0.11 encodes as `20B0`, and a fingerprint spelled any other
+/// way is one no real client would send.
+pub fn generate_fingerprint(name: &str, major: i32, minor: i32, revision: i32, tag: i32) -> String {
+    bridge::ffi::generate_fingerprint(name, major, minor, revision, tag)
+}

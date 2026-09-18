@@ -137,6 +137,9 @@ pub mod names {
     pub const STR: &[&str] = &[
         "listen_interfaces",
         "outgoing_interfaces",
+        // The prefix libtorrent puts on every peer id it generates. Half of
+        // what the swarm knows this client as; `user_agent` is the other half.
+        "peer_fingerprint",
         "proxy_hostname",
         "proxy_password",
         "proxy_username",

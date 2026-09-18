@@ -256,6 +256,15 @@ pub mod ffi {
         /// Version string of the libtorrent this was linked against.
         fn libtorrent_version() -> String;
 
+        /// libtorrent's own encoding of a client fingerprint, `-XX1234-`.
+        fn generate_fingerprint(
+            name: &str,
+            major: i32,
+            minor: i32,
+            revision: i32,
+            tag: i32,
+        ) -> String;
+
         /// Applies session settings by name.
         ///
         /// Unknown names and type mismatches are reported rather than ignored:

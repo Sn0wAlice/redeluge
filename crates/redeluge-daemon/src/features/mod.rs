@@ -22,6 +22,7 @@ pub mod autoadd;
 pub mod blocklist;
 pub mod countrydb;
 pub mod diskspace;
+pub mod identity;
 pub mod idlepause;
 pub mod label;
 pub mod scheduler;

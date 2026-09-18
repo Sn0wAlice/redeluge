@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <libtorrent/alert_types.hpp>
+#include <libtorrent/fingerprint.hpp>
 #include <libtorrent/ip_filter.hpp>
 #include <libtorrent/magnet_uri.hpp>
 #include <libtorrent/read_resume_data.hpp>
@@ -321,6 +322,12 @@ std::unique_ptr<Session> new_session(SessionConfig const& config) {
 }
 
 rust::String libtorrent_version() { return rust::String(LIBTORRENT_VERSION); }
+
+rust::String generate_fingerprint(rust::Str name, int32_t major, int32_t minor,
+                                  int32_t revision, int32_t tag) {
+  return rust::String(
+      lt::generate_fingerprint(to_string(name), major, minor, revision, tag));
+}
 
 int32_t session_stat_index(rust::Str name) {
   return lt::find_metric_idx(to_string(name));

@@ -55,6 +55,64 @@ fn an_existing_file_is_read_and_its_values_kept() {
 }
 
 #[test]
+fn hiding_the_client_survives_the_move_to_the_identity_settings() {
+    // The switch used to live in the proxy block. A configuration written
+    // before the identity block existed still says so there, and the default
+    // `show` would otherwise turn hiding off for somebody who had turned it on
+    // — silently, on the upgrade that introduced the page.
+    let dir = scratch();
+    std::fs::write(
+        dir.path().join("core.conf"),
+        r#"{"file": 1, "format": 1}{"proxy": {"type": 0, "anonymous_mode": true}}"#,
+    )
+    .unwrap();
+
+    let config = Config::load(dir.path()).unwrap();
+    let identity = config.get("identity").expect("an identity block");
+    assert_eq!(
+        identity.get("mode").and_then(|mode| mode.as_str()),
+        Some("hide")
+    );
+}
+
+#[test]
+fn an_identity_already_chosen_outranks_the_old_proxy_switch() {
+    // Once the block exists it is the authority. A proxy key left over from
+    // before must not undo what somebody has since chosen on the page.
+    let dir = scratch();
+    std::fs::write(
+        dir.path().join("core.conf"),
+        r#"{"file": 1, "format": 1}{"proxy": {"anonymous_mode": true},
+           "identity": {"mode": "rotate", "user_agent": "", "peer_id": ""}}"#,
+    )
+    .unwrap();
+
+    let config = Config::load(dir.path()).unwrap();
+    let identity = config.get("identity").expect("an identity block");
+    assert_eq!(
+        identity.get("mode").and_then(|mode| mode.as_str()),
+        Some("rotate")
+    );
+}
+
+#[test]
+fn a_configuration_that_never_hid_anything_gets_the_honest_default() {
+    let dir = scratch();
+    std::fs::write(
+        dir.path().join("core.conf"),
+        r#"{"file": 1, "format": 1}{"proxy": {"anonymous_mode": false}}"#,
+    )
+    .unwrap();
+
+    let config = Config::load(dir.path()).unwrap();
+    let identity = config.get("identity").expect("an identity block");
+    assert_eq!(
+        identity.get("mode").and_then(|mode| mode.as_str()),
+        Some("show")
+    );
+}
+
+#[test]
 fn a_fresh_configuration_is_written_on_the_first_save() {
     // Loading fills in every key, which counts as a change: without writing,
     // a first run leaves nothing on disk for an operator to edit.

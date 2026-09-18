@@ -48,11 +48,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = format!("{host}:{port}").parse()?;
 
     let (events, _) = tokio::sync::broadcast::channel::<Event>(4096);
+    // The honest one. Whatever the Identity settings say is applied a moment
+    // later by `apply_config`, which is also what re-applies it when somebody
+    // changes it; building the session with a fake identity here would only
+    // duplicate that logic in the one place it cannot be changed from.
     let settings = SessionSettings {
-        user_agent: format!(
-            "redeluge/{REPORTED_VERSION} libtorrent/{}",
-            redeluge_libtorrent::libtorrent_version()
-        ),
+        user_agent: redeluge_daemon::features::identity::honest().user_agent,
         ..SessionSettings::default()
     };
     let manager = Manager::start(config_dir.clone(), settings, events.clone())?;

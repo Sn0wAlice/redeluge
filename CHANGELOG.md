@@ -42,8 +42,41 @@ talking to.
   equivalent: that one removes torrents that finished, where the files are the
   point, and this one removes torrents that downloaded nothing.
 
+- **Four ways to answer "what client is this?"**, on the Identity page: show
+  the truth, hide it, look like a different common client for each torrent, or
+  say exactly what you type. An identity is two strings — the user agent
+  trackers and peers see, and the fingerprint at the front of every peer id —
+  and every mode sets both or neither, because faking one and not the other is
+  a combination no real client sends and identifies this daemon more precisely
+  than the truth would.
+- Rotation draws from a short list of common clients, per torrent as it is
+  added. What it cannot do is per peer: both strings are session settings in
+  libtorrent, so a different identity for each connection is not buildable on
+  it. The peer id is per torrent and kept for that torrent's life; the user
+  agent is one string for the whole daemon and follows the most recent draw, so
+  older torrents disagree with it. The page says so rather than leaving it to
+  be discovered.
+- `redeluge.get_identity_clients` answers the list, so the interface names the
+  same clients the daemon draws from and the custom boxes can be filled from a
+  real one in a single click.
+- Stored under a new `identity` key. `proxy.anonymous_mode` is carried into it
+  once, on the first start after the upgrade, so a daemon that was hiding keeps
+  hiding.
+
 ### Changed
 
+- **Hiding the client identity is its own Preferences page**, no longer a
+  fieldset inside the proxy widget. It has nothing to do with proxying: it
+  changes what this client says about itself, and it does the same thing
+  whether a proxy is configured or not. Sitting on the Proxy page, it read as
+  part of proxying — which is how somebody turns it on believing their traffic
+  is hidden. The new page says what it does and, just as plainly, what it does
+  not: your IP is unchanged, and your peer ID still names the BitTorrent
+  library, so a tracker that cares still knows what you are running.
+- The setting is still stored under the `proxy` key of the daemon's
+  configuration, because that is where Deluge keeps it and clients expect to
+  find it there. Both pages hand the options manager a whole proxy dictionary,
+  so neither can overwrite the other's half.
 - **A label's settings are a window of their own**, reached from *Edit* in
   Preferences, Labels or by right-clicking the label in the sidebar. They used
   to sit under the list, filled in when you selected a row — so reading what a

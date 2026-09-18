@@ -114,27 +114,18 @@ Deluge.preferences.ProxyField = Ext.extend(Ext.form.FieldSet, {
         });
         this.proxy_tracker_conn.on('change', this.onFieldChange, this);
 
-        // "Force Use of Proxy" was here. libtorrent 2.0 dropped the setting
-        // it mapped onto; what it used to mean is now the three boxes above,
-        // which say which kinds of connection go through the proxy. Hiding the
-        // client identity is a separate thing and does still work.
-        var fieldset = this.add({
-            xtype: 'fieldset',
-            border: false,
-            title: _('Identity'),
-            autoHeight: true,
-            labelWidth: 1,
-            defaultType: 'checkbox',
-            style: 'padding-left: 0px; margin-top: 10px',
-        });
-
-        this.anonymous_mode = fieldset.add({
-            fieldLabel: '',
-            labelSeparator: '',
-            name: 'anonymous_mode',
-            boxLabel: _('Hide Client Identity'),
-        });
-        this.anonymous_mode.on('change', this.onFieldChange, this);
+        // Two things used to be here and are not any more.
+        //
+        // "Force Use of Proxy" mapped onto a setting libtorrent 2.0 dropped.
+        // What it used to mean is now the three boxes above, which say which
+        // kinds of connection go through the proxy.
+        //
+        // "Hide Client Identity" still works, and has its own page: it changes
+        // what this client says about itself, which happens the same way
+        // whether a proxy is configured or not, and sitting here it read as
+        // part of proxying. Its value still travels in this dictionary,
+        // because that is where Deluge's configuration keeps it.
+        this.anonymous_mode = false;
 
         this.setting = false;
     },
@@ -153,7 +144,13 @@ Deluge.preferences.ProxyField = Ext.extend(Ext.form.FieldSet, {
             proxy_hostnames: this.proxy_host_resolve.getValue(),
             proxy_peer_connections: this.proxy_peer_conn.getValue(),
             proxy_tracker_connections: this.proxy_tracker_conn.getValue(),
-            anonymous_mode: this.anonymous_mode.getValue(),
+            // Not this widget's setting any more, but still this widget's key:
+            // `core.set_config` replaces the whole `proxy` dictionary, so a
+            // value left out here is a value deleted from the daemon's
+            // configuration. The Identity page writes it, the options manager
+            // hands the result back through `setValue`, and this carries
+            // whatever it was last told.
+            anonymous_mode: this.anonymous_mode,
         };
     },
 
@@ -171,7 +168,7 @@ Deluge.preferences.ProxyField = Ext.extend(Ext.form.FieldSet, {
         this.proxy_host_resolve.setValue(value['proxy_hostnames']);
         this.proxy_peer_conn.setValue(value['proxy_peer_connections']);
         this.proxy_tracker_conn.setValue(value['proxy_tracker_connections']);
-        this.anonymous_mode.setValue(value['anonymous_mode']);
+        this.anonymous_mode = value['anonymous_mode'] === true;
 
         this.onTypeSelect(this.type, record, index);
         this.setting = false;

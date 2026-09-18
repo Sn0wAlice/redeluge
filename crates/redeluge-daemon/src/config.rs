@@ -62,6 +62,16 @@ impl Config {
             Err(source) => return Err(Error::Read { path, source }),
         };
 
+        // The identity block took over a setting that used to live in the
+        // proxy block, and a configuration written before it existed still
+        // carries the old switch. Read across before the defaults fill in, or
+        // the default `show` would quietly turn hiding off for somebody who
+        // had turned it on.
+        let carried = carry_anonymous_mode(&mut values);
+        if carried {
+            tracing::info!("carried anonymous_mode over into the identity settings");
+        }
+
         // Defaults fill the gaps rather than replacing the file: a key added in
         // a later version appears, and one the operator set stays set.
         let mut added = 0;
@@ -79,7 +89,7 @@ impl Config {
             path,
             version,
             values,
-            dirty: added > 0,
+            dirty: added > 0 || carried,
         })
     }
 
@@ -287,6 +297,38 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     })
 }
 
+/// Moves a pre-identity `proxy.anonymous_mode` into the identity block.
+///
+/// Only when there is no identity block at all, which is what a configuration
+/// written by an older build looks like: once the block exists it is the
+/// authority, and a proxy key left over from then must not override what
+/// somebody has since chosen on the Identity page.
+///
+/// Answers whether anything was carried.
+fn carry_anonymous_mode(values: &mut Map<String, Json>) -> bool {
+    if values.contains_key("identity") {
+        return false;
+    }
+    let hiding = values
+        .get("proxy")
+        .and_then(|proxy| proxy.get("anonymous_mode"))
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
+    if !hiding {
+        return false;
+    }
+
+    let identity = crate::features::identity::Settings {
+        mode: crate::features::identity::HIDE.to_owned(),
+        ..crate::features::identity::Settings::default()
+    };
+    let Ok(value) = serde_json::to_value(identity) else {
+        return false;
+    };
+    values.insert("identity".to_owned(), value);
+    true
+}
+
 /// Every key the daemon understands, with the value a fresh install gets.
 ///
 /// Taken from `deluge/core/preferencesmanager.py`. The five path settings are
@@ -383,6 +425,12 @@ pub fn defaults(config_dir: &Path) -> Vec<(String, Json)> {
                 "force_proxy": false,
                 "anonymous_mode": false,
             }),
+        ),
+        // What this client tells the swarm it is. `show` is the truth, which
+        // is what a daemon nobody has configured has to be.
+        (
+            "identity".into(),
+            crate::features::identity::Settings::default_json(),
         ),
         ("peer_tos".into(), json!("0x00")),
         ("rate_limit_ip_overhead".into(), json!(true)),

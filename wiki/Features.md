@@ -311,6 +311,88 @@ announce URL — because that is the row the rule is set on. Remember that a key
 is replaced whole: send every tracker you want to keep a rule for, not just the
 one you are changing. The Web UI reads the current value and merges for you.
 
+## What this client says it is
+
+Preferences, Identity. Two strings make up an identity on the wire, and they
+have to agree:
+
+- the **user agent**, sent as an HTTP header to trackers and as the `v` string
+  in the extension handshake to peers, and
+- the **peer id**, whose first bytes are a fingerprint like `-qB4650-`, sent to
+  every tracker and every peer.
+
+Faking one and not the other is worse than faking neither: `qBittorrent` in the
+header with a libtorrent peer id is a combination no real client produces, so
+it identifies this daemon *more* precisely than the truth would. Every mode
+here sets both or neither.
+
+| Mode | What the swarm sees |
+|---|---|
+| `show` | The truth: redeluge, and the libtorrent it is built on. The default |
+| `hide` | libtorrent's anonymous mode: a generic agent to trackers, no version to peers |
+| `rotate` | A credible client, drawn again for each torrent added |
+| `custom` | Whatever you typed, in both boxes |
+
+**None of them hide your address.** Every peer and tracker still sees the
+packets arrive from your IP, whichever name they are told. This is what the
+client says, not where it says it from; the latter is the proxy.
+
+### Hiding
+
+This is libtorrent's own `anonymous_mode`, and what it does is worth knowing
+exactly, because the name promises more than it delivers. Measured against
+this build:
+
+| | User agent the tracker sees | peer id |
+|---|---|---|
+| Off | `redeluge/2.2.1 libtorrent/2.0.11.0` | `-LT20B0-…` |
+| On | `curl/7.81.0` | `-LT20B0-…` |
+| On, private torrent | `redeluge/2.2.1 libtorrent/2.0.11.0` | `-LT20B0-…` |
+
+Three things follow. libtorrent's "generic agent" is literally a curl string.
+The peer id does not change, so a tracker that cares still knows what you are
+running. And private torrents are exempt on purpose: a private tracker checks
+which client it is talking to, and hiding it there gets announces refused
+rather than hidden.
+
+### Rotating, and what it cannot do
+
+Both strings are *session* settings in libtorrent. There is no way to present
+one client to one peer and another to the next, so **a different identity per
+peer is not possible** and this does not pretend otherwise.
+
+What is possible is per torrent, and only half way. libtorrent builds a peer id
+per torrent, from the fingerprint as it stands when the torrent is added, so
+drawing before each add gives each torrent its own identity for life. The user
+agent has no such split — one string for the whole daemon — so it follows the
+most recent draw, and older torrents disagree with it. A tracker comparing the
+two across your torrents can see that. `custom` is the mode that stays
+coherent.
+
+The list is deliberately short and boring — qBittorrent, Transmission, Deluge,
+libtorrent — because a rare client is as distinguishing as a wrong one.
+`redeluge.get_identity_clients` answers it, which is also how the Web UI fills
+the custom boxes from a real client in one go.
+
+### Over the API
+
+Under the `identity` key of `core.conf`:
+
+```bash
+core.set_config({"identity": {"mode": "custom",
+                              "user_agent": "Transmission/4.0.5",
+                              "peer_id": "-TR4050-"}})
+```
+
+A mode this daemon does not recognise reads as `show`: the one thing it must
+never do on its own is claim to be something else. Both strings are stripped of
+anything that is not printable, and the peer id is cut at twenty bytes, because
+they go into an HTTP request and a peer id respectively.
+
+The switch used to be `proxy.anonymous_mode`, and a configuration written
+before this page existed is carried over once, on the first start after the
+upgrade. After that the `identity` key is the authority.
+
 ## Which trackers are down
 
 Right-click a tracker in the sidebar and choose *Info*.

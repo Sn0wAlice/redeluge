@@ -147,6 +147,14 @@ class Session {
 
 std::unique_ptr<Session> new_session(SessionConfig const& config);
 rust::String libtorrent_version();
+
+/// libtorrent's own encoding of a client fingerprint, `-XX1234-`.
+///
+/// Used rather than reimplemented because the encoding is not obvious: the
+/// version digits are base 36, so 2.0.11 is `20B0`. Getting it wrong produces
+/// a peer id no real client would send, which is the opposite of the point.
+rust::String generate_fingerprint(rust::Str name, int32_t major, int32_t minor,
+                                  int32_t revision, int32_t tag);
 rust::Vec<rust::String> session_stat_names();
 int32_t session_stat_index(rust::Str name);
 rust::String torrent_file_info_hash(rust::Slice<uint8_t const> torrent_file);
