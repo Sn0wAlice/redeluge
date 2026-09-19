@@ -13,8 +13,9 @@ Ext.namespace('Deluge.preferences');
  * @class Deluge.preferences.Notifications
  * @extends Ext.Panel
  *
- * Where a message goes when a torrent finishes, arrives or breaks. The
- * `webhook` key of core.conf, one dictionary holding a list of destinations.
+ * Where a message goes when a torrent finishes, arrives or breaks, or when a
+ * tracker stops answering. The `webhook` key of core.conf, one dictionary
+ * holding a list of destinations.
  *
  * An editable grid rather than a dialog per destination: every field is a
  * short string or a choice, and somebody with a phone topic and a Discord
@@ -65,6 +66,15 @@ Deluge.preferences.Notifications = Ext.extend(Ext.Panel, {
             xtype: 'checkbox',
             hideLabel: true,
             boxLabel: _('A torrent was added'),
+            ctCls: 'x-deluge-indent-checkbox',
+        });
+        // One box for both edges. Being told a tracker went away and left to
+        // find out for yourself that it came back is worse than being told
+        // nothing, so there is nothing here to tick only half of.
+        this.trackerBox = fieldset.add({
+            xtype: 'checkbox',
+            hideLabel: true,
+            boxLabel: _('A tracker stopped answering, and when it answers again'),
             ctCls: 'x-deluge-indent-checkbox',
         });
 
@@ -251,6 +261,7 @@ Deluge.preferences.Notifications = Ext.extend(Ext.Panel, {
         this.finishedBox.setValue(settings['on_finished'] !== false);
         this.errorBox.setValue(settings['on_error'] !== false);
         this.addedBox.setValue(settings['on_added'] === true);
+        this.trackerBox.setValue(settings['on_tracker'] === true);
         this.result.setText(settings['last_test'] || '');
         // Kept and written back rather than dropped: neither has a control
         // here, and set_config replaces the whole dictionary, so a value
@@ -298,6 +309,7 @@ Deluge.preferences.Notifications = Ext.extend(Ext.Panel, {
                 on_finished: this.finishedBox.getValue() === true,
                 on_error: this.errorBox.getValue() === true,
                 on_added: this.addedBox.getValue() === true,
+                on_tracker: this.trackerBox.getValue() === true,
                 endpoints: endpoints,
                 timeout: Ext.value(this.timeout, 15),
                 try_times: Ext.value(this.tryTimes, 3),

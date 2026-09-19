@@ -111,7 +111,7 @@ in one place, so you never have to.
 | `peers` | Whether to keep a history of what each peer has done, and for how long |
 | `scheduler` | The weekly schedule |
 | `tracker` | Per-tracker rules: label, move or remove the torrents of one tracker |
-| `webhook` | Where to post when a torrent finishes, arrives or breaks |
+| `webhook` | Where to post when a torrent finishes, arrives or breaks, or when a tracker stops answering |
 
 Each has a preferences page in the Web UI as well, except `tracker`, which is
 reached by right-clicking a tracker in the sidebar and choosing *Settings*, and

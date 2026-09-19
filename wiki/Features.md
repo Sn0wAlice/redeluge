@@ -692,7 +692,7 @@ as the last one.
 
 Off by default, under Preferences, Notifications. A POST goes out when a
 download finishes, when a torrent goes into error, and optionally when one is
-added.
+added or when a tracker stops answering.
 
 This is what most people installed the Execute plugin for. Execute did it by
 running a shell script as the daemon user with the torrent's name as an
@@ -706,7 +706,7 @@ Four kinds of destination, as many of each as you like:
 | Discord | The incoming-webhook URL from the channel's settings. The message arrives as an embed, green when a download finished and red when something broke |
 | ntfy | The topic URL you would open in the app. The token field takes an access token for a protected topic |
 | Gotify | The server URL, plus an application token. `/message` is added for you, and a token already in the URL is left alone |
-| Webhook | One JSON object posted to anything else: the event, the torrent's name, size, path, label, tracker, ratio and error. The token, if you set one, is sent as a bearer token |
+| Webhook | One JSON object posted to anything else: the event, a title, a message, and one object named for the subject — `torrent` with the name, size, path, label, tracker, ratio and error, or `tracker` with the host, how many torrents are on it, whether it is down and what it said. The token, if you set one, is sent as a bearer token |
 
 Every one of them is a POST with a JSON body. That is not only tidiness: ntfy's
 header form cannot carry anything outside ASCII, and a good half of the torrent
@@ -716,6 +716,22 @@ names that matter are not ASCII.
 writes back what happened, under the grid. A wrong URL says so there rather
 than in a log nobody is watching. A destination that answers with a refusal is
 not retried; one that times out or fails is, three times.
+
+**A tracker that stops answering** is the fourth event, and the one that has no
+torrent behind it. Ticking *A tracker stopped answering* sends a message when a
+tracker domain is failing every announce it makes and nothing is getting
+through — the same arithmetic that colours the sidebar row red, so a message
+and a red row cannot disagree — and a second one when it answers again. Both
+edges are the one tick: being told a tracker went away and left to find out for
+yourself that it came back is worse than being told nothing.
+
+It is a sweep every minute rather than an event, because a tracker going away
+is the absence of one, and a domain has to hold its new answer for two sweeps
+before anything is sent: a tracker that drops a single announce has not gone
+anywhere. The message names the domain, how many torrents are behind it and
+what the tracker said when it refused. A tracker that is already down when the
+daemon starts is reported once the announces confirm it, and a domain whose
+last torrent is removed is forgotten rather than recorded as recovered.
 
 Two things it will not do. It does not announce your whole library when the
 daemon restarts: libtorrent reports a torrent as finished again after it

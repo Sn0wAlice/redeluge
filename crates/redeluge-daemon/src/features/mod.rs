@@ -52,6 +52,7 @@ pub fn spawn(core: Arc<Core>) {
     tokio::spawn(remove_stuck_downloads(Arc::clone(&core)));
     tokio::spawn(keep_the_peer_ledger(Arc::clone(&core)));
     tokio::spawn(announce_torrents(Arc::clone(&core)));
+    tokio::spawn(watch_tracker_health(Arc::clone(&core)));
     tokio::spawn(watch_for_a_test_message(Arc::clone(&core)));
     tokio::spawn(maintain_country_database(Arc::clone(&core)));
     tokio::spawn(maintain_blocklist(core));
@@ -1563,6 +1564,20 @@ async fn pause_stuck(core: &Core, stopped: &StuckRemoval, who: &str, how_long: &
 fn tracker_health(
     state: &mut crate::manager::SessionState,
 ) -> std::collections::BTreeMap<String, String> {
+    tracker_totals(state)
+        .into_iter()
+        .map(|(host, totals)| (host, totals.health().to_owned()))
+        .collect()
+}
+
+/// The same sweep, undivided: what every tracker domain adds up to.
+///
+/// The rules want the one word and nothing else; a message about an outage
+/// wants the count of torrents behind it and the sentence the tracker refused
+/// with, and neither survives being reduced to a colour.
+fn tracker_totals(
+    state: &mut crate::manager::SessionState,
+) -> std::collections::BTreeMap<String, crate::trackerinfo::Totals> {
     let session_paused = state.session_paused;
     let rows: Vec<crate::trackerinfo::Row> = state
         .session
@@ -1590,9 +1605,6 @@ fn tracker_health(
         .collect();
 
     crate::trackerinfo::by_domain(&rows)
-        .into_iter()
-        .map(|(host, totals)| (host, totals.health().to_owned()))
-        .collect()
 }
 
 /// Why this torrent is not being acted on, though its rule says it is due.
@@ -1772,6 +1784,122 @@ async fn announce_torrents(core: Arc<Core>) {
     }
 }
 
+/// What has been said about each tracker domain, and how many sweeps have
+/// disagreed with it since: the whole memory the outage messages keep.
+type TrackerNews = std::collections::HashMap<String, (bool, u8)>;
+
+/// Whether this domain's health is news, and which way it went.
+///
+/// `Some(true)` is a tracker that has stopped answering, `Some(false)` one that
+/// is answering again, and nothing at all is the usual answer.
+///
+/// A domain nobody has said anything about counts as up, so the first message
+/// anybody gets is about a tracker that is down — including one that was
+/// already down when the daemon started, which is the case somebody most wants
+/// to hear about.
+fn tracker_news(reported: &mut TrackerNews, host: &str, health: &str) -> Option<bool> {
+    /// How many sweeps in a row a domain has to have changed its mind before
+    /// the change is worth a message. One sweep is a single dropped announce
+    /// away from crying wolf, and a tracker that misses one announce has not
+    /// gone anywhere.
+    const CONFIRM: u8 = 2;
+
+    let down = match health {
+        "down" => true,
+        "ok" | "warning" => false,
+        // Listed and never tried, or every torrent on it is paused. Nothing
+        // has been confirmed either way, so nothing has changed and the run of
+        // disagreeing sweeps is left where it was.
+        _ => return None,
+    };
+
+    let seen = reported.entry(host.to_owned()).or_insert((false, 0));
+    if seen.0 == down {
+        seen.1 = 0;
+        return None;
+    }
+    seen.1 += 1;
+    if seen.1 < CONFIRM {
+        return None;
+    }
+    *seen = (down, 0);
+    Some(down)
+}
+
+/// Says when a tracker stops answering, and again when it starts.
+///
+/// Not driven by the event stream, because there is no event: a tracker going
+/// away is the absence of one. It is a sweep of the same arithmetic the
+/// sidebar colours its rows with, so a message and a red row cannot disagree
+/// about which tracker is down.
+async fn watch_tracker_health(core: Arc<Core>) {
+    // Per domain: what was last reported, and how many sweeps have disagreed
+    // with it since.
+    let mut reported: TrackerNews = std::collections::HashMap::new();
+
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+
+        let settings =
+            webhook::Settings::from_config(setting(&core, "webhook").await.as_ref()).sane();
+        if !settings.enabled
+            || !settings.wants(webhook::Trigger::TrackerDown)
+            || settings.usable().next().is_none()
+        {
+            // Nothing watched is nothing remembered. Switching this on is not
+            // a reason to hear about an outage that started while it was off,
+            // and behind the check is a status sweep of the whole library.
+            reported.clear();
+            continue;
+        }
+
+        let totals = match core.manager.with(tracker_totals).await {
+            Ok(totals) => totals,
+            Err(err) => {
+                tracing::warn!(error = %err, "the torrent manager is not answering");
+                continue;
+            }
+        };
+
+        for (host, domain) in &totals {
+            let Some(down) = tracker_news(&mut reported, host, domain.health()) else {
+                continue;
+            };
+
+            let trigger = if down {
+                webhook::Trigger::TrackerDown
+            } else {
+                webhook::Trigger::TrackerUp
+            };
+            let notice = webhook::Notice {
+                name: host.clone(),
+                tracker: host.clone(),
+                torrents: domain.torrents,
+                // Only the failure has a sentence to carry; a tracker that is
+                // answering has said nothing worth repeating.
+                message: if down {
+                    domain.message.clone()
+                } else {
+                    String::new()
+                },
+                ..webhook::Notice::default()
+            };
+
+            let what = if down {
+                "stopped answering"
+            } else {
+                "is answering again"
+            };
+            tracing::info!(tracker = %host, torrents = domain.torrents, "a tracker {what}");
+            tokio::spawn(deliver(settings.clone(), trigger, notice));
+        }
+
+        // A domain whose last torrent was removed is not a tracker that came
+        // back, and the next one to use that host starts from nothing said.
+        reported.retain(|host, _| totals.contains_key(host));
+    }
+}
+
 /// Gathers what a message is written from, or nothing if there is no message.
 ///
 /// Also where a completion that is not one gets dropped. libtorrent posts
@@ -1817,6 +1945,9 @@ async fn describe(core: &Core, id: &str, trigger: webhook::Trigger) -> Option<we
                 label: torrent.options.label.clone(),
                 tracker: crate::torrent::tracker_host(&current),
                 ratio: torrent.ratio(&status),
+                // A count of the tracker's torrents means nothing to an event
+                // about one of them.
+                torrents: 0,
                 message: match trigger {
                     webhook::Trigger::Error => torrent.message(),
                     _ => String::new(),
@@ -2388,6 +2519,60 @@ async fn record_import(core: &Core, ranges: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Feeds one domain a run of health words and collects what got said.
+    fn sweeps(words: &[&str]) -> Vec<Option<bool>> {
+        let mut reported = TrackerNews::new();
+        words
+            .iter()
+            .map(|word| tracker_news(&mut reported, "tracker.example.com", word))
+            .collect()
+    }
+
+    #[test]
+    fn a_tracker_has_to_stay_down_before_anybody_is_told() {
+        // The first failing sweep says nothing: one dropped announce is not an
+        // outage. The second is, and the sweeps after it are the same outage,
+        // not another one.
+        assert_eq!(
+            sweeps(&["down", "down", "down", "down"]),
+            vec![None, Some(true), None, None]
+        );
+    }
+
+    #[test]
+    fn a_tracker_that_answers_again_is_news_once() {
+        assert_eq!(
+            sweeps(&["down", "down", "ok", "ok", "ok"]),
+            vec![None, Some(true), None, Some(false), None]
+        );
+    }
+
+    #[test]
+    fn one_failing_announce_among_working_ones_is_not_an_outage() {
+        // Down is failing everywhere and working nowhere; warning is a tracker
+        // that is answering somebody, and nobody needs waking for it.
+        assert_eq!(sweeps(&["ok", "warning", "warning", "ok"]), vec![None; 4]);
+    }
+
+    #[test]
+    fn a_tracker_that_flaps_is_not_a_message_a_minute() {
+        // Alternating answers never hold for two sweeps, so nothing is sent at
+        // all: a message every minute about a tracker that cannot make up its
+        // mind is a message people stop reading.
+        assert_eq!(sweeps(&["down", "ok", "down", "ok", "down"]), vec![None; 5]);
+    }
+
+    #[test]
+    fn a_tracker_nothing_is_known_about_changes_nothing() {
+        // Added and not yet announced, or every torrent on it paused. It is
+        // not evidence that the tracker came back, and it does not interrupt
+        // the run of sweeps that says it went away.
+        assert_eq!(
+            sweeps(&["down", "unknown", "down"]),
+            vec![None, None, Some(true)]
+        );
+    }
 
     #[test]
     fn a_rate_limit_of_minus_one_becomes_libtorrents_zero() {

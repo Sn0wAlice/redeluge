@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Telling somebody when a torrent finishes, arrives or breaks.
+//! Telling somebody when a torrent finishes, arrives or breaks, and when a
+//! tracker stops answering.
 //!
 //! This is what most people installed the Execute plugin for: a download
 //! finishes and a message lands on a phone. Execute did it by running a shell
@@ -59,6 +60,12 @@ pub enum Trigger {
     Finished,
     Error,
     Added,
+    /// A tracker domain that is failing every announce it makes, and the same
+    /// domain once it answers again. Two events rather than one carrying a
+    /// flag, because every destination here renders a title and a body and
+    /// none of them renders a state machine.
+    TrackerDown,
+    TrackerUp,
     /// Sent by the Send Test button, so a URL can be checked before it matters.
     Test,
 }
@@ -69,6 +76,8 @@ impl Trigger {
             Self::Finished => "finished",
             Self::Error => "error",
             Self::Added => "added",
+            Self::TrackerDown => "tracker_down",
+            Self::TrackerUp => "tracker_up",
             Self::Test => "test",
         }
     }
@@ -78,6 +87,8 @@ impl Trigger {
             Self::Finished => "Download finished",
             Self::Error => "Torrent error",
             Self::Added => "Torrent added",
+            Self::TrackerDown => "Tracker down",
+            Self::TrackerUp => "Tracker back up",
             Self::Test => "redeluge test message",
         }
     }
@@ -86,8 +97,8 @@ impl Trigger {
     fn colour(self) -> i64 {
         match self {
             // Green, red, blue, grey.
-            Self::Finished => 0x2E_CC_71,
-            Self::Error => 0xE7_4C_3C,
+            Self::Finished | Self::TrackerUp => 0x2E_CC_71,
+            Self::Error | Self::TrackerDown => 0xE7_4C_3C,
             Self::Added => 0x34_98_DB,
             Self::Test => 0x95_A5_A6,
         }
@@ -99,6 +110,8 @@ impl Trigger {
             Self::Finished => &["white_check_mark"],
             Self::Error => &["rotating_light"],
             Self::Added => &["inbox_tray"],
+            Self::TrackerDown => &["warning"],
+            Self::TrackerUp => &["arrow_up"],
             Self::Test => &["bell"],
         }
     }
@@ -106,9 +119,18 @@ impl Trigger {
     /// ntfy priority, 1 to 5, and Gotify's 0 to 10.
     fn urgency(self) -> (i64, i64) {
         match self {
-            Self::Error => (4, 8),
+            Self::Error | Self::TrackerDown => (4, 8),
             _ => (3, 5),
         }
+    }
+
+    /// Whether this event is about a tracker rather than about one torrent.
+    ///
+    /// The two are written from the same `Notice`, which is what keeps the
+    /// transport and the retries in one place, but almost none of the fields
+    /// mean anything to both.
+    pub fn is_tracker(self) -> bool {
+        matches!(self, Self::TrackerDown | Self::TrackerUp)
     }
 }
 
@@ -165,6 +187,16 @@ pub struct Settings {
     #[serde(default)]
     pub on_added: bool,
 
+    /// Both edges, not one: somebody who wants to hear that a tracker stopped
+    /// answering wants to hear that it is answering again, and a switch that
+    /// tells you only half of that is a switch that leaves you checking.
+    ///
+    /// Off by default, like every trigger added after the first two: an
+    /// installation that was already sending messages is not made louder by
+    /// upgrading.
+    #[serde(default)]
+    pub on_tracker: bool,
+
     #[serde(default = "fifteen")]
     pub timeout: u64,
     #[serde(default = "three")]
@@ -203,6 +235,7 @@ impl Default for Settings {
             on_finished: yes(),
             on_error: yes(),
             on_added: false,
+            on_tracker: false,
             timeout: fifteen(),
             try_times: three(),
             test: false,
@@ -244,6 +277,7 @@ impl Settings {
             Trigger::Finished => self.on_finished,
             Trigger::Error => self.on_error,
             Trigger::Added => self.on_added,
+            Trigger::TrackerDown | Trigger::TrackerUp => self.on_tracker,
             Trigger::Test => true,
         }
     }
@@ -263,7 +297,11 @@ pub struct Notice {
     pub label: String,
     pub tracker: String,
     pub ratio: f64,
-    /// The error, for the event that has one.
+    /// How many torrents are on this tracker. Only the tracker events fill it
+    /// in; it is the figure that says whether an outage matters.
+    pub torrents: i64,
+    /// The error, for the events that have one: what the torrent said, or what
+    /// the tracker said when it refused.
     pub message: String,
 }
 
@@ -278,12 +316,17 @@ impl Notice {
             label: "test".to_owned(),
             tracker: "example.com".to_owned(),
             ratio: 1.0,
+            torrents: 0,
             message: "If you are reading this, the endpoint works.".to_owned(),
         }
     }
 
     /// The lines under the title, which every service renders as plain text.
     fn body(&self, trigger: Trigger) -> String {
+        if trigger.is_tracker() {
+            return self.tracker_body();
+        }
+
         let mut lines = vec![self.name.clone()];
         if self.size > 0 {
             lines.push(format!("Size: {}", human_size(self.size)));
@@ -296,6 +339,22 @@ impl Notice {
         }
         if !self.save_path.is_empty() {
             lines.push(format!("Saved to: {}", self.save_path));
+        }
+        if !self.message.is_empty() {
+            lines.push(self.message.clone());
+        }
+        lines.join("\n")
+    }
+
+    /// The same, for the events whose subject is a tracker.
+    ///
+    /// Which way it went is in the title, so these lines are what the title
+    /// does not say: which tracker, how much of the library is behind it, and
+    /// what it said when it refused.
+    fn tracker_body(&self) -> String {
+        let mut lines = vec![self.tracker.clone()];
+        if self.torrents > 0 {
+            lines.push(format!("Torrents: {}", self.torrents));
         }
         if !self.message.is_empty() {
             lines.push(self.message.clone());
@@ -395,14 +454,31 @@ pub fn delivery(endpoint: &Endpoint, trigger: Trigger, notice: &Notice) -> Optio
                     format!("Bearer {}", endpoint.token),
                 ));
             }
-            (
-                endpoint.url.clone(),
-                json!({
-                    "source": "redeluge",
-                    "event": trigger.as_str(),
-                    "title": title,
-                    "message": body,
-                    "torrent": {
+            let mut payload = json!({
+                "source": "redeluge",
+                "event": trigger.as_str(),
+                "title": title,
+                "message": body,
+            });
+            // One subject per event, under the key that names it. A tracker
+            // event carrying an empty `torrent` object would have whatever is
+            // at the other end filing an outage under a torrent with no name.
+            let (subject, detail) = if trigger.is_tracker() {
+                (
+                    "tracker",
+                    json!({
+                        "host": notice.tracker,
+                        "torrents": notice.torrents,
+                        "down": trigger == Trigger::TrackerDown,
+                        // What it said when it refused, which is empty once it
+                        // is answering again.
+                        "error": notice.message.clone(),
+                    }),
+                )
+            } else {
+                (
+                    "torrent",
+                    json!({
                         "id": notice.torrent_id,
                         "name": notice.name,
                         "size": notice.size,
@@ -418,9 +494,11 @@ pub fn delivery(endpoint: &Endpoint, trigger: Trigger, notice: &Notice) -> Optio
                         } else {
                             String::new()
                         },
-                    },
-                }),
-            )
+                    }),
+                )
+            };
+            payload[subject] = detail;
+            (endpoint.url.clone(), payload)
         }
     };
 
@@ -492,6 +570,7 @@ mod tests {
             label: "films".to_owned(),
             tracker: "example.com".to_owned(),
             ratio: 1.25,
+            torrents: 0,
             message: String::new(),
         }
     }
@@ -512,6 +591,7 @@ mod tests {
         assert!(settings.endpoints.is_empty());
         assert!(settings.on_finished && settings.on_error);
         assert!(!settings.on_added, "the noisiest of the three");
+        assert!(!settings.on_tracker, "added after, so it stays quiet");
     }
 
     #[test]
@@ -653,7 +733,17 @@ mod tests {
         assert!(settings.wants(Trigger::Finished));
         assert!(!settings.wants(Trigger::Error));
         assert!(!settings.wants(Trigger::Added));
+        assert!(!settings.wants(Trigger::TrackerDown));
         assert!(settings.wants(Trigger::Test), "somebody just pressed it");
+
+        // One switch for both edges: being told a tracker went away and not
+        // being told it came back is worse than not being told at all.
+        let watching = Settings {
+            on_tracker: true,
+            ..Settings::default()
+        };
+        assert!(watching.wants(Trigger::TrackerDown));
+        assert!(watching.wants(Trigger::TrackerUp));
     }
 
     #[test]
@@ -678,6 +768,73 @@ mod tests {
         assert!(settings.endpoints[0].enabled, "a row defaults to on");
         assert!(settings.on_added);
         assert_eq!(settings.try_times, three());
+    }
+
+    fn outage() -> Notice {
+        Notice {
+            name: "tracker.example.com".to_owned(),
+            tracker: "tracker.example.com".to_owned(),
+            torrents: 12,
+            message: "connection refused".to_owned(),
+            ..Notice::default()
+        }
+    }
+
+    #[test]
+    fn a_tracker_outage_reads_as_one_rather_than_as_a_torrent() {
+        let delivery = delivery(
+            &endpoint("discord", "https://discord.com/api/webhooks/1/abc"),
+            Trigger::TrackerDown,
+            &outage(),
+        )
+        .unwrap();
+
+        let embed = &delivery.body["embeds"][0];
+        assert_eq!(embed["title"], "Tracker down");
+        let text = embed["description"].as_str().unwrap();
+        assert!(text.contains("tracker.example.com"));
+        assert!(text.contains("Torrents: 12"), "how much is behind it");
+        assert!(text.contains("connection refused"));
+        assert_eq!(embed["color"], 0xE7_4C_3C, "red, like an error");
+    }
+
+    #[test]
+    fn a_tracker_that_came_back_says_so_and_carries_no_complaint() {
+        let delivery = delivery(
+            &endpoint("ntfy", "https://ntfy.sh/my-downloads"),
+            Trigger::TrackerUp,
+            &Notice {
+                message: String::new(),
+                ..outage()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(delivery.body["title"], "Tracker back up");
+        assert_eq!(delivery.body["priority"], 3, "good news is not urgent");
+        let text = delivery.body["message"].as_str().unwrap();
+        assert!(text.contains("tracker.example.com"));
+        assert!(!text.contains("refused"));
+    }
+
+    #[test]
+    fn a_plain_webhook_files_an_outage_under_the_tracker() {
+        // Whatever is at the other end keys off `event` and then reads one
+        // object; an empty torrent on a tracker event would be a torrent with
+        // no name appearing in somebody's dashboard.
+        let delivery = delivery(
+            &endpoint("webhook", "https://example.com/hook"),
+            Trigger::TrackerDown,
+            &outage(),
+        )
+        .unwrap();
+
+        assert_eq!(delivery.body["event"], "tracker_down");
+        assert_eq!(delivery.body["tracker"]["host"], "tracker.example.com");
+        assert_eq!(delivery.body["tracker"]["torrents"], 12);
+        assert_eq!(delivery.body["tracker"]["down"], true);
+        assert_eq!(delivery.body["tracker"]["error"], "connection refused");
+        assert!(delivery.body.get("torrent").is_none());
     }
 
     #[test]

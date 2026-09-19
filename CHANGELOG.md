@@ -8,6 +8,23 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
+## [1.6.3] — 2026-09-19
+
+### Added
+
+- **A message when a tracker stops answering**, and another when it answers
+  again, under Preferences, Notifications, off by default. One tick for both
+  edges: being told a tracker went away and left to find out for yourself that
+  it came back is worse than being told nothing. It goes to the same
+  destinations as the rest — Discord, ntfy, Gotify or a plain webhook — and the
+  plain one gets a `tracker` object with the host, the number of torrents
+  behind it and what it said, rather than a `torrent` object with nothing in it.
+- It reads the arithmetic the sidebar colours its rows with, so a message and a
+  red row cannot disagree about which tracker is down: failing every announce
+  and getting nothing through, not one stale announce among working ones. A
+  domain has to hold its new answer for two minute-apart sweeps before anything
+  is sent, so a single dropped announce is not a message.
+
 ## [1.6.2] — 2026-09-18
 
 ### Added
