@@ -89,6 +89,25 @@ may refuse the new one.
     Interface, on by default. Turn it off for anything that reads the answers
     itself without keeping a copy of the list between them.
 
+- **The gate runs itself.** It was a script somebody remembered to run; it now
+  runs on every push and every pull request, on x86-64 and on arm64, from
+  `.github/workflows/ci.yml`. Both architectures, because a test has failed on
+  one and passed on the other before. The same workflow scans `Cargo.lock` for
+  known vulnerabilities — anonymously, so the scan itself never fails a build;
+  only what it finds does.
+- **The front end has checks, and they run in a browser.** Twenty thousand
+  lines of ExtJS had none. `tools/ui_harness.py` concatenates the bundle the
+  way the build does, serves it to whichever headless browser is on the
+  machine, and reads the results out of the page: twenty-five checks, every one
+  of them there because the thing it checks broke once — a renderer that threw
+  on a field the interface had stopped asking for, a poll loop that stopped
+  repainting, a constant put on an object that did not exist.
+- **The torrent file decoder is fed rubbish on purpose.** Every truncation and
+  every single-byte corruption of a handful of real files, four thousand
+  randomised inputs, and the depth and length limits, in the same shape the
+  rencode decoder's own suite has had. Deterministic, so a failure reproduces,
+  and in the gate rather than on a schedule nobody watches.
+
 - **Feeds, and rules that pull torrents out of them.** The watched folders
   cover the case where something else decides and drops a file in a directory;
   this is the other one — a feed you follow and a line saying which of its

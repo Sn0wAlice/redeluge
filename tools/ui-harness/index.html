@@ -1,0 +1,49 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!--
+  The page the front-end checks run in.
+
+  It loads the same bundle the server ships, in the same order, with the
+  globals the interface expects stubbed to the least that lets it run: there is
+  no daemon here and nothing is asked of one. What the checks look at is the
+  part of the front end that has behaviour rather than appearance — the grid's
+  update path, the poll loop, the key selection — because that is the part
+  that has broken before.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>redeluge front-end checks</title>
+    <link rel="stylesheet" href="css/ext-all-notheme.css" />
+    <link rel="stylesheet" href="css/ext-extensions.css" />
+    <link rel="stylesheet" href="css/deluge.css" />
+    <link rel="stylesheet" href="themes/css/xtheme-dark.css" />
+    <script src="js/extjs/ext-base-debug.js"></script>
+    <script src="js/extjs/ext-all-debug.js"></script>
+    <script src="ext-extensions.js"></script>
+    <script src="js/gettext.js"></script>
+    <script>
+      // The page's own bootstrap sets these before the bundle loads; so does
+      // this. Nothing here reaches a daemon: the client is a stub that answers
+      // nothing, which is what these checks want.
+      var deluge = {
+        config: { base: '/', poll_interval: 2000, sidebar_show_zero: false },
+        events: { on: function () {}, un: function () {}, fire: function () {} },
+        client: {
+          label: { get_config: function () {} },
+          web: { update_ui: function () {} },
+          auth: { check_session: function () {} },
+        },
+        menus: { torrent: { showAt: function () {} }, refreshLabelMenu: function () {} },
+        sidebar: null,
+      };
+      Ext.ns('Deluge');
+    </script>
+    <script src="deluge-all.js"></script>
+    <script src="checks.js"></script>
+  </head>
+  <body style="background: #1b1b1b; color: #ddd; font: 13px monospace">
+    <div id="grid" style="height: 420px"></div>
+    <pre id="out">the checks did not run</pre>
+  </body>
+</html>

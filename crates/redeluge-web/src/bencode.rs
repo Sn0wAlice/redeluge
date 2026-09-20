@@ -316,3 +316,161 @@ mod tests {
         assert_eq!(&input[span], b"d4:name2:oke");
     }
 }
+
+#[cfg(test)]
+mod hostile_tests {
+    //! The decoder reads bytes somebody else wrote.
+    //!
+    //! A `.torrent` is uploaded by a person who has logged in, so this is not
+    //! the daemon's pre-authentication surface — `rencode` is, and it has a
+    //! suite of its own. It is still a parser fed from outside, and the cost
+    //! of finding out it panics is a thread dying under a request.
+    //!
+    //! The noise here is deterministic rather than a fuzzer's: a failure
+    //! reproduces on the next run and on somebody else's machine, and it runs
+    //! in the gate on every push instead of on a schedule nobody watches.
+
+    use super::*;
+
+    /// Deterministic noise, so a failure is reproducible without a fuzzer.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn byte(&mut self) -> u8 {
+            (self.next() >> 24) as u8
+        }
+    }
+
+    /// A handful of well-formed inputs to corrupt.
+    fn corpus() -> Vec<Vec<u8>> {
+        vec![
+            b"i42e".to_vec(),
+            b"4:spam".to_vec(),
+            b"li1ei2ei3ee".to_vec(),
+            b"d3:cow3:moo4:spam4:eggse".to_vec(),
+            b"d4:infod6:lengthi1024e4:name4:test12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaaee".to_vec(),
+            b"d8:announce30:udp://tracker.invalid:6969/ann4:infod6:lengthi1eee".to_vec(),
+        ]
+    }
+
+    #[test]
+    fn every_truncation_of_valid_input_is_handled() {
+        // The commonest malformed input there is: a file that stopped early.
+        for input in corpus() {
+            for cut in 0..input.len() {
+                let _ = decode(&input[..cut]);
+                let _ = decode_with_span(&input[..cut], "info");
+            }
+        }
+    }
+
+    #[test]
+    fn every_single_byte_corruption_is_handled() {
+        for input in corpus() {
+            for at in 0..input.len() {
+                for byte in [0u8, b'0', b'9', b'e', b'i', b'l', b'd', b':', 0xff] {
+                    let mut broken = input.clone();
+                    broken[at] = byte;
+                    let _ = decode(&broken);
+                    let _ = decode_with_span(&broken, "info");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn random_bytes_never_panic() {
+        let mut rng = Rng(0x5eed_1312);
+        for _ in 0..2000 {
+            let length = (rng.next() % 64) as usize;
+            let bytes: Vec<u8> = (0..length).map(|_| rng.byte()).collect();
+            let _ = decode(&bytes);
+            let _ = decode_with_span(&bytes, "info");
+        }
+    }
+
+    #[test]
+    fn random_bytes_that_start_like_a_torrent_never_panic() {
+        // Noise alone is rejected by the first byte most of the time, which
+        // tests very little. This keeps the shape and corrupts the inside.
+        let mut rng = Rng(0xfeed_face);
+        let template = b"d4:infod6:lengthi1024e4:name4:test12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaaee";
+        for _ in 0..2000 {
+            let mut bytes = template.to_vec();
+            let hits = 1 + (rng.next() % 4) as usize;
+            for _ in 0..hits {
+                let at = (rng.next() as usize) % bytes.len();
+                bytes[at] = rng.byte();
+            }
+            let _ = decode(&bytes);
+            let _ = decode_with_span(&bytes, "info");
+        }
+    }
+
+    #[test]
+    fn deep_nesting_is_refused_rather_than_overflowing_the_stack() {
+        // A thousand opening brackets is four bytes of typing and a stack
+        // overflow is not an error you can catch.
+        let deep: Vec<u8> = b"l".repeat(10_000);
+        assert!(decode(&deep).is_err());
+
+        let dicts: Vec<u8> = b"d1:a".repeat(10_000);
+        assert!(decode(&dicts).is_err());
+    }
+
+    #[test]
+    fn nesting_just_within_the_limit_still_works() {
+        let mut input = b"l".repeat(MAX_DEPTH - 1);
+        input.extend_from_slice(b"i1e");
+        input.extend(b"e".repeat(MAX_DEPTH - 1));
+        assert!(decode(&input).is_ok(), "a legitimate torrent was refused");
+    }
+
+    #[test]
+    fn an_enormous_declared_string_length_is_refused_without_allocating() {
+        // The length is a number in the file. Believing it is how a few bytes
+        // become a memory limit.
+        assert!(decode(b"99999999999999999999:abc").is_err());
+        assert!(decode(b"4294967296:abc").is_err());
+        assert!(decode(b"-1:abc").is_err());
+    }
+
+    #[test]
+    fn an_integer_that_is_not_one_is_refused() {
+        for input in [
+            &b"ie"[..],
+            b"i-e",
+            b"i--1e",
+            b"i1",
+            b"i99999999999999999999999e",
+            b"i 1e",
+        ] {
+            assert!(decode(input).is_err(), "{:?} was accepted", input);
+        }
+    }
+
+    #[test]
+    fn what_follows_a_value_is_ignored_rather_than_refused() {
+        // Deliberate, and worth pinning: `decode` reads one value from the
+        // front of the input. Torrent files with something appended exist —
+        // a tracker's comment, a tool's padding — and refusing them would
+        // refuse files every other client opens. Nothing is lost by the
+        // leniency: the infohash is taken over the `info` span, which is
+        // bounded by the dictionary rather than by the end of the file.
+        assert_eq!(decode(b"i42ei43e").unwrap(), Value::Int(42));
+        assert_eq!(decode(b"4:spamX").unwrap(), Value::Bytes(b"spam".to_vec()));
+
+        // And the span is still the info dictionary alone.
+        let file = b"d4:infod6:lengthi1eee-------- appended --------";
+        let (_, span) = decode_with_span(file, "info").expect("a torrent with padding");
+        let span = span.expect("the info span");
+        assert_eq!(&file[span], b"d6:lengthi1ee");
+    }
+}

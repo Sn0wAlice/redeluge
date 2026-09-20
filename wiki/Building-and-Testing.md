@@ -9,6 +9,12 @@ be installed locally.
 docker/rust.sh
 ```
 
+It also runs on every push and every pull request, on x86-64 and on arm64, from
+`.github/workflows/ci.yml`, alongside the front-end checks below. Both architectures, because a test has failed on one
+and passed on the other before now. The same workflow scans `Cargo.lock` for
+known vulnerabilities; that scan is anonymous and rate limited, so it never
+fails a build on its own — only on what it actually found.
+
 That runs, in order:
 
 | Step | |
@@ -30,6 +36,23 @@ For a prompt inside the same environment:
 ```bash
 docker/rust.sh shell
 ```
+
+## The front end
+
+The interface is ExtJS, which wants a document and a browser's idea of what is
+visible, so its checks run in one:
+
+```bash
+tools/ui_harness.py            # run them, exit non-zero on failure
+tools/ui_harness.py --serve    # serve the same page, for looking at by hand
+```
+
+It concatenates the bundle the way `build.rs` does, serves it to whichever
+headless browser is on PATH, and reads the results out of the rendered page.
+Every check in `tools/ui-harness/checks.js` is there because the thing it
+checks broke once: a renderer that threw on a field the interface had stopped
+asking for, a poll loop that stopped repainting, a constant on an object that
+did not exist.
 
 ## Building outside the container
 

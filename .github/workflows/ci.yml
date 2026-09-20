@@ -1,0 +1,118 @@
+name: Gate
+
+# The gate on every push and every pull request, on both architectures.
+#
+# It was run by hand until now, which meant it was run when somebody
+# remembered. The two architectures are not belt and braces: a test has failed
+# on one and passed on the other before, which is the whole reason the image is
+# built for both.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A second push to the same branch makes the first one's answer worthless, so
+# it is cancelled rather than left to finish. Not for main: what landed there
+# is worth knowing about even if something else lands a minute later.
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  gate:
+    name: ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+
+    strategy:
+      # One architecture failing is a reason to see what the other one did, not
+      # a reason to stop it.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86-64
+            runner: ubuntu-latest
+          # Free for public repositories. On a private one this runner is
+          # billed, and the honest alternatives are dropping this line or
+          # building it under QEMU, which is slow enough to hurt.
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # `docker/rust.sh` builds into `target-docker`, which is ignored by git
+      # and therefore safe to carry between runs. Keyed on the lockfile: a
+      # dependency change is the thing that makes the old artefacts useless.
+      - name: Reuse the last build
+        uses: actions/cache@v4
+        with:
+          path: target-docker
+          key: gate-${{ matrix.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'docker/Dockerfile.rust') }}
+          restore-keys: |
+            gate-${{ matrix.arch }}-
+
+      - name: Run the gate
+        run: ./docker/rust.sh
+
+  front-end:
+    name: front end
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # The interface is twenty thousand lines of ExtJS that wants a document,
+      # a layout and a browser's idea of what is visible, so the checks run in
+      # the browser the runner already has. Every one of them is there because
+      # the thing it checks broke once.
+      - name: Run the front-end checks
+        run: python3 tools/ui_harness.py
+
+  vulnerabilities:
+    name: known vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # Anonymous, which is rate limited to a handful of scans an hour across
+      # every project sharing a runner's address. So the scan itself is never
+      # allowed to fail the build — a rate limit is not a vulnerability — and
+      # the step below fails it on what was actually found. An API token in
+      # `VULN_MLAB_TOKEN` would make the scan itself reliable; without one this
+      # is a report that sometimes does not arrive.
+      - name: Scan Cargo.lock
+        id: scan
+        continue-on-error: true
+        uses: mlab-sh/vuln-scan-action@v1
+        with:
+          path: Cargo.lock
+          fail-on: high
+          soft-fail: "true"
+
+      - name: Fail on what it found
+        if: steps.scan.outputs.failed == 'true'
+        run: |
+          echo "::error::${{ steps.scan.outputs.total }} known vulnerabilities in ${{ steps.scan.outputs.vulnerable-packages }} packages, at or above the threshold"
+          exit 1
+
+      - name: Say what it found
+        if: steps.scan.outputs.failed != 'true'
+        run: |
+          total='${{ steps.scan.outputs.total }}'
+          if [ -z "$total" ]; then
+            echo "The scan did not answer — anonymous scans are rate limited."
+          else
+            echo "$total known vulnerabilities, none at or above the threshold."
+          fi
