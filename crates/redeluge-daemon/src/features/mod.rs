@@ -183,23 +183,36 @@ async fn maintain_country_database(core: Arc<Core>) {
     }
 }
 
+/// The daemon's HTTP client.
+///
+/// One for the whole process. A `reqwest::Client` carries a connection pool, a
+/// TLS configuration and a resolver, and building one per call threw all three
+/// away — a notification that fires on every finished torrent paid for a new
+/// TLS setup each time, and so did every block list retry. The per-call
+/// timeouts that used to be baked into each client are set on the request
+/// instead, which is where they belong: they differ per caller, the pool does
+/// not.
+pub fn http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent(concat!("redeluge/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .unwrap_or_default()
+    })
+}
+
 async fn fetch_country_database(core: &Core, settings: &countrydb::Settings, cache: &Path) {
     let (year, month) = current_year_and_month();
     let url = settings.resolved_url(year, month);
 
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(settings.timeout))
-        .build()
-    {
-        Ok(client) => client,
-        Err(err) => {
-            tracing::warn!(error = %err, "could not build the http client");
-            return;
-        }
-    };
-
     for attempt in 1..=settings.try_times.max(1) {
-        let last = match client.get(&url).send().await {
+        let last = match http_client()
+            .get(&url)
+            .timeout(Duration::from_secs(settings.timeout))
+            .send()
+            .await
+        {
             Ok(response) if response.status().is_success() => match response.bytes().await {
                 Ok(body) => {
                     install_country_database(core, cache, &body, &url).await;
@@ -881,11 +894,14 @@ async fn apply_tracker_rules(core: Arc<Core>) {
         if !settings.any_rule() {
             continue;
         }
+        // A label can forbid the removals below, and the label wins: see
+        // `label::Options::never_remove`.
+        let labels = label::Settings::from_config(setting(&core, "label").await.as_ref());
 
         let now = now();
         let work = match core
             .manager
-            .with(move |state| decide_tracker_work(state, &settings, now))
+            .with(move |state| decide_tracker_work(state, &settings, &labels, now))
             .await
         {
             Ok(work) => work,
@@ -1028,6 +1044,7 @@ struct TrackerRemoval {
 fn decide_tracker_work(
     state: &mut crate::manager::SessionState,
     settings: &tracker::Settings,
+    labels: &label::Settings,
     now: f64,
 ) -> TrackerWork {
     let mut work = TrackerWork::default();
@@ -1127,17 +1144,26 @@ fn decide_tracker_work(
         // Not while it is being moved, in this pass or already: removing a
         // torrent out from under libtorrent's own file copy is the one way to
         // end up with half of it in each place.
+        //
+        // And not when the torrent's label says so. The rule is the tracker's
+        // terms for a whole domain; the label is somebody naming exceptions by
+        // hand, which is the more specific statement of the two.
         if options.removes()
             && status.is_finished
             && !moving
             && tracker::due(finished_strictly, now, options.remove_after_hours)
         {
-            work.removals.push(TrackerRemoval {
-                id,
-                name: status.name.clone(),
-                host,
-                with_data: options.remove_data,
-            });
+            if labels.never_removes(&torrent.options.label) {
+                tracing::debug!(torrent = %id, label = %torrent.options.label,
+                    "a tracker rule is due to remove this, and its label says not to");
+            } else {
+                work.removals.push(TrackerRemoval {
+                    id,
+                    name: status.name.clone(),
+                    host,
+                    with_data: options.remove_data,
+                });
+            }
         }
     }
 
@@ -1435,10 +1461,22 @@ fn decide_stuck_removals(
             state.progress_marks.get(&status.info_hash),
         );
 
-        let rule = labels
+        let mut rule = labels
             .options(&label)
             .map(|options| options.stuck_rule())
             .unwrap_or_else(|| global.clone());
+
+        // The label's protection outranks this rule as well — including the
+        // daemon-wide one, which knows nothing about labels. Pausing rather
+        // than skipping: the torrent really has stopped getting anywhere, and
+        // a paused torrent can be looked at, where a deleted one cannot.
+        if labels.never_removes(&label) {
+            if let Some(rule) = rule.as_mut() {
+                if rule.action == stuck::Action::Remove {
+                    rule.action = stuck::Action::Pause;
+                }
+            }
+        }
 
         let takeable = !status.is_finished
             && !status.is_paused
@@ -1982,17 +2020,6 @@ async fn deliver(
     trigger: webhook::Trigger,
     notice: webhook::Notice,
 ) -> String {
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(settings.timeout))
-        .build()
-    {
-        Ok(client) => client,
-        Err(err) => {
-            tracing::warn!(error = %err, "could not build the http client");
-            return format!("could not build the http client: {err}");
-        }
-    };
-
     let mut sent = 0usize;
     let mut total = 0usize;
     let mut first_failure = None;
@@ -2003,7 +2030,7 @@ async fn deliver(
             continue;
         };
 
-        match post(&client, &delivery, settings.try_times).await {
+        match post(&delivery, settings.try_times, settings.timeout).await {
             Ok(()) => {
                 sent += 1;
                 tracing::info!(
@@ -2029,11 +2056,7 @@ async fn deliver(
 }
 
 /// One POST, retried, with the body a service actually rejects reported.
-async fn post(
-    client: &reqwest::Client,
-    delivery: &webhook::Delivery,
-    tries: u32,
-) -> Result<(), String> {
+async fn post(delivery: &webhook::Delivery, tries: u32, timeout: u64) -> Result<(), String> {
     let mut last = String::new();
     // Serialised here rather than through reqwest's `json`, which this build
     // does not carry: the client is compiled without its default features so
@@ -2044,7 +2067,9 @@ async fn post(
     };
 
     for attempt in 1..=tries.max(1) {
-        let mut request = client.post(&delivery.url);
+        let mut request = http_client()
+            .post(&delivery.url)
+            .timeout(Duration::from_secs(timeout));
         for (name, value) in &delivery.headers {
             request = request.header(name, value);
         }
@@ -2434,14 +2459,14 @@ async fn maintain_blocklist(core: Arc<Core>) {
 
 /// Fetches the list, retrying as the configuration says.
 async fn download(settings: &blocklist::Settings) -> Result<Vec<u8>, blocklist::Error> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(settings.timeout))
-        .build()
-        .map_err(|err| blocklist::Error::Download(err.to_string()))?;
-
     let mut last = String::from("no attempt was made");
     for attempt in 1..=settings.try_times.max(1) {
-        match client.get(&settings.url).send().await {
+        match http_client()
+            .get(&settings.url)
+            .timeout(Duration::from_secs(settings.timeout))
+            .send()
+            .await
+        {
             Ok(response) if response.status().is_success() => {
                 return response
                     .bytes()

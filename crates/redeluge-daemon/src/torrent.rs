@@ -277,6 +277,7 @@ impl Torrent {
             0,
             &crate::features::tracker::Settings::default(),
             &KeySet::all(),
+            false,
         )
     }
 
@@ -284,6 +285,10 @@ impl Torrent {
     ///
     /// Peers are a separate call into libtorrent and only one tab of the
     /// interface shows them, so the caller decides whether to pay for them.
+    ///
+    /// `protected` is whether this torrent's label forbids the daemon's own
+    /// removals: the removal countdown does not run for one that does, because
+    /// a countdown to nothing is worse than no countdown.
     #[allow(clippy::too_many_arguments)]
     pub fn status_with_peers(
         &self,
@@ -295,6 +300,7 @@ impl Torrent {
         idle_grace: u64,
         tracker_rules: &crate::features::tracker::Settings,
         keys: &KeySet,
+        protected: bool,
     ) -> BTreeMap<String, Value> {
         let state = self.state(status, session_paused);
         let mut out: BTreeMap<String, Value> = BTreeMap::new();
@@ -557,7 +563,7 @@ impl Torrent {
         // The conditions are the sweep's, and they have to stay the sweep's: a
         // countdown that reaches zero and is followed by nothing is worse than
         // no countdown, because it teaches you not to believe the next one.
-        let (move_at, remove_at) = tracker_countdowns(status, &host, tracker_rules);
+        let (move_at, remove_at) = tracker_countdowns(status, &host, tracker_rules, protected);
         put("tracker_move_at", Value::Float64(move_at));
         put("tracker_remove_at", Value::Float64(remove_at));
 
@@ -776,6 +782,7 @@ fn tracker_countdowns(
     status: &LtStatus,
     host: &str,
     rules: &crate::features::tracker::Settings,
+    protected: bool,
 ) -> (f64, f64) {
     use crate::features::tracker;
 
@@ -797,7 +804,10 @@ fn tracker_countdowns(
         0.0
     };
 
-    let remove_at = if options.removes() {
+    // A countdown that reaches zero and is followed by nothing teaches people
+    // not to believe the next one. A label that forbids removals is exactly
+    // such a nothing, so the countdown does not start.
+    let remove_at = if options.removes() && !protected {
         tracker::due_at(
             tracker::finished_at(status.completed_time, status.added_time, true),
             options.remove_after_hours,
@@ -1046,6 +1056,102 @@ mod file_tests {
         assert_eq!(progress[1], Value::Float64(0.0));
         assert_eq!(priorities.len(), 2);
         assert_eq!(priorities[0], Value::Int(4));
+    }
+}
+
+#[cfg(test)]
+mod countdown_tests {
+    use super::*;
+    use crate::features::tracker;
+
+    /// A torrent that finished an hour ago, announcing to one tracker.
+    fn finished() -> LtStatus {
+        LtStatus {
+            info_hash: "a".repeat(40),
+            name: "test".to_owned(),
+            save_path: "/downloads".to_owned(),
+            state: redeluge_libtorrent::TorrentState::Seeding,
+            progress: 1.0,
+            flags: 0,
+            download_rate: 0,
+            upload_rate: 0,
+            download_payload_rate: 0,
+            upload_payload_rate: 0,
+            num_peers: 0,
+            num_seeds: 0,
+            num_complete: 0,
+            num_incomplete: 0,
+            connect_candidates: 0,
+            total_done: 100,
+            total_wanted: 100,
+            total_wanted_done: 100,
+            total_payload_download: 100,
+            total_payload_upload: 0,
+            all_time_download: 100,
+            all_time_upload: 0,
+            active_time: 3600,
+            seeding_time: 3600,
+            time_since_download: 3600,
+            time_since_upload: 0,
+            added_time: 1_700_000_000,
+            completed_time: 1_700_000_000,
+            finished_time: 3600,
+            last_seen_complete: 0,
+            next_announce: 0,
+            distributed_copies: 0.0,
+            queue_position: 0,
+            seed_rank: 0,
+            storage_mode: 0,
+            is_finished: true,
+            is_seeding: true,
+            is_paused: false,
+            has_metadata: true,
+            moving_storage: false,
+            current_tracker: "udp://tracker.example.org:6969/announce".to_owned(),
+            error: None,
+            error_file: None,
+            num_pieces: 1,
+            piece_length: 100,
+            total_size: 100,
+            num_files: 1,
+        }
+    }
+
+    /// A tracker rule that moves and removes what it finds.
+    fn rules() -> tracker::Settings {
+        let json = serde_json::json!({
+            "trackers": {
+                "example.org": {
+                    "auto_move": true,
+                    "move_path": "/archive",
+                    "move_after_hours": 2.0,
+                    "auto_remove": true,
+                    "remove_after_hours": 4.0,
+                }
+            }
+        });
+        tracker::Settings::from_config(Some(&json)).sane()
+    }
+
+    #[test]
+    fn a_rule_that_removes_shows_a_countdown() {
+        let (move_at, remove_at) = tracker_countdowns(&finished(), "example.org", &rules(), false);
+        assert!(move_at > 0.0, "the move countdown should be running");
+        assert!(remove_at > 0.0, "the removal countdown should be running");
+    }
+
+    #[test]
+    fn a_protected_torrent_counts_down_to_nothing_so_it_does_not_count_down() {
+        // The label outranks the rule, so the removal is not going to happen.
+        // A countdown that reaches zero and is followed by nothing teaches
+        // people not to believe the next one.
+        let (move_at, remove_at) = tracker_countdowns(&finished(), "example.org", &rules(), true);
+        assert_eq!(
+            remove_at, 0.0,
+            "a removal that will not happen was announced"
+        );
+        // The move is not a removal: the label says nothing about it.
+        assert!(move_at > 0.0, "the label stopped a move it has no say over");
     }
 }
 

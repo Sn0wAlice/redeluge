@@ -63,32 +63,48 @@ impl CountryLookup {
         }
     }
 
+    /// The code and the English name for an address, in one lookup.
+    ///
+    /// Both together because every caller wants both: the code picks the flag
+    /// and the name is what a person reads beside it. They used to be two
+    /// calls, which was two searches of the database per peer — once per peer
+    /// per poll, for as long as the Peers tab is open. A database that has the
+    /// code and no name is normal, so the name can be absent on its own.
+    pub fn country_and_name_of(&self, address: IpAddr) -> (Option<String>, Option<String>) {
+        let Ok(found) = self.reader.lookup::<maxminddb::geoip2::Country>(address) else {
+            return (None, None);
+        };
+        let Some(country) = found.country else {
+            return (None, None);
+        };
+        let code = country.iso_code.map(str::to_owned);
+        let name = country
+            .names
+            .and_then(|names| names.get("en").map(|name| (*name).to_owned()));
+        (code, name)
+    }
+
     /// The two-letter country code for an address.
     pub fn country_of(&self, address: IpAddr) -> Option<String> {
-        let country: maxminddb::geoip2::Country = self.reader.lookup(address).ok()?;
-        country
-            .country
-            .and_then(|country| country.iso_code)
-            .map(str::to_owned)
+        self.country_and_name_of(address).0
     }
 
     /// The country's English name, for an address.
-    ///
-    /// Beside the code rather than instead of it: the code is what picks the
-    /// flag, and the name is what a person reads in the tooltip. A database
-    /// that has the code and no name is normal, so this can be absent on its
-    /// own.
     pub fn name_of(&self, address: IpAddr) -> Option<String> {
-        let country: maxminddb::geoip2::Country = self.reader.lookup(address).ok()?;
-        country
-            .country
-            .and_then(|country| country.names)
-            .and_then(|names| names.get("en").map(|name| (*name).to_owned()))
+        self.country_and_name_of(address).1
     }
 
     /// The name for an address written as text.
     pub fn name_of_text(&self, raw: &str) -> Option<String> {
         parse_peer_address(raw).and_then(|address| self.name_of(address))
+    }
+
+    /// Both, for an address written as text, in one lookup.
+    pub fn country_and_name_of_text(&self, raw: &str) -> (Option<String>, Option<String>) {
+        match parse_peer_address(raw) {
+            Some(address) => self.country_and_name_of(address),
+            None => (None, None),
+        }
     }
 
     /// The code for an address written as text, which is what a peer carries.

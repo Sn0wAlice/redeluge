@@ -601,6 +601,14 @@
             }, this);
             store.commitChanges();
 
+            // This is not only about order: it is what repaints the rows.
+            // `BufferView.doUpdate` renders a row only when it has not been
+            // rendered yet, so a record whose speed or progress changed does
+            // not repaint on its own — the full refresh that `sort` fires is
+            // what puts the new numbers on screen. Skipping it when nothing
+            // moved looks like an easy saving and freezes the grid instead;
+            // measured, it is about four milliseconds for five thousand rows,
+            // which is not worth being clever about.
             var sortState = store.getSortState();
             if (!sortState) return;
             store.sort(sortState.field, sortState.direction);

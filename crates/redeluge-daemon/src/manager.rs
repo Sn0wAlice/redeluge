@@ -99,6 +99,12 @@ pub struct SessionState {
     config_dir: PathBuf,
     /// Set when something changed that the state file does not yet reflect.
     dirty: bool,
+    /// The thread that puts state files on disk.
+    ///
+    /// This thread serialises, that one writes. Every call a client makes goes
+    /// through this thread, so a write that happens on it is a write every
+    /// client waits for.
+    writer: crate::statewriter::StateWriter,
 }
 
 impl SessionState {
@@ -124,6 +130,15 @@ impl SessionState {
         self.countries
             .as_ref()
             .and_then(|lookup| lookup.name_of_text(address))
+    }
+
+    /// Both at once, which is what the peer list wants: one search of the
+    /// database per peer rather than two.
+    pub fn country_and_name_of(&self, address: &str) -> (Option<String>, Option<String>) {
+        match self.countries.as_ref() {
+            Some(lookup) => lookup.country_and_name_of_text(address),
+            None => (None, None),
+        }
     }
 
     /// A torrent's tracker list, fetched only when the answer needs it.
@@ -210,8 +225,11 @@ impl SessionState {
     /// Without this a removed torrent comes back at the next restart.
     pub fn forget(&mut self, id: &str) {
         let state_dir = self.state_dir();
-        let _ = std::fs::remove_file(torrent_file_path(&state_dir, id));
-        let _ = std::fs::remove_file(state_dir.join("resume").join(format!("{id}.resume")));
+        // Through the writer, so a removal cannot overtake a write of the same
+        // file that is still queued.
+        self.writer.delete(torrent_file_path(&state_dir, id));
+        self.writer
+            .delete(state_dir.join("resume").join(format!("{id}.resume")));
         self.resume_data.remove(id);
         // Keyed by infohash, which comes back if the same torrent is added
         // again. Leaving the old mark behind would hand the new one a clock
@@ -237,26 +255,25 @@ impl SessionState {
         if !self.dirty {
             return Ok(());
         }
-        let dir = self.state_dir();
-        std::fs::create_dir_all(&dir)?;
-
         let options: Vec<&TorrentOptions> = self
             .torrents
             .values()
             .map(|torrent| &torrent.options)
             .collect();
-        let body = serde_json::to_vec_pretty(&serde_json::json!({
+        // Compact rather than pretty: this is a file the daemon writes and the
+        // daemon reads, and on a large library the indentation was most of it.
+        // `tools/migrate_state.py` and anything else that wants to look at it
+        // can pipe it through a formatter.
+        let body = serde_json::to_vec(&serde_json::json!({
             "version": 1,
             "torrents": options,
         }))?;
 
-        let path = dir.join("torrents.json");
-        let temporary = path.with_extension("tmp");
-        std::fs::write(&temporary, &body)?;
-        if path.exists() {
-            let _ = std::fs::rename(&path, path.with_extension("bak"));
-        }
-        std::fs::rename(&temporary, &path)?;
+        self.writer.write(crate::statewriter::Write {
+            path: self.state_dir().join("torrents.json"),
+            bytes: body,
+            keep_backup: true,
+        });
 
         self.dirty = false;
         Ok(())
@@ -271,17 +288,27 @@ impl SessionState {
             return Ok(0);
         }
         let dir = self.state_dir().join("resume");
-        std::fs::create_dir_all(&dir)?;
 
         let pending = std::mem::take(&mut self.resume_data);
         let count = pending.len();
         for (id, blob) in pending {
-            let path = dir.join(format!("{id}.resume"));
-            let temporary = path.with_extension("tmp");
-            std::fs::write(&temporary, &blob)?;
-            std::fs::rename(&temporary, &path)?;
+            // One file per torrent, so a restore of a thousand torrents is a
+            // thousand writes — which is exactly why they do not happen here.
+            self.writer.write(crate::statewriter::Write {
+                path: dir.join(format!("{id}.resume")),
+                bytes: blob,
+                keep_backup: false,
+            });
         }
         Ok(count)
+    }
+
+    /// Waits for everything queued to reach the disk.
+    ///
+    /// On the way out, and nowhere else: a shutdown that returns before the
+    /// state it just saved is written is a shutdown that loses it.
+    pub fn flush_writes(&self) {
+        self.writer.flush();
     }
 
     /// Reads a torrent's resume data, when there is any.
@@ -403,6 +430,7 @@ impl Manager {
             countries: None,
             config_dir,
             dirty: false,
+            writer: crate::statewriter::StateWriter::start(),
         };
 
         let manager = Self {
@@ -591,6 +619,8 @@ fn stop(state: &mut SessionState) {
     let _ = state.save_state();
     let _ = state.save_resume_data();
     state.save_peers();
+    // Queued, not written, until this returns.
+    state.flush_writes();
 }
 
 /// Pauses or removes torrents that have reached their share ratio.

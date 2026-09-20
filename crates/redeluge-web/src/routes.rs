@@ -248,9 +248,7 @@ async fn serve_asset(request: HttpRequest, state: web::Data<SharedState>) -> Htt
     match assets::get(relative) {
         Some(bytes) => HttpResponse::Ok()
             .insert_header((header::CONTENT_TYPE, assets::content_type(relative)))
-            // The assets are versioned with the binary, so a long cache is safe
-            // and saves the browser a few hundred requests per page load.
-            .insert_header((header::CACHE_CONTROL, "public, max-age=3600"))
+            .insert_header((header::CACHE_CONTROL, cache_control(request.query_string())))
             .body(bytes),
         // A path that looks like a file and names no asset is a 404. Answering
         // it with the page means the browser is handed HTML where it asked for
@@ -262,6 +260,28 @@ async fn serve_asset(request: HttpRequest, state: web::Data<SharedState>) -> Htt
             .body("not found"),
         // Anything else is a front-end route, and reloading one has to work.
         None => serve_index(request, state).await,
+    }
+}
+
+/// How long the browser may keep an asset.
+///
+/// Everything the page asks for carries `?v=<version>-<digest of every
+/// embedded asset>`, so any change to any asset changes every URL. A URL that
+/// can never answer differently is what `immutable` describes: the browser
+/// stops asking, which is about 370 KiB of revalidation saved on each reload,
+/// and an upgrade is still picked up immediately because the URLs move.
+///
+/// Without that parameter — the icons in the page head, anything typed by
+/// hand — an hour is as far as this will go, because then the URL really can
+/// start answering something else.
+fn cache_control(query: &str) -> &'static str {
+    let versioned = query
+        .split('&')
+        .any(|pair| pair.starts_with("v=") && pair.len() > 2);
+    if versioned {
+        "public, max-age=31536000, immutable"
+    } else {
+        "public, max-age=3600"
     }
 }
 
@@ -281,6 +301,28 @@ fn looks_like_a_file(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_versioned_asset_is_cached_for_good_and_an_unversioned_one_is_not() {
+        // The version carries a digest of every asset, so the URL changes
+        // whenever the file does. Getting this the wrong way round would pin a
+        // stale page in every browser that ever loaded it.
+        assert_eq!(
+            cache_control("v=1.8.0-e77ad0d6e2e7224c"),
+            "public, max-age=31536000, immutable"
+        );
+        assert_eq!(
+            cache_control("debug=true&v=1.8.0-e77ad0d6e2e7224c"),
+            "public, max-age=31536000, immutable"
+        );
+        for query in ["", "debug=true", "v=", "version=1.8.0"] {
+            assert_eq!(
+                cache_control(query),
+                "public, max-age=3600",
+                "{query:?} is not a versioned URL"
+            );
+        }
+    }
 
     #[test]
     fn a_name_becomes_a_filename_with_the_extension_on_it() {

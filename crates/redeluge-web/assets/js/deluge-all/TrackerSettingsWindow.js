@@ -197,6 +197,7 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
         this.setPreview(_('Looking at what is here...'));
         this.load();
         this.loadTorrents();
+        this.loadProtectedLabels();
     },
 
     /**
@@ -255,6 +256,45 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
                 scope: this,
             }
         );
+    },
+
+    /**
+     * The labels that refuse to have their torrents removed.
+     *
+     * A label outranks this window: a tracker rule that says "remove finished
+     * torrents" does not touch a torrent whose label says not to. The preview
+     * below has to say the same thing the daemon will do, or it is a number
+     * somebody will act on and then find was never true.
+     */
+    loadProtectedLabels: function () {
+        this.protectedLabels = {};
+        deluge.client.label.get_config({
+            success: function (config) {
+                var labels = (config && config['labels']) || {};
+                var protectedLabels = {};
+                for (var name in labels) {
+                    if (labels[name] && labels[name]['never_remove']) {
+                        protectedLabels[name] = true;
+                    }
+                }
+                this.protectedLabels = protectedLabels;
+                this.describe();
+            },
+            failure: function () {
+                // No label register, so nothing is protected as far as this
+                // window knows. The daemon still decides.
+                this.protectedLabels = {};
+            },
+            scope: this,
+        });
+    },
+
+    /**
+     * Whether this torrent's label refuses removal.
+     */
+    isProtected: function (torrent) {
+        var label = String(torrent['label'] || '');
+        return !!(this.protectedLabels || {})[label];
     },
 
     setPreview: function (html) {
@@ -337,9 +377,14 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
     describeRemoval: function (finished, options, now) {
         var due = [];
         var freed = 0;
+        var kept = 0;
         Ext.each(
             finished,
             function (torrent) {
+                if (this.isProtected(torrent)) {
+                    kept++;
+                    return;
+                }
                 var from = this.finishedAt(torrent, true);
                 if (from <= 0) return;
                 due.push(from + options['remove_after_hours'] * 3600);
@@ -348,7 +393,21 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
             this
         );
 
+        var protectedNote = kept
+            ? ' ' +
+              String.format(
+                  _('{0} are kept by their label, which outranks this rule.'),
+                  kept
+              )
+            : '';
+
         if (!due.length) {
+            if (kept) {
+                return String.format(
+                    _('Nothing would be removed: {0} are kept by their label, which outranks this rule.'),
+                    kept
+                );
+            }
             return _(
                 'Nothing would be removed: none of the finished ones has a completion time the daemon saw.'
             );
@@ -367,7 +426,7 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
                   _('{0} would be removed, their files kept'),
                   due.length
               );
-        return fate + ', ' + this.when(due[0], now) + '.';
+        return fate + ', ' + this.when(due[0], now) + '.' + protectedNote;
     },
 
     describeMove: function (finished, options, now) {

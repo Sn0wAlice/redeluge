@@ -4,7 +4,7 @@ openapi: 3.1.0
 
 info:
   title: redeluge JSON-RPC API
-  version: "1.7.0"
+  version: "1.8.0"
   summary: The HTTP API of the redeluge Web UI server.
   description:
     |-

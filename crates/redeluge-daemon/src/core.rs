@@ -2087,14 +2087,9 @@ impl Rpc for Core {
 async fn fetch(url: &str) -> Result<Vec<u8>, RpcError> {
     const MAX: usize = 16 * 1024 * 1024;
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .user_agent(concat!("redeluge/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
-
-    let response = client
+    let response = crate::features::http_client()
         .get(url)
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .map_err(|err| RpcError::new("HTTPError", err.to_string()))?;
@@ -2639,6 +2634,9 @@ impl Core {
     ) -> Result<BTreeMap<String, Value>, RpcError> {
         let grace = self.idle_grace().await;
         let rules = self.tracker_rules().await;
+        // A label can forbid the removals a tracker rule schedules, and the
+        // countdown this reports has to agree with what will happen.
+        let labels = self.labels().await;
         let wanted = id.to_owned();
         let keys = crate::torrent::KeySet::of(keys);
         let status = self
@@ -2663,10 +2661,8 @@ impl Core {
                         .unwrap_or_default()
                         .into_iter()
                         .map(|peer| {
-                            let country = crate::torrent::PeerCountry {
-                                code: state.country_of(&peer.ip),
-                                name: state.country_name_of(&peer.ip),
-                            };
+                            let (code, name) = state.country_and_name_of(&peer.ip);
+                            let country = crate::torrent::PeerCountry { code, name };
                             (peer, country)
                         })
                         .collect()
@@ -2674,6 +2670,7 @@ impl Core {
                     Vec::new()
                 };
                 let idle_since = state.idle_since.get(&wanted).copied().unwrap_or_default();
+                let protected = labels.never_removes(&torrent.options.label);
                 let mut out = torrent.status_with_peers(
                     &status,
                     state.session_paused,
@@ -2683,6 +2680,7 @@ impl Core {
                     grace,
                     &rules,
                     &keys,
+                    protected,
                 );
                 if let Some((entries, progress, priorities)) = file_list {
                     crate::torrent::put_files(&mut out, &entries, &progress, &priorities);
@@ -2702,12 +2700,13 @@ impl Core {
     ) -> Result<Value, RpcError> {
         let grace = self.idle_grace().await;
         let rules = self.tracker_rules().await;
+        let labels = self.labels().await;
         let wanted_keys = crate::torrent::KeySet::of(&keys);
         let all = self
             .manager
             .with(move |state| {
                 let statuses = state.session.all_torrent_status();
-                status_rows(state, &statuses, grace, &rules, &wanted_keys)
+                status_rows(state, &statuses, grace, &rules, &labels, &wanted_keys)
             })
             .await
             .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
@@ -2748,6 +2747,7 @@ impl Core {
     ) -> Result<Value, RpcError> {
         let grace = self.idle_grace().await;
         let rules = self.tracker_rules().await;
+        let labels = self.labels().await;
         let wanted_keys = crate::torrent::KeySet::of(&keys);
 
         let (rows, filters, counters, rates) = self
@@ -2758,7 +2758,7 @@ impl Core {
                 // returns, so what goes out now is the previous call's.
                 state.session.post_session_stats();
                 let statuses = state.session.all_torrent_status();
-                let rows = status_rows(state, &statuses, grace, &rules, &wanted_keys);
+                let rows = status_rows(state, &statuses, grace, &rules, &labels, &wanted_keys);
                 let filters = filter_rows(state, &statuses);
                 (
                     rows,
@@ -3006,6 +3006,7 @@ fn status_rows(
     statuses: &[redeluge_libtorrent::TorrentStatus],
     grace: u64,
     rules: &crate::features::tracker::Settings,
+    labels: &crate::features::label::Settings,
     keys: &crate::torrent::KeySet,
 ) -> Vec<(String, BTreeMap<String, Value>)> {
     let session_paused = state.session_paused;
@@ -3025,6 +3026,7 @@ fn status_rows(
         let Some(torrent) = state.torrents.get(&status.info_hash) else {
             continue;
         };
+        let protected = labels.never_removes(&torrent.options.label);
         out.push((
             status.info_hash.clone(),
             torrent.status_with_peers(
@@ -3036,6 +3038,7 @@ fn status_rows(
                 grace,
                 rules,
                 keys,
+                protected,
             ),
         ));
     }

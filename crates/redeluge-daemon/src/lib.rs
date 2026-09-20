@@ -23,5 +23,6 @@ pub mod peers;
 pub mod prefs;
 pub mod rpc;
 pub mod state;
+pub mod statewriter;
 pub mod torrent;
 pub mod trackerinfo;

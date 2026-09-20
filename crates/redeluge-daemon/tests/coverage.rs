@@ -236,6 +236,77 @@ async fn a_label_exists_before_any_torrent_carries_it() {
     assert_eq!(labels, Value::List(Vec::new()));
 }
 
+/// The protection a label can carry reaches the daemon and comes back.
+///
+/// This is the path the Web UI uses — `label.set_options` then
+/// `label.get_options` — and a setting that does not survive it is a switch
+/// that turns itself off when the window is closed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_label_can_refuse_to_have_its_torrents_removed() {
+    let (core, _dir) = daemon().await;
+
+    core.call(
+        &admin(),
+        "label.add",
+        vec![Value::Str("keep".to_owned())],
+        Vec::new(),
+    )
+    .await
+    .expect("answered");
+
+    core.call(
+        &admin(),
+        "label.set_options",
+        vec![
+            Value::Str("keep".to_owned()),
+            Value::Dict(vec![(
+                Value::Str("never_remove".to_owned()),
+                Value::Bool(true),
+            )]),
+        ],
+        Vec::new(),
+    )
+    .await
+    .expect("answered");
+
+    let options = core
+        .call(
+            &admin(),
+            "label.get_options",
+            vec![Value::Str("keep".to_owned())],
+            Vec::new(),
+        )
+        .await
+        .expect("answered");
+
+    assert_eq!(
+        options.get("never_remove"),
+        Some(&Value::Bool(true)),
+        "the label did not keep its protection"
+    );
+
+    // And a label that was never told anything is not protected by accident:
+    // the rules ask this question about every torrent they are due to act on.
+    core.call(
+        &admin(),
+        "label.add",
+        vec![Value::Str("ordinary".to_owned())],
+        Vec::new(),
+    )
+    .await
+    .expect("answered");
+    let ordinary = core
+        .call(
+            &admin(),
+            "label.get_options",
+            vec![Value::Str("ordinary".to_owned())],
+            Vec::new(),
+        )
+        .await
+        .expect("answered");
+    assert_eq!(ordinary.get("never_remove"), Some(&Value::Bool(false)));
+}
+
 /// A label name is cleaned the same way wherever it arrives from.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_label_is_normalised_on_the_way_in() {

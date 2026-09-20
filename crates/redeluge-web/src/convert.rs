@@ -74,6 +74,40 @@ pub fn rencode_to_json(value: &Value) -> Json {
     }
 }
 
+/// Daemon to browser, taking the value with it.
+///
+/// The same conversion as [`rencode_to_json`], for a caller that owns what it
+/// is converting — which is every caller on the polling path. A status answer
+/// for a large library is mostly strings, and copying each one to build the
+/// JSON and then dropping the original was a second allocation per name, path,
+/// label and tracker in the library, twice a second.
+pub fn rencode_into_json(value: Value) -> Json {
+    match value {
+        Value::None => Json::Null,
+        Value::Bool(value) => Json::Bool(value),
+        Value::Int(number) => Json::Number(Number::from(number)),
+        Value::BigInt(text) => Json::String(text),
+        Value::Float32(number) => float_to_json(f64::from(number)),
+        Value::Float64(number) => float_to_json(number),
+        Value::Str(text) => Json::String(text),
+        Value::Bytes(raw) => Json::String(String::from_utf8_lossy(&raw).into_owned()),
+        Value::List(items) => Json::Array(items.into_iter().map(rencode_into_json).collect()),
+        Value::Dict(entries) => {
+            let mut map = Map::with_capacity(entries.len());
+            for (key, value) in entries {
+                // The key is taken whole when it is already a string, which is
+                // what every key the daemon sends is.
+                let key = match key {
+                    Value::Str(text) => text,
+                    other => key_to_string(&other),
+                };
+                map.insert(key, rencode_into_json(value));
+            }
+            Json::Object(map)
+        }
+    }
+}
+
 /// JSON has no NaN or infinity, and a bare `null` in a numeric field breaks the
 /// Web UI's arithmetic. Those become 0, which is what the field means when the
 /// daemon has nothing to report.

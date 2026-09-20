@@ -162,6 +162,29 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
             style: 'display: block; margin: 2px 0 0 18px; color: #e6381f;',
         });
 
+        // Not a group either: it governs nothing, it refuses. A switch with
+        // fields under it would suggest there is something to configure, and
+        // there is not — the whole setting is the one line.
+        var keep = this.form.add({
+            xtype: 'fieldset',
+            cls: 'x-deluge-option-group',
+            title: _('Removal'),
+            autoHeight: true,
+            labelWidth: 170,
+        });
+        this.fields.never_remove = keep.add({
+            xtype: 'checkbox',
+            hideLabel: true,
+            boxLabel: _('Never remove these torrents automatically'),
+        });
+        keep.add({
+            xtype: 'label',
+            text: _(
+                'The label wins over a tracker rule. A tracker rule is the terms of a whole domain — "remove finished torrents after a week" — and this is you naming the exceptions, so when the two disagree nothing is removed. It covers the tracker rule and the rule for downloads that never start, which pauses them instead, and it turns this label’s own Remove at ratio off. It does not cover pressing Remove: that is you saying so about one torrent, now.'
+            ),
+            style: 'display: block; margin: 2px 0 0 0; opacity: 0.72;',
+        });
+
         // The last box is not a group: it has no switch, because it is the
         // one option here that does nothing to the torrents. It decides what
         // the list shows, so it says so in a legend rather than in a switch.

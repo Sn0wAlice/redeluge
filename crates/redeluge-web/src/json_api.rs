@@ -23,7 +23,7 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value as Json};
 
 use crate::auth::hash_password;
-use crate::convert::{json_to_rencode, rencode_to_json};
+use crate::convert::{json_to_rencode, rencode_into_json, rencode_to_json};
 use crate::state::{DaemonConnection, SharedState};
 
 /// Authorisation levels, as the daemon numbers them.
@@ -401,7 +401,7 @@ async fn forward(method: &str, params: &[Json], state: &SharedState) -> ApiResul
 
     let args: Vec<Value> = params.iter().map(json_to_rencode).collect();
     match connection.client.call(method, args).await {
-        Ok(value) => Ok(rencode_to_json(&value)),
+        Ok(value) => Ok(rencode_into_json(value)),
         // The daemon's traceback is deliberately not forwarded: it names paths
         // and versions, and the browser has no use for it.
         Err(redeluge_rpc::client::Error::Remote(failure)) => {
@@ -780,14 +780,11 @@ async fn web_update_ui(call: &JsonRequest, state: &SharedState) -> ApiResult {
 
     info.insert(
         "torrents".to_owned(),
-        torrents.as_ref().map(rencode_to_json).unwrap_or(Json::Null),
+        torrents.map(rencode_into_json).unwrap_or(Json::Null),
     );
     info.insert(
         "filters".to_owned(),
-        filter_tree
-            .as_ref()
-            .map(rencode_to_json)
-            .unwrap_or(Json::Null),
+        filter_tree.map(rencode_into_json).unwrap_or(Json::Null),
     );
     info.insert("stats".to_owned(), Json::Object(stats));
     Ok(Json::Object(info))

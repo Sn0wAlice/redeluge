@@ -8,7 +8,25 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
-## [1.7.0] — 2026-09-20
+## [1.8.0] — 2026-09-20
+
+### Added
+
+- **A label can refuse to have its torrents removed**, and it outranks the
+  tracker rules. A tracker rule is the terms of a whole domain — remove
+  finished torrents after a week — and a label is somebody naming the
+  exceptions by hand, so when the two disagree the label wins and nothing is
+  removed. The switch is under Removal in a label's settings.
+  - It covers every removal the daemon decides on its own: the tracker rule,
+    which skips those torrents, and the rule for downloads that never start,
+    which pauses them instead of deleting them. It also turns that label's own
+    *Remove at ratio* off, because a label that says both is contradicting
+    itself and the half that keeps the torrent is the half to obey.
+  - It does not cover pressing Remove. That is a person saying so about one
+    torrent, now, and a setting is not an argument against it.
+  - The countdown a protected torrent shows in the list stops at nothing
+    rather than counting down to a removal that will not happen, and the
+    preview in the tracker window says how many its labels are keeping.
 
 ### Changed
 
@@ -38,12 +56,42 @@ may refuse the new one.
     torrent and every torrent in the first minute after a restart paid. The
     first tracker of each torrent is remembered now, and forgotten when the
     trackers are replaced or a magnet's metadata brings its own.
+- **State files are written off the session thread.** The torrent list and the
+  resume blobs were written by the thread that owns the libtorrent session —
+  the one that answers every call — so every client waited on the disk while a
+  save happened, once a minute for the list and every ten seconds for the
+  resume data, one file per torrent. That thread serialises now and a writer
+  thread does the writing, in order, with the removals going through the same
+  queue so a delete cannot overtake a write of the same file. A shutdown waits
+  for the queue, because a clean stop that loses the state it just saved is
+  worse than a slow one. The list is written compactly rather than pretty,
+  which on a large library was most of the file.
+- **One HTTP client for the daemon** instead of one per call. A notification
+  built a fresh `reqwest::Client` — connection pool, TLS configuration and
+  resolver — for every message it sent, and so did every block list retry and
+  every country database fetch. The per-call timeouts moved onto the requests,
+  where they belong.
+- **One GeoIP lookup per peer** rather than two, for the flag and the name
+  beside it. That was two searches of the database per peer per poll for as
+  long as the Peers tab is open.
+- **Assets are cached for good.** Every URL the page asks for already carries a
+  digest of every embedded asset, so it can never answer differently: it is
+  served `immutable` now instead of an hour, which is about 370 KiB the browser
+  stops re-fetching on each reload. A URL without that parameter still gets the
+  hour.
+- The daemon's answers are converted to JSON by moving rather than by copying,
+  which on a poll of a large library is a second allocation saved for every
+  name, path, label and tracker in it.
 - **`redeluge.update_ui`**, which answers a torrent list, the sidebar's counts
   and the session totals from one walk of the library. The Web UI asked for
   those as three calls, and the daemon answers one call at a time per
   connection. It asks once now, and falls back to the three against a daemon
   that does not have it — `core.get_torrents_status`, `core.get_filter_tree`
   and `core.get_session_status` are unchanged and still answer on their own.
+
+## [1.7.0] — 2026-09-20
+
+### Changed
 
 - **Every delay is entered as days and hours**, rather than as a number of
   hours alone: the two tracker rules that wait before moving or removing a

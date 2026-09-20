@@ -105,6 +105,27 @@ pub struct Options {
     #[serde(default = "yes")]
     pub stuck_remove_data: bool,
 
+    /// Never let a rule of the daemon's take these torrents away.
+    ///
+    /// A label outranks a tracker. A tracker rule says what a tracker's terms
+    /// are — "finished torrents go after a week" — and it is set for a whole
+    /// domain; a label is somebody naming the exceptions by hand, torrent by
+    /// torrent, and the more specific statement is the one that means
+    /// something. So when a tracker rule is due to remove a torrent and its
+    /// label says not to, nothing is removed.
+    ///
+    /// It covers every removal the daemon decides on its own: the tracker
+    /// rule, and the stuck rule, which falls back to pausing rather than
+    /// deleting. It also turns this label's own `remove_at_ratio` off, because
+    /// a label that says both is a label contradicting itself and the safe
+    /// half wins.
+    ///
+    /// What it does not cover is somebody pressing Remove. That is a person
+    /// saying so about this torrent, now, and a setting is not an argument
+    /// against it.
+    #[serde(default)]
+    pub never_remove: bool,
+
     /// Keep these torrents out of the list until somebody asks for them.
     ///
     /// Not something the label does to its torrents: nothing is paused, moved
@@ -163,6 +184,7 @@ impl Default for Options {
             stuck_action: pause(),
             stuck_label: String::new(),
             stuck_remove_data: true,
+            never_remove: false,
             hide_by_default: false,
             auto_add: false,
             auto_add_trackers: Vec::new(),
@@ -201,7 +223,14 @@ impl Options {
             out.push(("auto_managed".into(), Json::Bool(self.is_auto_managed)));
             out.push(("stop_at_ratio".into(), Json::Bool(self.stop_at_ratio)));
             out.push(("stop_ratio".into(), json_number(self.stop_ratio)));
-            out.push(("remove_at_ratio".into(), Json::Bool(self.remove_at_ratio)));
+            // The protection wins over this label's own ratio rule: a label
+            // that says "never remove these" and "remove these at a ratio" is
+            // contradicting itself, and the half that keeps the torrent is the
+            // half to obey.
+            out.push((
+                "remove_at_ratio".into(),
+                Json::Bool(self.remove_at_ratio && !self.never_remove),
+            ));
         }
 
         if self.apply_move_completed {
@@ -213,6 +242,11 @@ impl Options {
         }
 
         out
+    }
+
+    /// Whether a rule of the daemon's may remove these torrents.
+    pub fn may_remove(&self) -> bool {
+        !self.never_remove
     }
 
     /// Whether this label throws away downloads that never start.
@@ -303,6 +337,16 @@ impl Settings {
         self.labels.get(id)
     }
 
+    /// Whether this label forbids the daemon's own removals.
+    ///
+    /// A torrent with no label, or one whose label the register does not know,
+    /// is not protected: the protection is something somebody turned on for a
+    /// label by name.
+    pub fn never_removes(&self, label: &str) -> bool {
+        self.options(label)
+            .is_some_and(|options| options.never_remove)
+    }
+
     /// Whether any label at all throws away downloads that never start.
     ///
     /// Checked before the sweep walks the library, because nothing configured
@@ -326,6 +370,83 @@ impl Settings {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_label_that_refuses_removal_says_so_by_name() {
+        // Only a label the register knows and that has the switch on. A
+        // torrent with no label, or one under a label nobody configured, is
+        // not protected by accident.
+        let mut settings = Settings::default();
+        settings.add("keep");
+        settings.add("ordinary");
+        settings
+            .labels
+            .get_mut("keep")
+            .expect("the label")
+            .never_remove = true;
+
+        assert!(settings.never_removes("keep"));
+        assert!(!settings.never_removes("ordinary"));
+        assert!(!settings.never_removes(""));
+        assert!(!settings.never_removes("a label that does not exist"));
+    }
+
+    #[test]
+    fn a_label_that_refuses_removal_turns_its_own_ratio_rule_off() {
+        // Both switches on is a label contradicting itself. The half that
+        // keeps the torrent is the half to obey, and it has to be applied
+        // where the torrent options are built, because the share-ratio rule
+        // reads those and nothing else.
+        let options = Options {
+            apply_queue: true,
+            stop_at_ratio: true,
+            remove_at_ratio: true,
+            never_remove: true,
+            ..Options::default()
+        };
+        let applied = options.to_torrent_options();
+        let removes = applied
+            .iter()
+            .find(|(key, _)| key == "remove_at_ratio")
+            .map(|(_, value)| value.clone());
+        assert_eq!(removes, Some(Json::Bool(false)));
+        // And the rest of the group is untouched: this is not an excuse to
+        // stop seeding to the ratio that was asked for.
+        assert!(applied
+            .iter()
+            .any(|(key, value)| key == "stop_at_ratio" && *value == Json::Bool(true)));
+    }
+
+    #[test]
+    fn a_label_that_allows_removal_keeps_its_ratio_rule() {
+        let options = Options {
+            apply_queue: true,
+            remove_at_ratio: true,
+            ..Options::default()
+        };
+        assert!(options
+            .to_torrent_options()
+            .iter()
+            .any(|(key, value)| key == "remove_at_ratio" && *value == Json::Bool(true)));
+    }
+
+    #[test]
+    fn the_protection_survives_a_round_trip_through_the_config() {
+        // It lives under the `label` key of core.conf like everything else
+        // here, and a setting that is written and not read back is a setting
+        // that turns itself off on the next restart.
+        let mut settings = Settings::default();
+        settings.add("keep");
+        settings
+            .labels
+            .get_mut("keep")
+            .expect("the label")
+            .never_remove = true;
+
+        let stored = settings.to_json();
+        let read = Settings::from_config(Some(&stored));
+        assert!(read.never_removes("keep"));
+    }
 
     #[test]
     fn a_label_with_no_switches_on_imposes_nothing() {
