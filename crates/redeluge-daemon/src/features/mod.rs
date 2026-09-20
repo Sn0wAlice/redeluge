@@ -1040,10 +1040,7 @@ fn decide_tracker_work(
         // The sidebar's grouping, so a rule applies to the row somebody set it
         // on. The two have to be the same function or the rule silently never
         // matches.
-        let trackers = state
-            .session
-            .trackers(&status.info_hash)
-            .unwrap_or_default();
+        let trackers = state.tracker_list(&status, false);
         let announced = crate::torrent::current_tracker(&status.current_tracker, &trackers);
         let host = crate::torrent::tracker_host(&announced);
 
@@ -1622,10 +1619,7 @@ fn held_back_by(
     state: &mut crate::manager::SessionState,
     health: &std::collections::BTreeMap<String, String>,
 ) -> Option<String> {
-    let trackers = state
-        .session
-        .trackers(&status.info_hash)
-        .unwrap_or_default();
+    let trackers = state.tracker_list(status, false);
     let announced = crate::torrent::current_tracker(&status.current_tracker, &trackers);
     let host = crate::torrent::tracker_host(&announced);
     if host.is_empty() {
@@ -1934,7 +1928,7 @@ async fn describe(core: &Core, id: &str, trigger: webhook::Trigger) -> Option<we
                 }
             }
 
-            let trackers = state.session.trackers(&id).unwrap_or_default();
+            let trackers = state.tracker_list(&status, false);
             let current = crate::torrent::current_tracker(&status.current_tracker, &trackers);
 
             let notice = webhook::Notice {

@@ -12,6 +12,31 @@ may refuse the new one.
 
 ### Changed
 
+- **A poll costs a third of what it did.** Measured on a library of 400
+  torrents: one refresh of the Web UI took 127 ms of the daemon's time and now
+  takes 36 ms, and the daemon's background cost with nobody watching fell from
+  16% of a core to 4%. Four things were paid for and never used:
+  - libtorrent was asked for the piece map of every torrent on every status
+    call — one entry per piece, copied for a sweep four times a second, for
+    every rule's pass and for every poll. Nothing read it. The one place that
+    needs a piece map, the peer list's "useful pieces", asks for it itself.
+  - every status was built whole, about ninety keys, and then filtered down to
+    the thirty-five a client asked for. It is built to the keys now.
+  - the filtered keys were copied out of the status rather than taken out of
+    it, so every name, path and tracker was allocated twice per poll.
+  - a torrent's tracker list was fetched from libtorrent for every torrent in
+    every sweep, to fall back on when nothing had been announced to yet. It is
+    fetched when that fallback is needed, or when the `trackers` key was asked
+    for.
+  - every torrent's status came from one call per handle, each taking
+    libtorrent's session lock; they come from one call for the session now.
+- **`redeluge.update_ui`**, which answers a torrent list, the sidebar's counts
+  and the session totals from one walk of the library. The Web UI asked for
+  those as three calls, and the daemon answers one call at a time per
+  connection. It asks once now, and falls back to the three against a daemon
+  that does not have it — `core.get_torrents_status`, `core.get_filter_tree`
+  and `core.get_session_status` are unchanged and still answer on their own.
+
 - **Every delay is entered as days and hours**, rather than as a number of
   hours alone: the two tracker rules that wait before moving or removing a
   torrent, the one that relabels it, and the rule for downloads that never

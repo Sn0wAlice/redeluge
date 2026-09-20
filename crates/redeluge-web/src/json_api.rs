@@ -411,6 +411,41 @@ async fn forward(method: &str, params: &[Json], state: &SharedState) -> ApiResul
     }
 }
 
+/// Whether this daemon can answer a whole poll in one call.
+///
+/// Asked once per connection and remembered on it: `daemon.authorized_call`
+/// answers false for a method the daemon does not have, which is exactly the
+/// question, and it is one round trip rather than one per poll. A daemon that
+/// is not this fork, or is an older build of it, says no and keeps the three
+/// calls it does know.
+async fn answers_combined_poll(state: &SharedState) -> bool {
+    let known = {
+        let guard = state.daemon.read().await;
+        match guard.as_ref() {
+            Some(daemon) => daemon.combined_poll.known(),
+            None => return false,
+        }
+    };
+    if let Some(answer) = known {
+        return answer;
+    }
+
+    // Asked without the read guard held: `call_daemon` takes its own.
+    let answers = matches!(
+        call_daemon(
+            "daemon.authorized_call",
+            vec![Value::Str("redeluge.update_ui".to_owned())],
+            state,
+        )
+        .await,
+        Some(Value::Bool(true))
+    );
+    if let Some(daemon) = state.daemon.read().await.as_ref() {
+        daemon.combined_poll.set(answers);
+    }
+    answers
+}
+
 pub async fn call_daemon(method: &str, args: Vec<Value>, state: &SharedState) -> Option<Value> {
     let guard = state.daemon.read().await;
     let connection = guard.as_ref()?;
@@ -485,6 +520,7 @@ pub async fn connect_to(host_id: &str, state: &SharedState) -> Result<(), String
     *state.daemon.write().await = Some(DaemonConnection {
         host_id: host.id.clone(),
         client,
+        combined_poll: Default::default(),
     });
     // Another daemon has another address, another disk and other limits.
     state.slow_stats.lock().await.clear();
@@ -592,15 +628,6 @@ async fn web_update_ui(call: &JsonRequest, state: &SharedState) -> ApiResult {
         return Ok(Json::Object(info));
     }
 
-    let torrents = call_daemon(
-        "core.get_torrents_status",
-        vec![json_to_rencode(&filters), json_to_rencode(&keys)],
-        state,
-    )
-    .await;
-
-    let filter_tree = call_daemon("core.get_filter_tree", vec![], state).await;
-
     let wanted = Value::List(
         [
             "peer.num_peers_connected",
@@ -615,7 +642,45 @@ async fn web_update_ui(call: &JsonRequest, state: &SharedState) -> ApiResult {
         .map(|name| Value::Str(name.to_owned()))
         .collect(),
     );
-    let session = call_daemon("core.get_session_status", vec![wanted], state).await;
+
+    // One call where this daemon answers it. The three below are what Deluge's
+    // own server does, and they still run against a daemon that does not know
+    // the combined one — but each of the three walks every torrent in the
+    // session, and the daemon answers one call at a time per connection, so a
+    // poll cost three walks and three round trips for one refresh.
+    let combined = if answers_combined_poll(state).await {
+        call_daemon(
+            "redeluge.update_ui",
+            vec![
+                json_to_rencode(&keys),
+                json_to_rencode(&filters),
+                wanted.clone(),
+            ],
+            state,
+        )
+        .await
+    } else {
+        None
+    };
+
+    let (torrents, filter_tree, session) = match combined {
+        Some(answer) => (
+            answer.get("torrents").cloned(),
+            answer.get("filters").cloned(),
+            answer.get("stats").cloned(),
+        ),
+        None => {
+            let torrents = call_daemon(
+                "core.get_torrents_status",
+                vec![json_to_rencode(&filters), json_to_rencode(&keys)],
+                state,
+            )
+            .await;
+            let filter_tree = call_daemon("core.get_filter_tree", vec![], state).await;
+            let session = call_daemon("core.get_session_status", vec![wanted], state).await;
+            (torrents, filter_tree, session)
+        }
+    };
 
     if let Some(session) = session.as_ref() {
         let number = |key: &str| session.get(key).map(rencode_to_json).unwrap_or(json!(0));

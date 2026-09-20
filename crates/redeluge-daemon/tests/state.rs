@@ -53,7 +53,6 @@ fn status() -> LtStatus {
         current_tracker: String::new(),
         error: None,
         error_file: None,
-        pieces: Vec::new(),
         num_pieces: 0,
         piece_length: 0,
         total_size: 0,

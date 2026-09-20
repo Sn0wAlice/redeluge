@@ -367,6 +367,30 @@ fn the_bundle_carries_a_page_for_each_feature() {
 }
 
 #[test]
+fn a_daemon_is_asked_once_whether_it_can_answer_a_whole_poll() {
+    // The Web UI asks `daemon.authorized_call` once per connection and
+    // remembers the answer on the connection: a daemon that is not this fork
+    // does not have `redeluge.update_ui`, and asking it every two seconds
+    // would cost the round trip the combined call exists to save.
+    use redeluge_web::state::CombinedPoll;
+
+    let fresh = CombinedPoll::default();
+    assert_eq!(fresh.known(), None, "nothing has been asked yet");
+
+    fresh.set(true);
+    assert_eq!(fresh.known(), Some(true));
+
+    let older_daemon = CombinedPoll::default();
+    older_daemon.set(false);
+    assert_eq!(
+        older_daemon.known(),
+        Some(false),
+        "a daemon that said no must stay a no, or the poll pays for the ask \
+         every time round"
+    );
+}
+
+#[test]
 fn every_delay_is_entered_as_days_and_hours() {
     // The field is registered in one file and asked for by xtype in three
     // others, and the bundle is built from a directory listing: a file that

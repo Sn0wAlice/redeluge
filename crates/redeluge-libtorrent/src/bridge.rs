@@ -220,8 +220,6 @@ pub mod ffi {
         /// The file the error is about, when the error names one.
         error_file: String,
 
-        /// One bool per piece, empty when there is no metadata yet.
-        pieces: Vec<u8>,
         num_pieces: i32,
         piece_length: i32,
         total_size: i64,

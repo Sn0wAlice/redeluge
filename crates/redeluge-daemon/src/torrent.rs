@@ -203,6 +203,36 @@ pub struct Torrent {
     pub content_id: Option<String>,
 }
 
+/// Which status keys a caller asked for.
+///
+/// `core.get_torrents_status` takes a list of keys and every client sends one:
+/// the Web UI's grid asks for about thirty-five of the ninety this builds. The
+/// other fifty-five were built, allocated, put in a map and dropped by the
+/// filter on the way out, once per torrent per poll. This is consulted before
+/// each one is inserted, so what nobody asked for is never built.
+///
+/// Built once per call rather than once per torrent: the set is the same for
+/// every torrent in the answer.
+#[derive(Debug, Default)]
+pub struct KeySet(Option<std::collections::HashSet<String>>);
+
+impl KeySet {
+    /// Every key, which is what a client that names none is asking for.
+    pub fn all() -> Self {
+        Self(None)
+    }
+
+    /// The keys a client named, or every key when it named none.
+    pub fn of(keys: &Option<Vec<String>>) -> Self {
+        Self(keys.as_ref().map(|keys| keys.iter().cloned().collect()))
+    }
+
+    /// Whether this key is worth building.
+    pub fn wants(&self, key: &str) -> bool {
+        self.0.as_ref().is_none_or(|keys| keys.contains(key))
+    }
+}
+
 impl Torrent {
     pub fn new(id: String, options: TorrentOptions) -> Self {
         Self {
@@ -246,6 +276,7 @@ impl Torrent {
             0.0,
             0,
             &crate::features::tracker::Settings::default(),
+            &KeySet::all(),
         )
     }
 
@@ -263,30 +294,46 @@ impl Torrent {
         idle_since: f64,
         idle_grace: u64,
         tracker_rules: &crate::features::tracker::Settings,
+        keys: &KeySet,
     ) -> BTreeMap<String, Value> {
         let state = self.state(status, session_paused);
         let mut out: BTreeMap<String, Value> = BTreeMap::new();
 
+        // A key nobody asked for is not inserted, which is where most of the
+        // work of this function used to go: a `String` for the key and another
+        // for most values, ninety times per torrent per poll.
         let mut put = |key: &str, value: Value| {
-            out.insert(key.to_owned(), value);
+            if keys.wants(key) {
+                out.insert(key.to_owned(), value);
+            }
         };
 
         put("hash", Value::Str(self.id.clone()));
-        put("name", Value::Str(self.display_name(status)));
+        if keys.wants("name") {
+            put("name", Value::Str(self.display_name(status)));
+        }
         put("state", Value::Str(state.to_string()));
-        put("message", Value::Str(self.message()));
+        if keys.wants("message") {
+            put("message", Value::Str(self.message()));
+        }
         put(
             "progress",
             Value::Float64(f64::from(status.progress) * 100.0),
         );
 
-        put("save_path", Value::Str(status.save_path.clone()));
+        if keys.wants("save_path") {
+            put("save_path", Value::Str(status.save_path.clone()));
+        }
         // Deluge renamed this key and kept the old one working.
-        put("download_location", Value::Str(status.save_path.clone()));
-        put(
-            "storage_mode",
-            Value::Str(self.options.storage_mode.clone()),
-        );
+        if keys.wants("download_location") {
+            put("download_location", Value::Str(status.save_path.clone()));
+        }
+        if keys.wants("storage_mode") {
+            put(
+                "storage_mode",
+                Value::Str(self.options.storage_mode.clone()),
+            );
+        }
 
         put("total_done", Value::Int(status.total_done));
         put("total_wanted", Value::Int(status.total_wanted));
@@ -401,82 +448,106 @@ impl Torrent {
             "move_on_completed",
             Value::Bool(self.options.move_completed),
         );
-        let move_path = self
-            .options
-            .move_completed_path
-            .clone()
-            .unwrap_or_else(|| status.save_path.clone());
-        put("move_completed_path", Value::Str(move_path.clone()));
-        put("move_on_completed_path", Value::Str(move_path));
+        if keys.wants("move_completed_path") || keys.wants("move_on_completed_path") {
+            let move_path = self
+                .options
+                .move_completed_path
+                .clone()
+                .unwrap_or_else(|| status.save_path.clone());
+            put("move_completed_path", Value::Str(move_path.clone()));
+            put("move_on_completed_path", Value::Str(move_path));
+        }
 
-        put(
-            "peers",
-            Value::List(
-                peers
-                    .iter()
-                    .map(|(peer, country)| {
-                        Value::Dict(vec![
-                            (
-                                Value::Str("ip".into()),
-                                Value::Str(format!("{}:{}", peer.ip, peer.port)),
-                            ),
-                            (Value::Str("client".into()), Value::Str(peer.client.clone())),
-                            (
-                                Value::Str("country".into()),
-                                Value::Str(country.code.clone().unwrap_or_default()),
-                            ),
-                            // The name beside the code: the code picks the
-                            // flag and is unreadable on its own.
-                            (
-                                Value::Str("country_name".into()),
-                                Value::Str(country.name.clone().unwrap_or_default()),
-                            ),
-                            (
-                                Value::Str("progress".into()),
-                                Value::Float64(f64::from(peer.progress)),
-                            ),
-                            (
-                                Value::Str("down_speed".into()),
-                                Value::Int(i64::from(peer.down_speed)),
-                            ),
-                            (
-                                Value::Str("up_speed".into()),
-                                Value::Int(i64::from(peer.up_speed)),
-                            ),
-                            (Value::Str("seed".into()), Value::Int(i64::from(peer.seed))),
-                            // How the connection is made, which libtorrent
-                            // knows and nothing was carrying.
-                            (Value::Str("utp".into()), Value::Bool(peer.utp)),
-                            (Value::Str("encrypted".into()), Value::Bool(peer.encrypted)),
-                            // Where this peer was found. The one field that
-                            // says whether a torrent still has a way of
-                            // finding anybody at all: a swarm reachable only
-                            // through a tracker dies with that tracker, and
-                            // one the DHT still answers for does not.
-                            (Value::Str("source".into()), Value::Str(peer.source.clone())),
-                            // The number that says whether this peer is worth
-                            // having: pieces it has and we do not.
-                            (
-                                Value::Str("useful_pieces".into()),
-                                Value::Int(i64::from(peer.useful_pieces)),
-                            ),
-                        ])
-                    })
-                    .collect(),
-            ),
-        );
-        put("label", Value::Str(self.options.label.clone()));
-        put("owner", Value::Str(self.options.owner.clone()));
+        if keys.wants("peers") {
+            put(
+                "peers",
+                Value::List(
+                    peers
+                        .iter()
+                        .map(|(peer, country)| {
+                            Value::Dict(vec![
+                                (
+                                    Value::Str("ip".into()),
+                                    Value::Str(format!("{}:{}", peer.ip, peer.port)),
+                                ),
+                                (Value::Str("client".into()), Value::Str(peer.client.clone())),
+                                (
+                                    Value::Str("country".into()),
+                                    Value::Str(country.code.clone().unwrap_or_default()),
+                                ),
+                                // The name beside the code: the code picks the
+                                // flag and is unreadable on its own.
+                                (
+                                    Value::Str("country_name".into()),
+                                    Value::Str(country.name.clone().unwrap_or_default()),
+                                ),
+                                (
+                                    Value::Str("progress".into()),
+                                    Value::Float64(f64::from(peer.progress)),
+                                ),
+                                (
+                                    Value::Str("down_speed".into()),
+                                    Value::Int(i64::from(peer.down_speed)),
+                                ),
+                                (
+                                    Value::Str("up_speed".into()),
+                                    Value::Int(i64::from(peer.up_speed)),
+                                ),
+                                (Value::Str("seed".into()), Value::Int(i64::from(peer.seed))),
+                                // How the connection is made, which libtorrent
+                                // knows and nothing was carrying.
+                                (Value::Str("utp".into()), Value::Bool(peer.utp)),
+                                (Value::Str("encrypted".into()), Value::Bool(peer.encrypted)),
+                                // Where this peer was found. The one field that
+                                // says whether a torrent still has a way of
+                                // finding anybody at all: a swarm reachable only
+                                // through a tracker dies with that tracker, and
+                                // one the DHT still answers for does not.
+                                (Value::Str("source".into()), Value::Str(peer.source.clone())),
+                                // The number that says whether this peer is worth
+                                // having: pieces it has and we do not.
+                                (
+                                    Value::Str("useful_pieces".into()),
+                                    Value::Int(i64::from(peer.useful_pieces)),
+                                ),
+                            ])
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        if keys.wants("label") {
+            put("label", Value::Str(self.options.label.clone()));
+        }
+        if keys.wants("owner") {
+            put("owner", Value::Str(self.options.owner.clone()));
+        }
         put("shared", Value::Bool(self.options.shared));
         put("private", Value::Bool(false));
         put("comment", Value::Str(String::new()));
         put("creator", Value::Str(String::new()));
 
-        let current = current_tracker(&status.current_tracker, trackers);
-        let host = tracker_host(&current);
+        // Four keys come off the tracker, and a client that asks for none of
+        // them should not pay for the two strings this builds.
+        let tracker_wanted = keys.wants("tracker")
+            || keys.wants("tracker_host")
+            || keys.wants("tracker_move_at")
+            || keys.wants("tracker_remove_at");
+        let current = if tracker_wanted {
+            current_tracker(&status.current_tracker, trackers)
+        } else {
+            String::new()
+        };
+        let host = if tracker_wanted {
+            tracker_host(&current)
+        } else {
+            String::new()
+        };
         put("tracker", Value::Str(current.clone()));
         put("tracker_host", Value::Str(host.clone()));
-        put("tracker_status", Value::Str(self.tracker_status.clone()));
+        if keys.wants("tracker_status") {
+            put("tracker_status", Value::Str(self.tracker_status.clone()));
+        }
 
         // What this torrent's tracker is about to do to it, as two moments
         // rather than two sentences: the interface counts down between polls,
@@ -505,23 +576,25 @@ impl Torrent {
         );
         // The other reason a torrent can be paused without anybody asking.
         put("space_paused", Value::Bool(self.options.space_paused));
-        put(
-            "trackers",
-            Value::List(
-                trackers
-                    .iter()
-                    .map(|tracker| {
-                        Value::Dict(vec![
-                            (Value::Str("url".into()), Value::Str(tracker.url.clone())),
-                            (
-                                Value::Str("tier".into()),
-                                Value::Int(i64::from(tracker.tier)),
-                            ),
-                        ])
-                    })
-                    .collect(),
-            ),
-        );
+        if keys.wants("trackers") {
+            put(
+                "trackers",
+                Value::List(
+                    trackers
+                        .iter()
+                        .map(|tracker| {
+                            Value::Dict(vec![
+                                (Value::Str("url".into()), Value::Str(tracker.url.clone())),
+                                (
+                                    Value::Str("tier".into()),
+                                    Value::Int(i64::from(tracker.tier)),
+                                ),
+                            ])
+                        })
+                        .collect(),
+                ),
+            );
+        }
 
         out
     }
@@ -866,6 +939,30 @@ pub fn put_files(
         .map(|(index, _)| Value::Int(i64::from(priorities.get(index).copied().unwrap_or(4))))
         .collect();
     out.insert("file_priorities".to_owned(), Value::List(wanted));
+}
+
+#[cfg(test)]
+mod key_set_tests {
+    use super::*;
+
+    #[test]
+    fn a_client_that_names_no_keys_is_asking_for_all_of_them() {
+        let all = KeySet::of(&None);
+        assert!(all.wants("name"));
+        assert!(all.wants("trackers"));
+        assert!(KeySet::all().wants("anything at all"));
+    }
+
+    #[test]
+    fn a_client_that_names_keys_gets_those_and_not_the_rest() {
+        let some = KeySet::of(&Some(vec!["name".to_owned(), "state".to_owned()]));
+        assert!(some.wants("name"));
+        assert!(some.wants("state"));
+        // The expensive ones: a peer list and a tracker list are built only
+        // when they are named, and a tracker list is fetched from libtorrent.
+        assert!(!some.wants("peers"));
+        assert!(!some.wants("trackers"));
+    }
 }
 
 #[cfg(test)]

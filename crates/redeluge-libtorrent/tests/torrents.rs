@@ -63,8 +63,23 @@ fn a_torrent_file_is_added_with_its_metadata() {
     assert_eq!(status.num_pieces, 10);
     assert_eq!(status.piece_length, 32_768);
     assert_eq!(status.num_files, 1);
-    assert_eq!(status.pieces.len(), 10, "one entry per piece");
     assert_eq!(status.save_path, "/tmp/redeluge-test");
+}
+
+#[test]
+fn every_status_comes_back_from_one_call() {
+    // `all_torrent_status` asks the session rather than each handle in turn.
+    // The torrent has to be in the answer, and the answer has to carry the
+    // fields the daemon reads off it: a predicate that matched nothing, or a
+    // flag set that dropped the name, would both look like an empty library.
+    let (session, hash) = with_test_torrent();
+
+    let all = session.all_torrent_status();
+    assert_eq!(all.len(), 1, "the session holds one torrent");
+    assert_eq!(all[0].info_hash, hash);
+    assert_eq!(all[0].name, TEST_NAME);
+    assert_eq!(all[0].num_pieces, 10);
+    assert_eq!(all[0].save_path, "/tmp/redeluge-test");
 }
 
 #[test]

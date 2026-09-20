@@ -84,6 +84,7 @@ pub const REDELUGE_METHODS: &[&str] = &[
     "redeluge.get_tracker_health",
     "redeluge.get_tracker_info",
     "redeluge.list_directory",
+    "redeluge.update_ui",
 ];
 
 /// The ones of those that a read-only account has no business calling.
@@ -805,18 +806,26 @@ fn wanted_keys(args: &[Value], index: usize) -> Option<Vec<String>> {
     }
 }
 
-fn filtered(status: BTreeMap<String, Value>, keys: &Option<Vec<String>>) -> Vec<(Value, Value)> {
+fn filtered(
+    mut status: BTreeMap<String, Value>,
+    keys: &Option<Vec<String>>,
+) -> Vec<(Value, Value)> {
     match keys {
         None => status
             .into_iter()
             .map(|(key, value)| (Value::Str(key), value))
             .collect(),
+        // Taken out of the map rather than copied out of it. Most of a status
+        // is strings, and this runs once per torrent per poll: cloning meant
+        // every name, path and tracker in the library was allocated twice to
+        // answer once. A key named twice is answered once, which is what `get`
+        // did too for every key but the repeat.
         Some(wanted) => wanted
             .iter()
             .filter_map(|key| {
                 status
-                    .get(key)
-                    .map(|value| (Value::Str(key.clone()), value.clone()))
+                    .remove(key)
+                    .map(|value| (Value::Str(key.clone()), value))
             })
             .collect(),
     }
@@ -1556,7 +1565,7 @@ impl Rpc for Core {
                         })
                     })
                     .unwrap_or(true);
-                let status = self.status_of_with(&id, peers, files).await?;
+                let status = self.status_of_with(&id, peers, files, &keys).await?;
                 Ok(Value::Dict(filtered(status, &keys)))
             }
 
@@ -1581,6 +1590,27 @@ impl Rpc for Core {
             }
 
             "core.get_filter_tree" => self.filter_tree().await,
+
+            // One poll's worth of answers, from one walk of the library. The
+            // three calls it replaces are still there and still answer on
+            // their own; this exists because asking for all three is what a
+            // client actually does, twice a second, and doing the walk once
+            // is most of what that costs.
+            "redeluge.update_ui" => {
+                let keys = wanted_keys(&args, 0);
+                let filter = args.get(1).cloned();
+                let stats: Vec<String> = args
+                    .get(2)
+                    .and_then(Value::as_list)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.update_ui(filter, keys, stats).await
+            }
 
             // ------------------------------------------------ the Label plugin
             //
@@ -2604,16 +2634,18 @@ impl Core {
         id: &str,
         peers: bool,
         files: bool,
+        keys: &Option<Vec<String>>,
     ) -> Result<BTreeMap<String, Value>, RpcError> {
         let grace = self.idle_grace().await;
         let rules = self.tracker_rules().await;
         let wanted = id.to_owned();
+        let keys = crate::torrent::KeySet::of(keys);
         let status = self
             .manager
             .with(move |state| {
                 let torrent = state.torrents.get(&wanted)?.clone();
                 let status = state.session.torrent_status(&wanted).ok()?;
-                let trackers = state.session.trackers(&wanted).unwrap_or_default();
+                let trackers = state.tracker_list(&status, keys.wants("trackers"));
                 let file_list = if files {
                     Some((
                         state.session.files(&wanted).unwrap_or_default(),
@@ -2649,6 +2681,7 @@ impl Core {
                     idle_since,
                     grace,
                     &rules,
+                    &keys,
                 );
                 if let Some((entries, progress, priorities)) = file_list {
                     crate::torrent::put_files(&mut out, &entries, &progress, &priorities);
@@ -2668,49 +2701,17 @@ impl Core {
     ) -> Result<Value, RpcError> {
         let grace = self.idle_grace().await;
         let rules = self.tracker_rules().await;
+        let wanted_keys = crate::torrent::KeySet::of(&keys);
         let all = self
             .manager
             .with(move |state| {
-                let session_paused = state.session_paused;
-                let mut out: Vec<(String, BTreeMap<String, Value>)> = Vec::new();
-                for status in state.session.all_torrent_status() {
-                    let Some(torrent) = state.torrents.get(&status.info_hash) else {
-                        continue;
-                    };
-                    let trackers = state
-                        .session
-                        .trackers(&status.info_hash)
-                        .unwrap_or_default();
-                    let idle_since = state
-                        .idle_since
-                        .get(&status.info_hash)
-                        .copied()
-                        .unwrap_or_default();
-                    out.push((
-                        status.info_hash.clone(),
-                        torrent.status_with_peers(
-                            &status,
-                            session_paused,
-                            &trackers,
-                            &[],
-                            idle_since,
-                            grace,
-                            &rules,
-                        ),
-                    ));
-                }
-                out
+                let statuses = state.session.all_torrent_status();
+                status_rows(state, &statuses, grace, &rules, &wanted_keys)
             })
             .await
             .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
 
-        let wanted = filter_pairs(filter.as_ref());
-        Ok(Value::Dict(
-            all.into_iter()
-                .filter(|(_, status)| matches_filter(status, &wanted))
-                .map(|(id, status)| (Value::Str(id), Value::Dict(filtered(status, &keys))))
-                .collect(),
-        ))
+        Ok(only_wanted(all, filter.as_ref(), &keys))
     }
 
     async fn session_status(&self, wanted: Vec<String>) -> Result<Value, RpcError> {
@@ -2718,53 +2719,67 @@ impl Core {
             .manager
             .with(|state| {
                 state.session.post_session_stats();
-                let mut download = 0i64;
-                let mut upload = 0i64;
-                for status in state.session.all_torrent_status() {
-                    download += i64::from(status.download_payload_rate);
-                    upload += i64::from(status.upload_payload_rate);
-                }
-                (state.counters.clone(), (download, upload))
+                let statuses = state.session.all_torrent_status();
+                (state.counters.clone(), rate_totals(&statuses))
             })
             .await
             .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
 
-        // The names arrive placed at the index their value sits at, so the
-        // position in this list is the position in the counters. A name can be
-        // empty where the numbering has a gap, and an empty key is not a stat.
-        let names = redeluge_libtorrent::Session::stat_names();
-        let mut out: BTreeMap<String, Value> = BTreeMap::new();
-        for (index, name) in names.iter().enumerate() {
-            if name.is_empty() {
-                continue;
-            }
-            let value = counters.get(index).copied().unwrap_or(0);
-            out.insert(name.clone(), Value::Int(value));
-        }
+        Ok(session_status_of(&counters, rates, wanted))
+    }
 
-        // These two are the sum over torrents rather than a counter, and every
-        // client reads them.
-        out.insert("payload_download_rate".into(), Value::Int(rates.0));
-        out.insert("payload_upload_rate".into(), Value::Int(rates.1));
-        out.entry("download_rate".into())
-            .or_insert(Value::Int(rates.0));
-        out.entry("upload_rate".into())
-            .or_insert(Value::Int(rates.1));
+    /// Everything one poll asks for, off one pass of the library.
+    ///
+    /// The Web UI wants the torrent list, the sidebar's counts and the session
+    /// totals, and asked for them as three calls. The daemon answers one call
+    /// at a time per connection, so that was three round trips, and each of
+    /// the three walked every torrent in the session — the expensive part,
+    /// done three times for one refresh. This is the same three answers from
+    /// one walk.
+    ///
+    /// The three keep their own methods: a client that wants only the list
+    /// asks for only the list, and every existing client keeps working.
+    async fn update_ui(
+        &self,
+        filter: Option<Value>,
+        keys: Option<Vec<String>>,
+        stats: Vec<String>,
+    ) -> Result<Value, RpcError> {
+        let grace = self.idle_grace().await;
+        let rules = self.tracker_rules().await;
+        let wanted_keys = crate::torrent::KeySet::of(&keys);
 
-        let entries: Vec<(Value, Value)> = if wanted.is_empty() {
-            out.into_iter()
-                .map(|(key, value)| (Value::Str(key), value))
-                .collect()
-        } else {
-            wanted
-                .into_iter()
-                .map(|key| {
-                    let value = out.get(&key).cloned().unwrap_or(Value::Int(0));
-                    (Value::Str(key), value)
-                })
-                .collect()
-        };
-        Ok(Value::Dict(entries))
+        let (rows, filters, counters, rates) = self
+            .manager
+            .with(move |state| {
+                // Asked for before the walk, as `core.get_session_status`
+                // does: the alert carrying the counters arrives after this
+                // returns, so what goes out now is the previous call's.
+                state.session.post_session_stats();
+                let statuses = state.session.all_torrent_status();
+                let rows = status_rows(state, &statuses, grace, &rules, &wanted_keys);
+                let filters = filter_rows(state, &statuses);
+                (
+                    rows,
+                    filters,
+                    state.counters.clone(),
+                    rate_totals(&statuses),
+                )
+            })
+            .await
+            .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+
+        Ok(Value::Dict(vec![
+            (
+                Value::Str("torrents".to_owned()),
+                only_wanted(rows, filter.as_ref(), &keys),
+            ),
+            (Value::Str("filters".to_owned()), filter_tree_of(filters)),
+            (
+                Value::Str("stats".to_owned()),
+                session_status_of(&counters, rates, stats),
+            ),
+        ]))
     }
 
     /// The counts every client draws its sidebar from.
@@ -2772,132 +2787,17 @@ impl Core {
         let statuses = self
             .manager
             .with(|state| {
-                let session_paused = state.session_paused;
-                state
-                    .session
-                    .all_torrent_status()
-                    .into_iter()
-                    .filter_map(|status| {
-                        let torrent = state.torrents.get(&status.info_hash)?;
-                        // The trackers as well as the announced one, because
-                        // the rule falls back to the first when nothing has
-                        // been announced to yet, and the status applies the
-                        // same rule.
-                        let trackers = state
-                            .session
-                            .trackers(&status.info_hash)
-                            .unwrap_or_default();
-                        Some((
-                            torrent.state(&status, session_paused),
-                            crate::torrent::current_tracker(&status.current_tracker, &trackers),
-                            torrent.options.owner.clone(),
-                            torrent.options.label.clone(),
-                            status.download_payload_rate > 0 || status.upload_payload_rate > 0,
-                            torrent.tracker_status.clone(),
-                            // The tracker answered and said nobody has this.
-                            // `-1` is "it has not said", which is why this is
-                            // not written as `<= 0`.
-                            !status.is_finished
-                                && status.num_complete == 0
-                                && status.num_incomplete == 0,
-                        ))
-                    })
-                    .collect::<Vec<_>>()
+                let statuses = state.session.all_torrent_status();
+                filter_rows(state, &statuses)
             })
             .await
             .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
 
-        let total = statuses.len() as i64;
-        let mut by_state: BTreeMap<TorrentState, i64> = BTreeMap::new();
-        let mut by_tracker: BTreeMap<String, i64> = BTreeMap::new();
-        let mut by_owner: BTreeMap<String, i64> = BTreeMap::new();
-        let mut by_label: BTreeMap<String, i64> = BTreeMap::new();
-        let mut active = 0i64;
-        let mut unregistered = 0i64;
-        let mut dead = 0i64;
-
-        for (state, tracker, owner, label, transferring, tracker_status, dead_swarm) in statuses {
-            *by_state.entry(state).or_insert(0) += 1;
-            // Active means moving bytes, not "not paused". A seeding torrent
-            // nobody is downloading from is idle, and counting it here put
-            // every finished torrent in a category meant for the ones worth
-            // watching. This is Deluge's own rule, and the filter below uses
-            // the same one, so the count and the list agree.
-            if transferring {
-                active += 1;
-            }
-            // The same function the status uses, and that is the whole point.
-            // There were two, and they disagreed: this one kept the subdomain
-            // and the status dropped it, so the sidebar listed
-            // `tracker.example.com` while every torrent was recorded under
-            // `example.com`, and clicking the row filtered to nothing. A
-            // filter value has to be the value it is compared against.
-            // The ones the tracker has stopped recognising. Counted here so
-            // the sidebar can offer them as a group: they are otherwise
-            // indistinguishable from a torrent that merely has no peers today,
-            // and they are the ones that are safe to throw away.
-            if crate::torrent::tracker_says_unregistered(&tracker_status) {
-                unregistered += 1;
-            }
-            if dead_swarm {
-                dead += 1;
-            }
-            let host = crate::torrent::tracker_host(&tracker);
-            *by_tracker.entry(host).or_insert(0) += 1;
-            *by_owner.entry(owner).or_insert(0) += 1;
-            *by_label.entry(label).or_insert(0) += 1;
-        }
-
-        let pair = |label: &str, count: i64| {
-            Value::List(vec![Value::Str(label.to_owned()), Value::Int(count)])
-        };
-
-        // `Unregistered` and `Dead` are questions rather than states libtorrent
-        // has, exactly as `Active` is a question about right now. The first is
-        // the tracker refusing to know the torrent; the second is the tracker
-        // answering that nobody has it. They are different problems with
-        // different answers, which is why they are different rows.
-        // Both sit at the top of the list with the states because that is
-        // where somebody looks for them, and `matches_filter` answers both
-        // specially so that the row and the list it opens agree.
-        let mut states = vec![
-            pair("All", total),
-            pair("Active", active),
-            pair("Unregistered", unregistered),
-            pair("Dead", dead),
-        ];
-        for state in TorrentState::ALL {
-            states.push(pair(
-                state.as_str(),
-                by_state.get(&state).copied().unwrap_or(0),
-            ));
-        }
-
-        let mut trackers = vec![pair("All", total)];
-        trackers.extend(
-            by_tracker
-                .into_iter()
-                .map(|(host, count)| pair(&host, count)),
-        );
-
-        let owners: Vec<Value> = by_owner
-            .into_iter()
-            .map(|(owner, count)| pair(&owner, count))
-            .collect();
-
-        // The Label plugin contributed this category in Deluge, which is why
-        // clients already know how to draw it. An unlabelled torrent counts
-        // under the empty string, the same key it filters on.
-        let mut labels = vec![pair("All", total)];
-        labels.extend(by_label.into_iter().map(|(name, count)| pair(&name, count)));
-
-        Ok(Value::Dict(vec![
-            (Value::Str("state".into()), Value::List(states)),
-            (Value::Str("tracker_host".into()), Value::List(trackers)),
-            (Value::Str("owner".into()), Value::List(owners)),
-            (Value::Str("label".into()), Value::List(labels)),
-        ]))
+        Ok(filter_tree_of(statuses))
     }
+
+    // The shaping of that answer is `filter_tree_of`, below: `update_ui`
+    // builds the same tree from a walk it has already done.
 
     /// Every torrent, reduced to what a tracker is judged by.
     ///
@@ -3060,6 +2960,236 @@ impl Core {
             .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
         Ok(Value::None)
     }
+}
+
+/// One row per torrent, as the sidebar counts them.
+type FilterRow = (TorrentState, String, String, String, bool, String, bool);
+
+/// The sidebar's rows, read off a walk the caller already did.
+fn filter_rows(
+    state: &crate::manager::SessionState,
+    statuses: &[redeluge_libtorrent::TorrentStatus],
+) -> Vec<FilterRow> {
+    let session_paused = state.session_paused;
+    statuses
+        .iter()
+        .filter_map(|status| {
+            let torrent = state.torrents.get(&status.info_hash)?;
+            // The fallback to the first tracker is why the list is wanted at
+            // all: the sidebar groups by the announced one and the status
+            // applies the same rule, so it is fetched only when there is
+            // nothing announced to fall back from.
+            let trackers = state.tracker_list(status, false);
+            Some((
+                torrent.state(status, session_paused),
+                crate::torrent::current_tracker(&status.current_tracker, &trackers),
+                torrent.options.owner.clone(),
+                torrent.options.label.clone(),
+                status.download_payload_rate > 0 || status.upload_payload_rate > 0,
+                torrent.tracker_status.clone(),
+                // The tracker answered and said nobody has this. `-1` is "it
+                // has not said", which is why this is not written as `<= 0`.
+                !status.is_finished && status.num_complete == 0 && status.num_incomplete == 0,
+            ))
+        })
+        .collect()
+}
+
+/// One status dictionary per torrent, read off a walk the caller already did.
+fn status_rows(
+    state: &crate::manager::SessionState,
+    statuses: &[redeluge_libtorrent::TorrentStatus],
+    grace: u64,
+    rules: &crate::features::tracker::Settings,
+    keys: &crate::torrent::KeySet,
+) -> Vec<(String, BTreeMap<String, Value>)> {
+    let session_paused = state.session_paused;
+    let mut out: Vec<(String, BTreeMap<String, Value>)> = Vec::new();
+    for status in statuses {
+        let Some(torrent) = state.torrents.get(&status.info_hash) else {
+            continue;
+        };
+        let trackers = state.tracker_list(status, keys.wants("trackers"));
+        let idle_since = state
+            .idle_since
+            .get(&status.info_hash)
+            .copied()
+            .unwrap_or_default();
+        out.push((
+            status.info_hash.clone(),
+            torrent.status_with_peers(
+                status,
+                session_paused,
+                &trackers,
+                &[],
+                idle_since,
+                grace,
+                rules,
+                keys,
+            ),
+        ));
+    }
+    out
+}
+
+/// The rows a client's filter leaves, as the dictionary it expects.
+fn only_wanted(
+    rows: Vec<(String, BTreeMap<String, Value>)>,
+    filter: Option<&Value>,
+    keys: &Option<Vec<String>>,
+) -> Value {
+    let wanted = filter_pairs(filter);
+    Value::Dict(
+        rows.into_iter()
+            .filter(|(_, status)| matches_filter(status, &wanted))
+            .map(|(id, status)| (Value::Str(id), Value::Dict(filtered(status, keys))))
+            .collect(),
+    )
+}
+
+/// What every client reads as the session's speed: the sum over torrents.
+fn rate_totals(statuses: &[redeluge_libtorrent::TorrentStatus]) -> (i64, i64) {
+    let mut download = 0i64;
+    let mut upload = 0i64;
+    for status in statuses {
+        download += i64::from(status.download_payload_rate);
+        upload += i64::from(status.upload_payload_rate);
+    }
+    (download, upload)
+}
+
+/// The session's counters, in the shape every client reads.
+fn session_status_of(counters: &[i64], rates: (i64, i64), wanted: Vec<String>) -> Value {
+    // The names arrive placed at the index their value sits at, so the
+    // position in this list is the position in the counters. A name can be
+    // empty where the numbering has a gap, and an empty key is not a stat.
+    let names = redeluge_libtorrent::Session::stat_names();
+    let mut out: BTreeMap<String, Value> = BTreeMap::new();
+    for (index, name) in names.iter().enumerate() {
+        if name.is_empty() {
+            continue;
+        }
+        let value = counters.get(index).copied().unwrap_or(0);
+        out.insert(name.clone(), Value::Int(value));
+    }
+
+    // These two are the sum over torrents rather than a counter, and every
+    // client reads them.
+    out.insert("payload_download_rate".into(), Value::Int(rates.0));
+    out.insert("payload_upload_rate".into(), Value::Int(rates.1));
+    out.entry("download_rate".into())
+        .or_insert(Value::Int(rates.0));
+    out.entry("upload_rate".into())
+        .or_insert(Value::Int(rates.1));
+
+    let entries: Vec<(Value, Value)> = if wanted.is_empty() {
+        out.into_iter()
+            .map(|(key, value)| (Value::Str(key), value))
+            .collect()
+    } else {
+        wanted
+            .into_iter()
+            .map(|key| {
+                let value = out.get(&key).cloned().unwrap_or(Value::Int(0));
+                (Value::Str(key), value)
+            })
+            .collect()
+    };
+    Value::Dict(entries)
+}
+
+/// The sidebar's tree, from the rows [`filter_rows`] gathered.
+fn filter_tree_of(statuses: Vec<FilterRow>) -> Value {
+    let total = statuses.len() as i64;
+    let mut by_state: BTreeMap<TorrentState, i64> = BTreeMap::new();
+    let mut by_tracker: BTreeMap<String, i64> = BTreeMap::new();
+    let mut by_owner: BTreeMap<String, i64> = BTreeMap::new();
+    let mut by_label: BTreeMap<String, i64> = BTreeMap::new();
+    let mut active = 0i64;
+    let mut unregistered = 0i64;
+    let mut dead = 0i64;
+
+    for (state, tracker, owner, label, transferring, tracker_status, dead_swarm) in statuses {
+        *by_state.entry(state).or_insert(0) += 1;
+        // Active means moving bytes, not "not paused". A seeding torrent
+        // nobody is downloading from is idle, and counting it here put
+        // every finished torrent in a category meant for the ones worth
+        // watching. This is Deluge's own rule, and the filter below uses
+        // the same one, so the count and the list agree.
+        if transferring {
+            active += 1;
+        }
+        // The same function the status uses, and that is the whole point.
+        // There were two, and they disagreed: this one kept the subdomain
+        // and the status dropped it, so the sidebar listed
+        // `tracker.example.com` while every torrent was recorded under
+        // `example.com`, and clicking the row filtered to nothing. A
+        // filter value has to be the value it is compared against.
+        // The ones the tracker has stopped recognising. Counted here so
+        // the sidebar can offer them as a group: they are otherwise
+        // indistinguishable from a torrent that merely has no peers today,
+        // and they are the ones that are safe to throw away.
+        if crate::torrent::tracker_says_unregistered(&tracker_status) {
+            unregistered += 1;
+        }
+        if dead_swarm {
+            dead += 1;
+        }
+        let host = crate::torrent::tracker_host(&tracker);
+        *by_tracker.entry(host).or_insert(0) += 1;
+        *by_owner.entry(owner).or_insert(0) += 1;
+        *by_label.entry(label).or_insert(0) += 1;
+    }
+
+    let pair = |label: &str, count: i64| {
+        Value::List(vec![Value::Str(label.to_owned()), Value::Int(count)])
+    };
+
+    // `Unregistered` and `Dead` are questions rather than states libtorrent
+    // has, exactly as `Active` is a question about right now. The first is
+    // the tracker refusing to know the torrent; the second is the tracker
+    // answering that nobody has it. They are different problems with
+    // different answers, which is why they are different rows.
+    // Both sit at the top of the list with the states because that is
+    // where somebody looks for them, and `matches_filter` answers both
+    // specially so that the row and the list it opens agree.
+    let mut states = vec![
+        pair("All", total),
+        pair("Active", active),
+        pair("Unregistered", unregistered),
+        pair("Dead", dead),
+    ];
+    for state in TorrentState::ALL {
+        states.push(pair(
+            state.as_str(),
+            by_state.get(&state).copied().unwrap_or(0),
+        ));
+    }
+
+    let mut trackers = vec![pair("All", total)];
+    trackers.extend(
+        by_tracker
+            .into_iter()
+            .map(|(host, count)| pair(&host, count)),
+    );
+
+    let owners: Vec<Value> = by_owner
+        .into_iter()
+        .map(|(owner, count)| pair(&owner, count))
+        .collect();
+
+    // The Label plugin contributed this category in Deluge, which is why
+    // clients already know how to draw it. An unlabelled torrent counts
+    // under the empty string, the same key it filters on.
+    let mut labels = vec![pair("All", total)];
+    labels.extend(by_label.into_iter().map(|(name, count)| pair(&name, count)));
+
+    Value::Dict(vec![
+        (Value::Str("state".into()), Value::List(states)),
+        (Value::Str("tracker_host".into()), Value::List(trackers)),
+        (Value::Str("owner".into()), Value::List(owners)),
+        (Value::Str("label".into()), Value::List(labels)),
+    ])
 }
 
 /// One recorded action, as a client reads it.
@@ -3300,6 +3430,52 @@ fn matches_keyword(status: &BTreeMap<String, Value>, term: &str) -> bool {
             .and_then(Value::as_str)
             .is_some_and(|value| value.to_lowercase().contains(term))
     })
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    fn status() -> BTreeMap<String, Value> {
+        let mut out = BTreeMap::new();
+        out.insert("name".to_owned(), Value::Str("a torrent".to_owned()));
+        out.insert("state".to_owned(), Value::Str("Seeding".to_owned()));
+        out.insert("progress".to_owned(), Value::Float64(100.0));
+        out
+    }
+
+    fn named(keys: &[&str]) -> Option<Vec<String>> {
+        Some(keys.iter().map(|key| (*key).to_owned()).collect())
+    }
+
+    #[test]
+    fn naming_no_keys_answers_with_all_of_them() {
+        assert_eq!(filtered(status(), &None).len(), 3);
+    }
+
+    #[test]
+    fn only_the_named_keys_are_answered_and_in_the_order_asked() {
+        let answer = filtered(status(), &named(&["state", "name"]));
+        let order: Vec<&str> = answer.iter().filter_map(|(key, _)| key.as_str()).collect();
+        assert_eq!(order, vec!["state", "name"]);
+    }
+
+    #[test]
+    fn a_key_the_status_does_not_have_is_left_out() {
+        // Not filled in with a blank: an invented key looks like an answer.
+        let answer = filtered(status(), &named(&["name", "nothing_reports_this"]));
+        assert_eq!(answer.len(), 1);
+    }
+
+    #[test]
+    fn a_key_named_twice_is_answered_once() {
+        // The value is moved out of the status rather than copied, so the
+        // repeat finds nothing. A dictionary with the same key twice was never
+        // a useful answer, and no client asks for one.
+        let answer = filtered(status(), &named(&["name", "name"]));
+        assert_eq!(answer.len(), 1);
+        assert_eq!(answer[0].1, Value::Str("a torrent".to_owned()));
+    }
 }
 
 #[cfg(test)]

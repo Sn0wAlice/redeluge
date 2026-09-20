@@ -20,13 +20,18 @@
 namespace redeluge {
 namespace {
 
-/// Status fields the daemon reads. `query_pieces` is not in the default set and
-/// the piece map is what the progress bar is drawn from.
+/// Status fields the daemon reads.
+///
+/// `query_pieces` and `query_verified_pieces` are deliberately absent. They
+/// copy one entry per piece out of the bitfield on every call, and every
+/// caller of this — the state sweep four times a second, every rule's pass,
+/// every poll from the Web UI — threw that vector away without reading it. A
+/// piece map is a per-torrent question, so whatever asks for one later should
+/// ask for it with its own flags rather than making every sweep pay for it.
 constexpr lt::status_flags_t kStatusFlags =
     lt::torrent_handle::query_distributed_copies |
     lt::torrent_handle::query_accurate_download_counters |
-    lt::torrent_handle::query_last_seen_complete | lt::torrent_handle::query_pieces |
-    lt::torrent_handle::query_verified_pieces | lt::torrent_handle::query_name |
+    lt::torrent_handle::query_last_seen_complete | lt::torrent_handle::query_name |
     lt::torrent_handle::query_save_path | lt::torrent_handle::query_torrent_file;
 
 int64_t seconds_of(lt::seconds const value) { return value.count(); }
@@ -100,11 +105,6 @@ TorrentStatus convert(lt::torrent_status const& st) {
     }
   }
 
-  out.pieces.reserve(st.pieces.size());
-  for (auto const piece : st.pieces.range()) {
-    out.pieces.push_back(st.pieces[piece] ? 1 : 0);
-  }
-
   if (auto const info = st.torrent_file.lock()) {
     out.num_pieces = info->num_pieces();
     out.piece_length = info->piece_length();
@@ -144,11 +144,19 @@ TorrentStatus Session::torrent_status(rust::Str info_hash) const {
 }
 
 rust::Vec<TorrentStatus> Session::all_torrent_status() const {
+  // One call rather than one per handle. `torrent_handle::status()` takes the
+  // session's lock each time, so asking a thousand handles in a row took the
+  // lock a thousand times; `session::get_torrent_status` collects the lot
+  // under one. The predicate is every torrent, because the session holds
+  // exactly what this daemon put in it.
+  std::vector<lt::torrent_status> const statuses = session_->get_torrent_status(
+      [](lt::torrent_status const&) { return true; }, kStatusFlags);
+
   rust::Vec<TorrentStatus> out;
-  out.reserve(handles_.size());
-  for (auto const& entry : handles_) {
-    if (!entry.second.is_valid()) continue;
-    out.push_back(convert(entry.second.status(kStatusFlags)));
+  out.reserve(statuses.size());
+  for (lt::torrent_status const& status : statuses) {
+    if (!status.handle.is_valid()) continue;
+    out.push_back(convert(status));
   }
   return out;
 }

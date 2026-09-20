@@ -117,6 +117,26 @@ impl SessionState {
             .and_then(|lookup| lookup.name_of_text(address))
     }
 
+    /// A torrent's tracker list, fetched only when the answer needs it.
+    ///
+    /// `trackers()` copies every announce entry, with each of its endpoints,
+    /// under the session's lock, and every caller of this sits in a loop over
+    /// the whole library. Two things want the list: the `trackers` status key,
+    /// and the fallback [`crate::torrent::current_tracker`] makes when
+    /// libtorrent has not announced yet. When `current_tracker` is set and
+    /// nobody asked for the list, neither applies and an empty list is the
+    /// same answer for less work.
+    pub fn tracker_list(
+        &self,
+        status: &LtStatus,
+        needs_list: bool,
+    ) -> Vec<redeluge_libtorrent::TrackerEntry> {
+        if !needs_list && !status.current_tracker.is_empty() {
+            return Vec::new();
+        }
+        self.session.trackers(&status.info_hash).unwrap_or_default()
+    }
+
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
     }

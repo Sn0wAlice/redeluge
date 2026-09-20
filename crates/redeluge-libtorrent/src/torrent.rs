@@ -163,8 +163,6 @@ pub struct TorrentStatus {
     /// The file the error is about, when it names one.
     pub error_file: Option<String>,
 
-    /// One entry per piece, true when we have it. Empty without metadata.
-    pub pieces: Vec<bool>,
     pub num_pieces: i32,
     pub piece_length: i32,
     pub total_size: i64,
@@ -244,7 +242,6 @@ impl From<ffi::TorrentStatus> for TorrentStatus {
             current_tracker: raw.current_tracker,
             error: (!raw.error.is_empty()).then_some(raw.error),
             error_file: (!raw.error_file.is_empty()).then_some(raw.error_file),
-            pieces: raw.pieces.into_iter().map(|byte| byte != 0).collect(),
             num_pieces: raw.num_pieces,
             piece_length: raw.piece_length,
             total_size: raw.total_size,

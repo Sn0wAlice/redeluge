@@ -91,6 +91,46 @@ impl SlowStats {
 pub struct DaemonConnection {
     pub host_id: String,
     pub client: Client,
+    /// Whether this daemon answers `redeluge.update_ui`, once we have asked.
+    ///
+    /// `Unknown` until the first poll, which asks; after that a poll is one
+    /// call rather than three. Held on the connection rather than on the
+    /// server, so connecting to a different daemon asks again — the other end
+    /// may be a Deluge daemon, or an older build of this one, and neither
+    /// knows the call.
+    pub combined_poll: CombinedPoll,
+}
+
+/// Whether the daemon on the other end can answer a whole poll at once.
+#[derive(Debug)]
+pub struct CombinedPoll(std::sync::atomic::AtomicU8);
+
+impl Default for CombinedPoll {
+    fn default() -> Self {
+        Self(std::sync::atomic::AtomicU8::new(Self::UNKNOWN))
+    }
+}
+
+impl CombinedPoll {
+    const UNKNOWN: u8 = 0;
+    const YES: u8 = 1;
+    const NO: u8 = 2;
+
+    /// What the last answer was, or nothing if it has not been asked.
+    pub fn known(&self) -> Option<bool> {
+        match self.0.load(std::sync::atomic::Ordering::Relaxed) {
+            Self::YES => Some(true),
+            Self::NO => Some(false),
+            _ => None,
+        }
+    }
+
+    pub fn set(&self, answers: bool) {
+        self.0.store(
+            if answers { Self::YES } else { Self::NO },
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
 }
 
 /// Events the browser has registered for.
