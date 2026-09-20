@@ -163,7 +163,7 @@ async fn dispatch(
         "web.disconnect" => web_disconnect(state).await,
         "web.get_hosts" => web_get_hosts(state).await,
         "web.get_host_status" => web_get_host_status(call, state).await,
-        "web.update_ui" => web_update_ui(call, state).await,
+        "web.update_ui" => web_update_ui(request, call, state).await,
         "web.get_config" => web_get_config(state).await,
         "web.set_config" => web_set_config(call, state).await,
         "web.get_themes" | "webutils.get_themes" => web_get_themes(state).await,
@@ -314,7 +314,7 @@ async fn auth_login(
     }
 
     let stored = state.password.read().await.clone();
-    if !stored.verify(password) {
+    if !verify_password(&stored, password, state).await {
         state.login_throttle.lock().await.failed(&peer, now);
         tracing::warn!(client = %peer, "web login failed");
         return Ok(Dispatched {
@@ -373,7 +373,8 @@ async fn auth_change_password(call: &JsonRequest, state: &SharedState) -> ApiRes
         .and_then(Json::as_str)
         .ok_or_else(|| ApiError::local("auth.change_password takes two passwords"))?;
 
-    if !state.password.read().await.verify(old) {
+    let stored = state.password.read().await.clone();
+    if !verify_password(&stored, old, state).await {
         return Ok(Json::Bool(false));
     }
     if new.is_empty() {
@@ -409,6 +410,33 @@ async fn forward(method: &str, params: &[Json], state: &SharedState) -> ApiResul
         }
         Err(err) => Err(ApiError::remote(err.to_string())),
     }
+}
+
+/// Checks a password without stalling the server.
+///
+/// scrypt costs about a seventh of a second and thirty-two mebibytes, measured
+/// on these parameters. Run where it was — inline, on the worker thread
+/// answering the request — ten simultaneous attempts blocked all ten workers
+/// and the server answered nothing at all, not even a stylesheet, for as long
+/// as they took. So it runs on the blocking pool, and no more than a couple at
+/// a time: the per-address throttle bounds one client, and this bounds the
+/// sum of them.
+async fn verify_password(
+    stored: &crate::auth::StoredPassword,
+    candidate: &str,
+    state: &SharedState,
+) -> bool {
+    // Waiting here does not hold a worker: this is an async wait, and the
+    // request it belongs to is already over its throttle's budget or about to
+    // cost a seventh of a second anyway.
+    let Ok(_permit) = state.verifications.acquire().await else {
+        return false;
+    };
+    let stored = stored.clone();
+    let candidate = candidate.to_owned();
+    tokio::task::spawn_blocking(move || stored.verify(&candidate))
+        .await
+        .unwrap_or(false)
 }
 
 /// Whether this daemon can answer a whole poll in one call.
@@ -522,8 +550,10 @@ pub async fn connect_to(host_id: &str, state: &SharedState) -> Result<(), String
         client,
         combined_poll: Default::default(),
     });
-    // Another daemon has another address, another disk and other limits.
+    // Another daemon has another address, another disk, other limits and its
+    // own list of methods.
     state.slow_stats.lock().await.clear();
+    *state.daemon_methods.lock().await = None;
     tracing::info!(host = %host.host, port = host.port, "connected to the daemon");
     Ok(())
 }
@@ -612,9 +642,21 @@ fn fresh<T>(slot: &Option<(Instant, T)>, ttl: Duration) -> Option<&T> {
         .map(|(_, value)| value)
 }
 
-async fn web_update_ui(call: &JsonRequest, state: &SharedState) -> ApiResult {
+async fn web_update_ui(
+    request: &HttpRequest,
+    call: &JsonRequest,
+    state: &SharedState,
+) -> ApiResult {
     let keys = call.params.first().cloned().unwrap_or(json!([]));
     let filters = call.params.get(1).cloned().unwrap_or(json!({}));
+    // The epoch the browser holds. Absent, zero or stale means it cannot apply
+    // a difference and is sent the whole list.
+    let epoch = call
+        .params
+        .get(2)
+        .and_then(Json::as_u64)
+        .filter(|it| *it > 0);
+    let session_id = current_session(request, state).await.map(|(id, _)| id);
 
     let connected = state.daemon.read().await.is_some();
     let mut stats = Map::new();
@@ -778,16 +820,207 @@ async fn web_update_ui(call: &JsonRequest, state: &SharedState) -> ApiResult {
         stats.insert(key, value);
     }
 
-    info.insert(
-        "torrents".to_owned(),
-        torrents.map(rencode_into_json).unwrap_or(Json::Null),
-    );
+    let torrents = torrents.map(rencode_into_json).unwrap_or(Json::Null);
+    match narrow_to_changes(torrents, &keys, &filters, epoch, session_id, state).await {
+        Answer::Whole { torrents, epoch } => {
+            info.insert("torrents".to_owned(), torrents);
+            if let Some(epoch) = epoch {
+                info.insert("epoch".to_owned(), Json::from(epoch));
+            }
+        }
+        Answer::Changes {
+            changed,
+            removed,
+            epoch,
+        } => {
+            info.insert("torrents".to_owned(), Json::Object(changed));
+            info.insert("removed".to_owned(), Json::Array(removed));
+            info.insert("delta".to_owned(), Json::Bool(true));
+            info.insert("epoch".to_owned(), Json::from(epoch));
+        }
+    }
+
     info.insert(
         "filters".to_owned(),
         filter_tree.map(rencode_into_json).unwrap_or(Json::Null),
     );
     info.insert("stats".to_owned(), Json::Object(stats));
     Ok(Json::Object(info))
+}
+
+/// What a poll is answered with: the whole list, or what changed in it.
+enum Answer {
+    Whole {
+        torrents: Json,
+        /// Absent when nothing is being remembered, which is what tells the
+        /// browser not to ask for a difference next time.
+        epoch: Option<u64>,
+    },
+    Changes {
+        changed: Map<String, Json>,
+        removed: Vec<Json>,
+        epoch: u64,
+    },
+}
+
+/// Turns a whole torrent list into the part of it the browser does not have.
+///
+/// The list barely moves between polls: a few speeds, a progress bar, and the
+/// other thirty-odd fields of every torrent are the bytes they were two
+/// seconds ago. Measured on five thousand torrents, the whole list is 4 MiB of
+/// JSON — sent twice a second, to say that almost nothing happened.
+///
+/// The browser holds the list and an epoch. It sends the epoch back; when it
+/// matches what was last sent to that session, the answer is the difference,
+/// and when it does not — a reload, an answer that never arrived, a second tab
+/// asking a different question — the answer is the whole list and a new epoch.
+/// Being wrong in that direction costs bandwidth; being wrong in the other
+/// direction would show a torrent list that quietly stopped being true.
+async fn narrow_to_changes(
+    torrents: Json,
+    keys: &Json,
+    filters: &Json,
+    asked_from: Option<u64>,
+    session: Option<String>,
+    state: &SharedState,
+) -> Answer {
+    let (Json::Object(current), Some(session)) = (torrents, session) else {
+        // No session to remember against, or the daemon answered with nothing.
+        return Answer::Whole {
+            torrents: Json::Null,
+            epoch: None,
+        };
+    };
+
+    if !delta_updates(state).await {
+        state.baselines.lock().await.forget(&session);
+        return Answer::Whole {
+            torrents: Json::Object(current),
+            epoch: None,
+        };
+    }
+
+    // Only whole torrents are remembered, so a malformed answer is passed
+    // through rather than diffed against.
+    let rows: std::collections::HashMap<String, Map<String, Json>> = current
+        .iter()
+        .filter_map(|(id, value)| match value {
+            Json::Object(fields) => Some((id.clone(), fields.clone())),
+            _ => None,
+        })
+        .collect();
+    if rows.len() != current.len() {
+        return Answer::Whole {
+            torrents: Json::Object(current),
+            epoch: None,
+        };
+    }
+
+    let mut baselines = state.baselines.lock().await;
+    let usable = baselines.get(&session).and_then(|baseline| {
+        let same_question = baseline.keys == *keys && baseline.filters == *filters;
+        (same_question && asked_from == Some(baseline.epoch)).then_some(baseline)
+    });
+
+    let Some(baseline) = usable else {
+        // Never the same number twice for one session. Two tabs share a
+        // session and poll with their own epochs: if a fresh baseline started
+        // at one again, a tab still holding an epoch of one from an older
+        // baseline would be sent a difference against a list it has never
+        // seen, and its torrent list would quietly stop being true.
+        let epoch = baselines
+            .get(&session)
+            .map_or(0, |baseline| baseline.epoch)
+            .wrapping_add(1)
+            .max(1);
+        baselines.put(
+            &session,
+            crate::state::Baseline {
+                epoch,
+                keys: keys.clone(),
+                filters: filters.clone(),
+                torrents: rows,
+            },
+        );
+        return Answer::Whole {
+            torrents: Json::Object(current),
+            epoch: Some(epoch),
+        };
+    };
+
+    let (changed, removed) = changes_between(&baseline.torrents, &rows);
+
+    baseline.epoch = baseline.epoch.wrapping_add(1).max(1);
+    baseline.torrents = rows;
+    let epoch = baseline.epoch;
+
+    Answer::Changes {
+        changed,
+        removed,
+        epoch,
+    }
+}
+
+/// What moved between two answers.
+///
+/// A torrent the browser has not been sent goes whole, because there is
+/// nothing on that side to fold a difference into; one that has not moved at
+/// all is left out entirely, which is most of them; one that moved carries the
+/// fields that moved and no others.
+type Rows = std::collections::HashMap<String, Map<String, Json>>;
+
+fn changes_between(before: &Rows, now: &Rows) -> (Map<String, Json>, Vec<Json>) {
+    let mut changed: Map<String, Json> = Map::new();
+    for (id, fields) in now {
+        match before.get(id) {
+            None => {
+                changed.insert(id.clone(), Json::Object(fields.clone()));
+            }
+            Some(was) => {
+                let mut moved = Map::new();
+                for (key, value) in fields {
+                    if was.get(key) != Some(value) {
+                        moved.insert(key.clone(), value.clone());
+                    }
+                }
+                if !moved.is_empty() {
+                    changed.insert(id.clone(), Json::Object(moved));
+                }
+            }
+        }
+    }
+
+    // A key that was sent and is not in the new answer cannot be expressed as
+    // a changed field, so a torrent that loses one is sent whole instead.
+    for (id, was) in before {
+        if let Some(fields) = now.get(id) {
+            if was.keys().any(|key| !fields.contains_key(key)) {
+                changed.insert(id.clone(), Json::Object(fields.clone()));
+            }
+        }
+    }
+
+    let removed: Vec<Json> = before
+        .keys()
+        .filter(|id| !now.contains_key(*id))
+        .map(|id| Json::String(id.clone()))
+        .collect();
+
+    (changed, removed)
+}
+
+/// Whether the server sends differences rather than the whole list.
+///
+/// On by default. Off is the honest fallback for anything that reads the
+/// answers itself and does not keep a copy between polls: it costs bandwidth
+/// and nothing else.
+pub async fn delta_updates(state: &SharedState) -> bool {
+    state
+        .web_config
+        .read()
+        .await
+        .boolean("delta_updates")
+        .unwrap_or(true)
 }
 
 async fn web_get_config(state: &SharedState) -> ApiResult {
@@ -812,6 +1045,8 @@ async fn web_get_config(state: &SharedState) -> ApiResult {
         // hardcoded in five places in its JavaScript; here it is one setting,
         // so a busy daemon or a slow link can be given a longer interval.
         "poll_interval": poll_interval(state).await,
+        // Whether a poll is answered with the difference since the last one.
+        "delta_updates": delta_updates(state).await,
         "interface": settings.interface,
         "port": settings.port,
         "https": false,
@@ -1030,11 +1265,21 @@ async fn web_get_events(state: &SharedState) -> ApiResult {
 }
 
 async fn system_list_methods(state: &SharedState) -> ApiResult {
+    // Answered before a session exists — the front end asks on its way to the
+    // login window — so this is the one call anybody who can reach the port
+    // can make. It used to go to the daemon every time; the list does not
+    // change while a daemon is connected, so it is asked once and kept until
+    // the connection is replaced.
+    if let Some(cached) = state.daemon_methods.lock().await.clone() {
+        return Ok(cached);
+    }
+
     let mut methods: Vec<String> = LOCAL_METHODS
         .iter()
         .map(|name| (*name).to_owned())
         .collect();
 
+    let mut from_daemon = false;
     if let Some(value) = call_daemon("daemon.get_method_list", vec![], state).await {
         if let Some(items) = value.as_list() {
             methods.extend(
@@ -1042,11 +1287,19 @@ async fn system_list_methods(state: &SharedState) -> ApiResult {
                     .iter()
                     .filter_map(|item| item.as_str().map(str::to_owned)),
             );
+            from_daemon = true;
         }
     }
     methods.sort();
     methods.dedup();
-    Ok(json!(methods))
+
+    let answer = json!(methods);
+    // Only when the daemon actually answered: caching the local list alone
+    // would keep the daemon's methods hidden for as long as this server runs.
+    if from_daemon {
+        *state.daemon_methods.lock().await = Some(answer.clone());
+    }
+    Ok(answer)
 }
 
 // ------------------------------------------------------------ adding torrents
@@ -1577,3 +1830,457 @@ pub const LOCAL_METHODS: &[&str] = &[
 
 /// How long a session lives when `web.conf` does not say.
 pub const DEFAULT_SESSION_TIMEOUT: Duration = Duration::from_secs(3600);
+
+#[cfg(test)]
+mod delta_tests {
+    use super::*;
+
+    fn rows(entries: &[(&str, &[(&str, Json)])]) -> Rows {
+        entries
+            .iter()
+            .map(|(id, fields)| {
+                let map: Map<String, Json> = fields
+                    .iter()
+                    .map(|(key, value)| ((*key).to_owned(), value.clone()))
+                    .collect();
+                ((*id).to_owned(), map)
+            })
+            .collect()
+    }
+
+    fn one(id: &str, speed: i64, name: &str) -> Rows {
+        rows(&[(
+            id,
+            &[
+                ("name", json!(name)),
+                ("upload_payload_rate", json!(speed)),
+                ("state", json!("Seeding")),
+            ],
+        )])
+    }
+
+    #[test]
+    fn a_torrent_that_has_not_moved_is_not_sent_at_all() {
+        // The whole point: on a large library this is nearly every torrent,
+        // nearly every poll.
+        let before = one("a", 100, "something");
+        let now = one("a", 100, "something");
+        let (changed, removed) = changes_between(&before, &now);
+        assert!(changed.is_empty(), "{changed:?}");
+        assert!(removed.is_empty());
+    }
+
+    #[test]
+    fn only_the_fields_that_moved_are_sent() {
+        let before = one("a", 100, "something");
+        let now = one("a", 4096, "something");
+        let (changed, _) = changes_between(&before, &now);
+
+        let Some(Json::Object(fields)) = changed.get("a") else {
+            panic!("the torrent that moved is missing: {changed:?}");
+        };
+        assert_eq!(fields.len(), 1, "{fields:?}");
+        assert_eq!(fields.get("upload_payload_rate"), Some(&json!(4096)));
+    }
+
+    #[test]
+    fn a_torrent_the_browser_has_never_seen_is_sent_whole() {
+        // There is nothing on the other side to fold a difference into.
+        let before = Rows::new();
+        let now = one("a", 100, "something");
+        let (changed, _) = changes_between(&before, &now);
+
+        let Some(Json::Object(fields)) = changed.get("a") else {
+            panic!("a new torrent was not sent");
+        };
+        assert_eq!(fields.len(), 3, "a new torrent must arrive whole");
+    }
+
+    #[test]
+    fn a_torrent_that_is_gone_is_named_so_the_browser_drops_it() {
+        let before = one("a", 100, "something");
+        let now = Rows::new();
+        let (changed, removed) = changes_between(&before, &now);
+        assert!(changed.is_empty());
+        assert_eq!(removed, vec![json!("a")]);
+    }
+
+    #[test]
+    fn a_torrent_that_loses_a_field_is_sent_whole() {
+        // A difference can say "this field is now that"; it has no way to say
+        // "this field is gone". Sending the torrent whole is the answer that
+        // leaves the browser holding what the server holds.
+        let before = one("a", 100, "something");
+        let now = rows(&[("a", &[("name", json!("something"))])]);
+        let (changed, _) = changes_between(&before, &now);
+
+        let Some(Json::Object(fields)) = changed.get("a") else {
+            panic!("the torrent is missing");
+        };
+        assert_eq!(fields.len(), 1);
+        assert!(!fields.contains_key("state"), "a dropped field came back");
+    }
+
+    #[test]
+    fn a_rename_and_a_removal_in_the_same_answer_are_both_reported() {
+        let before = rows(&[
+            ("a", &[("name", json!("first"))]),
+            ("b", &[("name", json!("second"))]),
+        ]);
+        let now = rows(&[("a", &[("name", json!("renamed"))])]);
+        let (changed, removed) = changes_between(&before, &now);
+
+        assert_eq!(changed.len(), 1);
+        assert_eq!(
+            changed.get("a"),
+            Some(&json!({"name": "renamed"})),
+            "{changed:?}"
+        );
+        assert_eq!(removed, vec![json!("b")]);
+    }
+}
+
+#[cfg(test)]
+mod epoch_tests {
+    use super::*;
+    use crate::state::AppState;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    pub fn state() -> SharedState {
+        Arc::new(AppState {
+            settings: crate::state::Settings {
+                config_dir: std::path::PathBuf::from("/tmp"),
+                interface: "127.0.0.1".to_owned(),
+                port: 0,
+                base: "/".to_owned(),
+                session_timeout: std::time::Duration::from_secs(3600),
+                theme: "dark".to_owned(),
+                default_daemon: None,
+                version: "test".to_owned(),
+            },
+            password: tokio::sync::RwLock::new(crate::auth::StoredPassword::Unset),
+            sessions: Mutex::new(crate::auth::Sessions::new()),
+            login_throttle: Mutex::new(crate::throttle::Throttle::new()),
+            hosts: tokio::sync::RwLock::new(Vec::new()),
+            daemon: tokio::sync::RwLock::new(None),
+            client_settings: Default::default(),
+            events: Mutex::new(Default::default()),
+            events_ready: tokio::sync::Notify::new(),
+            web_config: tokio::sync::RwLock::new(crate::config::ConfigFile {
+                path: std::path::PathBuf::from("/tmp/web.conf"),
+                version: Map::new(),
+                settings: Map::new(),
+            }),
+            slow_stats: Mutex::new(Default::default()),
+            baselines: Mutex::new(Default::default()),
+            verifications: tokio::sync::Semaphore::new(crate::state::VERIFICATIONS_AT_ONCE),
+            daemon_methods: Mutex::new(None),
+        })
+    }
+
+    pub fn library(speed: i64) -> Json {
+        json!({
+            "aaaa": {"name": "first", "upload_payload_rate": speed},
+            "bbbb": {"name": "second", "upload_payload_rate": 0},
+        })
+    }
+
+    fn keys() -> Json {
+        json!(["name", "upload_payload_rate"])
+    }
+
+    #[tokio::test]
+    async fn the_first_poll_gets_the_whole_list_and_an_epoch() {
+        let state = state();
+        let answer = narrow_to_changes(
+            library(10),
+            &keys(),
+            &json!({}),
+            None,
+            Some("session".to_owned()),
+            &state,
+        )
+        .await;
+
+        match answer {
+            Answer::Whole { torrents, epoch } => {
+                assert_eq!(torrents, library(10));
+                assert_eq!(
+                    epoch,
+                    Some(1),
+                    "the browser was given nothing to come back with"
+                );
+            }
+            Answer::Changes { .. } => panic!("a browser with no list was sent a difference"),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_second_poll_gets_only_what_moved() {
+        let state = state();
+        let Answer::Whole {
+            epoch: Some(epoch), ..
+        } = narrow_to_changes(
+            library(10),
+            &keys(),
+            &json!({}),
+            None,
+            Some("session".to_owned()),
+            &state,
+        )
+        .await
+        else {
+            panic!("the first answer was not a whole list");
+        };
+
+        let answer = narrow_to_changes(
+            library(4096),
+            &keys(),
+            &json!({}),
+            Some(epoch),
+            Some("session".to_owned()),
+            &state,
+        )
+        .await;
+
+        match answer {
+            Answer::Changes {
+                changed,
+                removed,
+                epoch: next,
+            } => {
+                assert_eq!(changed.len(), 1, "only one torrent moved: {changed:?}");
+                assert_eq!(
+                    changed.get("aaaa"),
+                    Some(&json!({"upload_payload_rate": 4096}))
+                );
+                assert!(removed.is_empty());
+                assert_ne!(
+                    next, epoch,
+                    "the epoch has to move or the next poll repeats"
+                );
+            }
+            Answer::Whole { .. } => panic!("a browser holding the list was sent all of it again"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_epoch_that_does_not_match_gets_the_whole_list_again() {
+        // A reload, an answer that never arrived, a second tab. Being wrong
+        // this way costs bandwidth; being wrong the other way shows a list
+        // that quietly stopped being true.
+        let state = state();
+        narrow_to_changes(
+            library(10),
+            &keys(),
+            &json!({}),
+            None,
+            Some("session".to_owned()),
+            &state,
+        )
+        .await;
+
+        let answer = narrow_to_changes(
+            library(20),
+            &keys(),
+            &json!({}),
+            Some(999),
+            Some("session".to_owned()),
+            &state,
+        )
+        .await;
+        assert!(matches!(answer, Answer::Whole { epoch: Some(_), .. }));
+    }
+
+    #[tokio::test]
+    async fn changing_the_question_gets_the_whole_list_again() {
+        // Different keys, or a different filter, is a different question, and
+        // the difference between two different questions is not a difference.
+        let state = state();
+        let Answer::Whole {
+            epoch: Some(epoch), ..
+        } = narrow_to_changes(
+            library(10),
+            &keys(),
+            &json!({}),
+            None,
+            Some("session".to_owned()),
+            &state,
+        )
+        .await
+        else {
+            panic!("the first answer was not a whole list");
+        };
+
+        let answer = narrow_to_changes(
+            library(10),
+            &json!(["name"]),
+            &json!({}),
+            Some(epoch),
+            Some("session".to_owned()),
+            &state,
+        )
+        .await;
+        assert!(matches!(answer, Answer::Whole { .. }));
+
+        let filtered = narrow_to_changes(
+            library(10),
+            &keys(),
+            &json!({"state": "Seeding"}),
+            Some(epoch),
+            Some("session".to_owned()),
+            &state,
+        )
+        .await;
+        assert!(matches!(filtered, Answer::Whole { .. }));
+    }
+
+    #[tokio::test]
+    async fn the_setting_turns_it_off_and_nothing_is_remembered() {
+        let state = state();
+        state
+            .web_config
+            .write()
+            .await
+            .settings
+            .insert("delta_updates".to_owned(), Json::Bool(false));
+
+        let answer = narrow_to_changes(
+            library(10),
+            &keys(),
+            &json!({}),
+            None,
+            Some("session".to_owned()),
+            &state,
+        )
+        .await;
+        match answer {
+            Answer::Whole { torrents, epoch } => {
+                assert_eq!(torrents, library(10));
+                assert_eq!(epoch, None, "an epoch was handed out with the feature off");
+            }
+            Answer::Changes { .. } => panic!("a difference was sent with the feature off"),
+        }
+        assert!(
+            state.baselines.lock().await.is_empty(),
+            "a copy of the library was kept for nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_client_with_no_session_is_never_sent_a_difference() {
+        // There is nothing to remember it against.
+        let state = state();
+        let answer =
+            narrow_to_changes(library(10), &keys(), &json!({}), Some(1), None, &state).await;
+        assert!(matches!(
+            answer,
+            Answer::Whole {
+                torrents: Json::Null,
+                epoch: None
+            }
+        ));
+    }
+}
+
+#[cfg(test)]
+mod second_tab_tests {
+    use super::epoch_tests_support::*;
+    use super::*;
+
+    #[tokio::test]
+    async fn a_second_tab_cannot_be_handed_another_tabs_difference() {
+        // Both tabs share one session and poll with their own epochs. A
+        // baseline that started counting again would let the tab holding the
+        // older number match the newer baseline, and it would be sent a
+        // difference against a list it has never seen.
+        let state = state();
+        let session = Some("shared".to_owned());
+
+        let Answer::Whole {
+            epoch: Some(first), ..
+        } = narrow(&state, library(10), None, session.clone()).await
+        else {
+            panic!("the first tab was not given a whole list");
+        };
+
+        // The second tab asks with nothing, which starts a new baseline.
+        let Answer::Whole {
+            epoch: Some(second),
+            ..
+        } = narrow(&state, library(20), None, session.clone()).await
+        else {
+            panic!("the second tab was not given a whole list");
+        };
+        assert_ne!(first, second, "two baselines were given the same epoch");
+
+        // The first tab comes back with the number it still holds.
+        let answer = narrow(&state, library(30), Some(first), session).await;
+        assert!(
+            matches!(answer, Answer::Whole { .. }),
+            "a tab was sent a difference against a list it never had"
+        );
+    }
+}
+
+#[cfg(test)]
+mod epoch_tests_support {
+    use super::*;
+
+    pub use super::epoch_tests::{library, state};
+
+    pub async fn narrow(
+        state: &SharedState,
+        torrents: Json,
+        epoch: Option<u64>,
+        session: Option<String>,
+    ) -> Answer {
+        narrow_to_changes(
+            torrents,
+            &json!(["name", "upload_payload_rate"]),
+            &json!({}),
+            epoch,
+            session,
+            state,
+        )
+        .await
+    }
+}
+
+#[cfg(test)]
+mod method_list_tests {
+    use super::epoch_tests::state;
+    use super::*;
+
+    #[tokio::test]
+    async fn the_list_is_not_cached_while_there_is_no_daemon() {
+        // The local methods alone are a true answer and a poor thing to keep:
+        // caching them would hide the daemon's own methods for as long as this
+        // server runs, and the front end reads this list to decide what it can
+        // call.
+        let state = state();
+        let Ok(answer) = system_list_methods(&state).await else {
+            panic!("the method list was not answered");
+        };
+
+        let Json::Array(methods) = &answer else {
+            panic!("a list of names");
+        };
+        assert!(methods.contains(&json!("auth.login")));
+        assert!(
+            state.daemon_methods.lock().await.is_none(),
+            "an answer with no daemon in it was kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn what_was_cached_is_what_comes_back() {
+        let state = state();
+        *state.daemon_methods.lock().await = Some(json!(["core.something"]));
+        let Ok(answer) = system_list_methods(&state).await else {
+            panic!("the method list was not answered");
+        };
+        assert_eq!(answer, json!(["core.something"]));
+    }
+}

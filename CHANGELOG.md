@@ -12,6 +12,83 @@ may refuse the new one.
 
 ### Added
 
+- **The interface asks only for what it draws.** The grid asked for
+  thirty-five fields per torrent on every poll; a default column layout draws
+  sixteen of them, and somebody who has narrowed their columns draws fewer.
+  Measured on a thousand torrents, the whole list went from 824 KiB to 391 KiB
+  — half the answer was columns nobody had on screen. The daemon builds only
+  what is asked for, so the saving is the same on its side.
+  - A column being sorted on keeps its field even while it is hidden, or the
+    store would sort on something that stopped arriving.
+  - `state`, `label`, `queue` and the two the status bar counts are always
+    asked for: they decide icons, hidden labels, order and the two counters at
+    the bottom, whether or not a column shows them.
+  - Showing a column again changes the question, which is answered with the
+    whole list, so the field is there the moment the column is.
+
+- **A tab nobody is looking at stops polling.** A background tab asked for the
+  whole library every two seconds for as long as the browser was open — a walk
+  of the library on the daemon, an answer built and compressed, and a list
+  nobody could see. It stops when the tab is hidden and asks again the moment
+  it comes back, so the only work skipped is work whose result nobody would
+  have seen. A window behind another window still counts as being looked at,
+  which is what somebody with the list on a second screen wants.
+  - A hidden tab makes one call every quarter of an hour to keep its session
+    alive, because the session's expiry slides with each call and coming back
+    to a login window would be a poor trade. It checks the session and touches
+    nothing else.
+
+- **A connection answers several calls at once.** The daemon read one request,
+  answered it, and only then read the next, so a client that asked it to hash
+  forty gigabytes waited in silence — and so did every other call on that
+  connection, and the events it had subscribed to, which queued behind the call
+  they were about. Calls now run on their own, up to eight per connection, with
+  one task writing to the socket so replies and events do not wait for each
+  other. Replies carry the id they answer, as they always have, and the Python
+  daemon answered out of order too.
+  - The three calls that are about the connection itself — the version, the
+    login and the event subscription — are still answered in order, because
+    they decide what the calls after them may do.
+  - Every other call goes through one authorisation check, on the one path
+    there is. There is a test that says so, because a second path around it is
+    exactly the mistake this shape invites.
+- **The peer ledger's sweep no longer holds the daemon.** It asked libtorrent
+  for one peer list per torrent with the session thread held from the first to
+  the last, which on a large library stalled every client for the length of the
+  sweep. It goes in batches of sixty-four now, and whatever a client asked for
+  goes in between. Off by default, as before.
+- **A password is checked off the worker threads.** scrypt costs about a
+  seventh of a second and thirty-two mebibytes, measured; it ran on the thread
+  answering the request, so a burst of login attempts blocked every worker and
+  the server answered nothing at all — not even a stylesheet — for as long as
+  they took. It runs on the blocking pool now, two at a time at most, which
+  bounds what a flood can cost whatever address it comes from.
+- **`system.listMethods` is answered from memory.** It is the one call anybody
+  who can reach the port may make, and it went to the daemon every time. The
+  list does not change while a daemon is connected, so it is asked once and
+  forgotten when the connection is replaced.
+
+- **A poll sends only what changed.** The torrent list barely moves between
+  refreshes: a few speeds, a progress bar, and the other thirty-odd fields of
+  every torrent are the bytes they were two seconds ago. Measured on five
+  thousand torrents, the whole list is 4.0 MiB of JSON; the same poll with
+  nothing moving is 65 bytes, and with five per cent of the library
+  transferring it is 34 KiB — about a hundred and twenty times less, on the one
+  hop that is usually not local.
+  - The browser holds the list and an epoch, and sends the epoch back. When it
+    matches what that session was last sent, the answer is the difference; when
+    it does not — a reload, an answer that never arrived, a second tab, a
+    changed filter or a changed set of columns — the answer is the whole list
+    and a new epoch. Being wrong in that direction costs bandwidth; being wrong
+    in the other would show a list that quietly stopped being true.
+  - An epoch is never handed out twice for one session, which is what keeps two
+    tabs from being answered with each other's differences.
+  - The difference is computed by the Web UI server, so the daemon stays as it
+    was and every other client keeps getting whole answers.
+  - **Send only what changed since the last refresh**, under Preferences,
+    Interface, on by default. Turn it off for anything that reads the answers
+    itself without keeping a copy of the list between them.
+
 - **A label can refuse to have its torrents removed**, and it outranks the
   tracker rules. A tracker rule is the terms of a whole domain — remove
   finished torrents after a week — and a label is somebody naming the

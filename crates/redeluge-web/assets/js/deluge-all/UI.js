@@ -39,6 +39,14 @@ deluge.ui = {
     filters: null,
 
     /**
+     * How long a hidden tab waits between the calls that keep it logged in.
+     *
+     * Well under the shortest session timeout anybody sets, and far longer
+     * than anything that would show up as load.
+     */
+    heartbeatEvery: 15 * 60 * 1000,
+
+    /**
      * @description Create all the interface components, the json-rpc client
      * and set up various events that the UI will utilise.
      */
@@ -100,6 +108,7 @@ deluge.ui = {
 
         this.update = this.update.createDelegate(this);
         this.checkConnection = this.checkConnection.createDelegate(this);
+        this.watchVisibility();
 
         this.originalTitle = document.title;
     },
@@ -126,12 +135,94 @@ deluge.ui = {
 
     /**
      * Schedules the next poll, replacing any already pending.
+     *
+     * Nothing is scheduled while the tab is not being looked at. A tab left
+     * open in the background polled every two seconds for as long as the
+     * browser was running — a walk of the library on the daemon, an answer
+     * built and compressed, and a list nobody could see. `onShown` below asks
+     * again the moment it comes back, so what is saved is only the work whose
+     * result nobody would have seen.
      */
     schedule: function () {
         if (this.running) {
             clearTimeout(this.running);
+            this.running = undefined;
         }
+        if (this.hidden()) return;
         this.running = setTimeout(this.update, this.pollInterval());
+    },
+
+    /**
+     * Whether the tab is out of sight.
+     *
+     * A window behind another window is still visible as far as this is
+     * concerned, which is right: a list on a second screen is being looked at.
+     * A browser too old to have the property is treated as visible, so it
+     * keeps the behaviour it had.
+     */
+    hidden: function () {
+        return typeof document !== 'undefined' && document.hidden === true;
+    },
+
+    /**
+     * Keeps a hidden tab logged in, and nothing more.
+     *
+     * The session has a sliding expiry that every call extends, so a tab that
+     * polls never expires and one that stops polling does — after an hour, by
+     * default. Coming back to a login window because the tab was in the
+     * background is not an improvement, so while it is hidden one call goes
+     * out every quarter of an hour. It checks the session and touches nothing
+     * else: no walk of the library, no list built, about a millionth of what
+     * polling would have cost over the same time.
+     */
+    keepSessionAlive: function () {
+        if (this.heartbeat) {
+            clearTimeout(this.heartbeat);
+        }
+        this.heartbeat = setTimeout(
+            function () {
+                this.heartbeat = undefined;
+                if (!this.hidden()) return;
+                deluge.client.auth.check_session({
+                    success: this.keepSessionAlive,
+                    failure: this.keepSessionAlive,
+                    scope: this,
+                });
+            }.createDelegate(this),
+            this.heartbeatEvery
+        );
+    },
+
+    /**
+     * Starts and stops the loop as the tab is hidden and shown.
+     */
+    watchVisibility: function () {
+        if (typeof document === 'undefined' || typeof document.hidden !== 'boolean') {
+            return;
+        }
+        document.addEventListener(
+            'visibilitychange',
+            this.onVisibilityChanged.createDelegate(this)
+        );
+    },
+
+    onVisibilityChanged: function () {
+        if (this.hidden()) {
+            if (this.running) {
+                clearTimeout(this.running);
+                this.running = undefined;
+            }
+            this.keepSessionAlive();
+            return;
+        }
+        if (this.heartbeat) {
+            clearTimeout(this.heartbeat);
+            this.heartbeat = undefined;
+        }
+        // Back in front. The list is as old as the time away, so it is asked
+        // for now rather than at the next tick — and what comes back is the
+        // difference since the last answer, however long ago that was.
+        this.update();
     },
 
     update: function () {
@@ -171,7 +262,21 @@ deluge.ui = {
         this.oldFilters = this.filters;
         this.filters = filters;
 
-        deluge.client.web.update_ui(Deluge.Keys.Grid, filters, {
+        // The epoch the server last gave us. It answers with the difference
+        // since that one, or with the whole list and a new epoch when it
+        // cannot — which is what happens after a reload, after a dropped
+        // answer, and whenever the question changes. Asking a different
+        // question is one of those, so a filter change starts again from
+        // nothing rather than applying a difference to a list that was about
+        // to be replaced.
+        if (!Ext.areObjectsEqual(this.filters, this.oldFilters)) {
+            this.epoch = 0;
+        }
+
+        // Only the keys the columns on screen are drawn from: what nobody is
+        // looking at is not worth building, sending or parsing.
+        var keys = Deluge.Keys.forGrid(deluge.torrents);
+        deluge.client.web.update_ui(keys, filters, this.epoch || 0, {
             success: this.onUpdate,
             failure: this.onUpdateError,
             scope: this,
@@ -205,6 +310,10 @@ deluge.ui = {
         // Without this the loop would never poll again after one failure,
         // because `update` refuses to start while a poll is in flight.
         this.inFlight = false;
+        // And the answer that did not arrive may have been a difference the
+        // server has already counted as sent, so the next poll asks for the
+        // whole list.
+        this.epoch = 0;
         // A refresh asked for while this poll was failing is not worth
         // chasing: the reconnection below starts a fresh one.
         this.wanted = false;
@@ -254,10 +363,29 @@ deluge.ui = {
                 ' - ' +
                 this.originalTitle;
         }
+        this.epoch = data['epoch'] || 0;
+
+        // A difference is applied to the list we already have, and what comes
+        // out is the whole list again — so everything below this line, and
+        // everything the grid does with it, is unchanged.
+        // A difference with nothing to apply it to would draw whatever moved
+        // and call it the library. It should not be possible — the server only
+        // sends one when it knows what we hold — so this asks again rather
+        // than trying to make sense of it.
+        if (data['delta'] && !deluge.torrents.lastTorrents) {
+            this.epoch = 0;
+            this.update();
+            return;
+        }
+
+        var torrents = data['delta']
+            ? deluge.torrents.merge(data['torrents'], data['removed'])
+            : data['torrents'];
+
         if (Ext.areObjectsEqual(this.filters, this.oldFilters)) {
-            deluge.torrents.update(data['torrents']);
+            deluge.torrents.update(torrents);
         } else {
-            deluge.torrents.update(data['torrents'], true);
+            deluge.torrents.update(torrents, true);
         }
         deluge.statusbar.update(data['stats']);
         deluge.sidebar.update(data['filters']);

@@ -42,6 +42,11 @@ Deluge.Formatters = (function () {
      */
     return (Formatters = {
         date: function (timestamp) {
+            // A field that was not asked for draws as nothing; without this it
+            // drew "NaN-NaN-NaN NaN:NaN:NaN".
+            if (timestamp === undefined || timestamp === null || isNaN(timestamp)) {
+                return '';
+            }
             function zeroPad(num, count) {
                 var numZeropad = num + '';
                 while (numZeropad.length < count) {
@@ -132,6 +137,15 @@ Deluge.Formatters = (function () {
          * @return {String} a formatted time string. will return '' if seconds == 0
          */
         timeRemaining: function (time) {
+            // A column can be asked to draw a field that is not there: the
+            // interface asks only for what its visible columns need, and
+            // ExtJS renders the hidden ones anyway, into a style that hides
+            // them. Nothing to say is said with nothing rather than with an
+            // exception out of the grid's render loop, which leaves every row
+            // after it blank.
+            if (time === undefined || time === null || isNaN(time)) {
+                return '';
+            }
             if (time <= 0) {
                 return '&infin;';
             }

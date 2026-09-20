@@ -48,6 +48,9 @@ fn state(config_dir: &std::path::Path) -> SharedState {
             settings: serde_json::Map::new(),
         }),
         slow_stats: Mutex::new(Default::default()),
+        baselines: Mutex::new(Default::default()),
+        verifications: tokio::sync::Semaphore::new(redeluge_web::state::VERIFICATIONS_AT_ONCE),
+        daemon_methods: Mutex::new(None),
     })
 }
 
@@ -238,6 +241,41 @@ async fn logging_in_gives_a_session_that_later_calls_accept() {
     let (body, _) = call(&app, "web.get_config", json!([]), Some(&session)).await;
     assert_eq!(body["error"], Json::Null);
     assert!(body["result"].is_object());
+}
+
+#[actix_web::test]
+async fn a_burst_of_logins_is_all_answered_and_the_server_still_serves() {
+    // Verifying a password costs about a seventh of a second of scrypt. Run on
+    // the worker threads, a burst of attempts blocked every one of them and
+    // the server answered nothing at all — not even a stylesheet — until they
+    // were done. They run on the blocking pool now, a couple at a time.
+    let dir = tempfile::tempdir().unwrap();
+    let app = booted!(state(dir.path()));
+
+    // More than the throttle allows in a burst: the first few are verified and
+    // refused, the rest are turned away before any scrypt happens. Every one
+    // has to come back with an answer of some kind.
+    let mut wrong = 0;
+    let mut throttled = 0;
+    for _ in 0..8 {
+        let (body, _) = call(&app, "auth.login", json!(["wrong"]), None).await;
+        if body["result"] == json!(false) {
+            wrong += 1;
+        } else if body["error"]["code"] == json!(3) {
+            throttled += 1;
+        } else {
+            panic!("a login attempt was not answered: {body}");
+        }
+    }
+    assert!(wrong > 0, "no attempt was actually verified");
+    assert!(throttled > 0, "the throttle stopped bounding the burst");
+
+    // And an asset is still served, which is the thing that used to stop.
+    let request = actix_web::test::TestRequest::get()
+        .uri("/css/deluge.css")
+        .to_request();
+    let response = actix_web::test::call_service(&app, request).await;
+    assert!(response.status().is_success(), "the server stopped serving");
 }
 
 #[actix_web::test]

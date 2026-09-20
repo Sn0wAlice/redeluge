@@ -164,6 +164,7 @@ dictionary the client sends wins over them, which is Deluge's order.
 | `language` | `""` | Always empty: there is one language |
 | `session_timeout` | `3600` | Seconds |
 | `poll_interval` | `2000` | How often the interface polls, in milliseconds; Preferences, Interface |
+| `delta_updates` | `true` | Answer a poll with the difference since the last one rather than the whole torrent list; Preferences, Interface |
 | `default_daemon` | unset | The daemon to connect to on start |
 | `pwd_sha1`, `pwd_salt` | seeded | The Web UI password, scrypt despite the key name |
 | `daemon_fingerprints` | absent | Host id to sha256, to pin a remote daemon's certificate; Connection Manager, Edit |

@@ -762,9 +762,46 @@ async fn keep_the_peer_ledger(core: Arc<Core>) {
             last_save = std::time::Instant::now();
         }
 
+        // In batches rather than in one pass. Every peer list is a round trip
+        // to libtorrent's own thread — about thirty microseconds each — and
+        // they used to be taken with the session thread held from the first to
+        // the last, so a library of a few thousand stalled every client for
+        // the length of the whole sweep. Each batch is its own job, and
+        // anything a client asked for goes in between.
+        const BATCH: usize = 64;
+
+        let wanted = match core.manager.with(torrents_with_peers).await {
+            Ok(wanted) => wanted,
+            Err(err) => {
+                tracing::warn!(error = %err, "the torrent manager is not answering");
+                continue;
+            }
+        };
+
+        let mut observations: Vec<crate::peers::Observation> = Vec::new();
+        let mut lost = false;
+        for batch in wanted.chunks(BATCH) {
+            let batch = batch.to_vec();
+            match core
+                .manager
+                .with(move |state| observe_peers(state, &batch))
+                .await
+            {
+                Ok(mut seen) => observations.append(&mut seen),
+                Err(err) => {
+                    tracing::warn!(error = %err, "the torrent manager is not answering");
+                    lost = true;
+                    break;
+                }
+            }
+        }
+        if lost {
+            continue;
+        }
+
         let outcome = core
             .manager
-            .with(move |state| sample_peers(state, now, ttl, save))
+            .with(move |state| fold_observations(state, observations, now, ttl, save))
             .await;
 
         match outcome {
@@ -779,29 +816,36 @@ async fn keep_the_peer_ledger(core: Arc<Core>) {
     }
 }
 
-/// One pass of the sampler: every peer of every torrent that has any.
+/// Which torrents have peers worth asking about.
 ///
-/// Done inside the session thread, because that is where the peer lists are,
-/// and in one pass rather than one call per torrent: the cost of this feature
-/// is dominated by how often it crosses that boundary.
-fn sample_peers(
-    state: &mut crate::manager::SessionState,
-    now: f64,
-    ttl: f64,
-    save: bool,
-) -> (usize, usize) {
-    let statuses = state.session.all_torrent_status();
+/// One walk of the library, which is cheap; the asking is what is not, and it
+/// is done in batches by the caller.
+fn torrents_with_peers(state: &mut crate::manager::SessionState) -> Vec<String> {
+    state
+        .session
+        .all_torrent_status()
+        .into_iter()
+        .filter(|status| status.num_peers > 0)
+        .map(|status| status.info_hash)
+        .collect()
+}
 
-    // Gathered first, then folded in, so the ledger's lock is taken once and
-    // not once per torrent.
+/// The peers of one batch of torrents.
+///
+/// Inside the session thread, because that is where the peer lists are — but
+/// only for as long as this batch takes, so a client asking for something
+/// while the sweep runs waits for sixty-odd peer lists rather than for all of
+/// them.
+fn observe_peers(
+    state: &mut crate::manager::SessionState,
+    wanted: &[String],
+) -> Vec<crate::peers::Observation> {
+    // Gathered rather than folded in here, so the ledger's lock is taken once
+    // for the whole sweep and not once per batch.
     let mut observations: Vec<crate::peers::Observation> = Vec::new();
 
-    for status in &statuses {
-        // Nothing to ask about, and the call is not free.
-        if status.num_peers <= 0 {
-            continue;
-        }
-        let Ok(peers) = state.session.peers(&status.info_hash) else {
+    for id in wanted {
+        let Ok(peers) = state.session.peers(id) else {
             continue;
         };
         if peers.is_empty() {
@@ -812,21 +856,21 @@ fn sample_peers(
         // time it is wanted and kept: the file list cannot change once the
         // metadata is there, and this is the one call in the pass that has to
         // go and fetch something.
-        let content = match state.torrents.get(&status.info_hash) {
+        let content = match state.torrents.get(id) {
             Some(torrent) => match &torrent.content_id {
-                Some(id) => id.clone(),
+                Some(existing) => existing.clone(),
                 None => {
-                    let files = state.session.files(&status.info_hash).unwrap_or_default();
-                    let id = crate::torrent::content_fingerprint(&files);
-                    if let Some(torrent) = state.torrents.get_mut(&status.info_hash) {
+                    let files = state.session.files(id).unwrap_or_default();
+                    let fingerprint = crate::torrent::content_fingerprint(&files);
+                    if let Some(torrent) = state.torrents.get_mut(id) {
                         // Stored even when empty: an empty answer means the
                         // metadata is not there yet, and asking again next
                         // pass is the point.
-                        if !id.is_empty() {
-                            torrent.content_id = Some(id.clone());
+                        if !fingerprint.is_empty() {
+                            torrent.content_id = Some(fingerprint.clone());
                         }
                     }
-                    id
+                    fingerprint
                 }
             },
             None => continue,
@@ -836,7 +880,7 @@ fn sample_peers(
             observations.push(crate::peers::Observation {
                 address: peer.ip.clone(),
                 client: peer.client.clone(),
-                torrent: status.info_hash.clone(),
+                torrent: id.clone(),
                 content: content.clone(),
                 // Ours is what we sent them: libtorrent's `total_upload` is
                 // the upload of this connection, which is us to them.
@@ -846,6 +890,17 @@ fn sample_peers(
         }
     }
 
+    observations
+}
+
+/// Folds a sweep's observations into the ledger, in one lock.
+fn fold_observations(
+    state: &mut crate::manager::SessionState,
+    observations: Vec<crate::peers::Observation>,
+    now: f64,
+    ttl: f64,
+    save: bool,
+) -> (usize, usize) {
     let seen = observations.len();
     let Ok(mut ledger) = state.peers.lock() else {
         return (0, 0);

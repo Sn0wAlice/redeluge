@@ -11,6 +11,7 @@
 (function () {
     /* Renderers for the Torrent Grid */
     function queueRenderer(value) {
+        if (value === undefined || value === null) return '';
         return value == -1 ? '' : value + 1;
     }
     function torrentNameRenderer(value, p, r) {
@@ -33,6 +34,9 @@
         return fspeed(value * 1024.0);
     }
     function torrentProgressRenderer(value, p, r) {
+        // Same as the formatters: a field that was not asked for draws as
+        // nothing rather than throwing out of the render loop.
+        if (value === undefined || value === null) return '';
         value = new Number(value);
         var text = _(r.data['state'] || '') + ' ' + value.toFixed(2) + '%';
         // The old form indexed the result of a regex match without checking
@@ -56,6 +60,7 @@
         }
     }
     function availRenderer(value, p, r) {
+        if (value === undefined || value === null || isNaN(value)) return '';
         return value < 0 ? '&infin;' : parseFloat(new Number(value).toFixed(3));
     }
     function trackerRenderer(value, p, r) {
@@ -137,10 +142,12 @@
     }
 
     function dateOrNever(date) {
+        if (date === undefined || date === null) return '';
         return date > 0.0 ? fdate(date) : _('Never');
     }
 
     function timeOrInf(time) {
+        if (time === undefined || time === null) return '';
         if (time === 0) return '';
         if (time <= -1) return '&infin;';
         return ftime(time);
@@ -553,6 +560,40 @@
                 ids.push(r.id);
             });
             return ids;
+        },
+
+        /**
+         * Folds a difference into the list we already hold.
+         *
+         * The server sends only the torrents that moved, and only the fields
+         * of them that moved; a torrent it has not sent before arrives whole,
+         * because there is nothing here to fold it into. What comes out is the
+         * same shape `update` has always taken, so nothing below this knows
+         * the difference — which is the point: the transport got cheaper and
+         * the grid did not have to learn anything.
+         *
+         * @param {Object} changed The torrents that moved, by id
+         * @param {Array} removed The ids that are no longer in the answer
+         */
+        merge: function (changed, removed) {
+            var all = this.lastTorrents || {};
+
+            Ext.each(removed || [], function (id) {
+                delete all[id];
+            });
+
+            for (var id in changed || {}) {
+                var fields = changed[id];
+                if (!all[id]) {
+                    all[id] = fields;
+                    continue;
+                }
+                for (var key in fields) {
+                    all[id][key] = fields[key];
+                }
+            }
+
+            return all;
         },
 
         update: function (torrents, wipe) {

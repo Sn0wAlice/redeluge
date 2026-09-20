@@ -267,6 +267,14 @@ impl Sessions {
         before - self.entries.len()
     }
 
+    /// Whether this session is one the server still holds.
+    ///
+    /// Read-only, unlike `touch`: the baseline sweeper asks about sessions it
+    /// is not using, and asking must not keep them alive.
+    pub fn holds(&self, id: &str) -> bool {
+        self.entries.contains_key(id)
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }

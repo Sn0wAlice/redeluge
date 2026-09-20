@@ -162,6 +162,9 @@ async fn main() -> std::io::Result<()> {
         events_ready: tokio::sync::Notify::new(),
         web_config: RwLock::new(web_config),
         slow_stats: Mutex::new(Default::default()),
+        baselines: Mutex::new(Default::default()),
+        verifications: tokio::sync::Semaphore::new(redeluge_web::state::VERIFICATIONS_AT_ONCE),
+        daemon_methods: Mutex::new(None),
     });
 
     // Connect up front when the configuration names a daemon, so the first page
@@ -285,6 +288,16 @@ fn spawn_session_sweeper(state: SharedState) {
             let dropped = state.sessions.lock().await.sweep();
             if dropped > 0 {
                 tracing::debug!(dropped, "expired sessions removed");
+            }
+            // What each session was last told about the torrents is as big as
+            // the library, so it goes when the session does.
+            {
+                let sessions = state.sessions.lock().await;
+                state
+                    .baselines
+                    .lock()
+                    .await
+                    .keep_only(&|id: &str| sessions.holds(id));
             }
             let forgotten = state
                 .login_throttle

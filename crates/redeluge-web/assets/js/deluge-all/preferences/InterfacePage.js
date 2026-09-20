@@ -152,6 +152,31 @@ Deluge.preferences.Interface = Ext.extend(Ext.form.FormPanel, {
                 incrementValue: 500,
             })
         );
+
+        fieldset = this.add({
+            xtype: 'fieldset',
+            border: false,
+            title: _('Refreshing'),
+            style: 'padding-top: 5px; margin-bottom: 0px; padding-bottom: 5px',
+            autoHeight: true,
+            labelWidth: 1,
+            defaultType: 'checkbox',
+            defaults: { labelSeparator: '', hideLabel: true },
+        });
+        om.bind(
+            'delta_updates',
+            fieldset.add({
+                name: 'delta_updates',
+                boxLabel: _('Send only what changed since the last refresh'),
+            })
+        );
+        fieldset.add({
+            xtype: 'label',
+            text: _(
+                'The list barely moves between refreshes: a few speeds, a progress bar, and everything else is what it was two seconds ago. Sending only the differences is most of the traffic on a large library — four megabytes a refresh at five thousand torrents becomes a few kilobytes — and it matters most over a connection you are paying for. Turn it off if something other than this interface reads the answers and does not keep a copy of the list between them.'
+            ),
+            style: 'display: block; margin: 2px 0 0 0; opacity: 0.72;',
+        });
     },
 
     onApply: function () {

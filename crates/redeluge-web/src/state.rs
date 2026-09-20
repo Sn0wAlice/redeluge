@@ -62,6 +62,109 @@ pub struct AppState {
     pub web_config: RwLock<ConfigFile>,
     /// Daemon answers the status bar shows and that hardly ever change.
     pub slow_stats: Mutex<SlowStats>,
+    /// What each browser session was last told about the torrents.
+    pub baselines: Mutex<Baselines>,
+    /// How many passwords may be verified at once.
+    ///
+    /// scrypt is deliberately slow and deliberately hungry: the parameters
+    /// here cost about a seventh of a second and thirty-two mebibytes per
+    /// attempt. Ten of those at once — which is what ten worker threads
+    /// answering a flood of logins would do — is a third of a gigabyte and a
+    /// server that answers nothing else while it lasts. The per-address
+    /// throttle bounds one client; this bounds every client at once.
+    pub verifications: tokio::sync::Semaphore,
+    /// The daemon's method list, which does not change while it is connected.
+    ///
+    /// `system.listMethods` is answered before a session exists — the front
+    /// end asks for it on the way to the login window — and answering it used
+    /// to mean a round trip to the daemon. Cleared when the connection is.
+    pub daemon_methods: Mutex<Option<serde_json::Value>>,
+}
+
+/// How many passwords may be verified at the same time.
+pub const VERIFICATIONS_AT_ONCE: usize = 2;
+
+/// What one browser session has already been sent.
+///
+/// The torrent list is almost entirely the same from one poll to the next: a
+/// few speeds move, a progress bar advances, and the other thirty-odd fields
+/// of every torrent are the same bytes they were two seconds ago. On a library
+/// of five thousand that is four megabytes of JSON, twice a second, to say
+/// that almost nothing happened.
+///
+/// So the answer is compared with the last one and only the differences are
+/// sent. This is kept here rather than in the daemon because this is the hop
+/// that costs: the daemon is usually on the same machine, and the browser is
+/// usually not.
+#[derive(Debug)]
+pub struct Baseline {
+    /// Bumped on every answer. The browser sends back the one it holds, and a
+    /// mismatch — a reload, a dropped answer, a second tab — means it cannot
+    /// apply a difference and is sent the whole list instead.
+    pub epoch: u64,
+    /// What was asked for. A client that changes its columns or its filters is
+    /// asking a different question, and the difference between two different
+    /// questions is not a difference.
+    pub keys: serde_json::Value,
+    pub filters: serde_json::Value,
+    /// The torrents as they were last sent, by id.
+    pub torrents: std::collections::HashMap<String, serde_json::Map<String, serde_json::Value>>,
+}
+
+/// The baselines, by session id.
+///
+/// Bounded: a browser session is cheap to make and each of these is as big as
+/// the library. Four is more than the tabs anybody has open, and the one
+/// dropped is the one whose session has been quiet longest.
+#[derive(Debug, Default)]
+pub struct Baselines {
+    entries: std::collections::HashMap<String, (Instant, Baseline)>,
+}
+
+/// How many sessions may hold one at a time.
+const MAX_BASELINES: usize = 4;
+
+impl Baselines {
+    pub fn get(&mut self, session: &str) -> Option<&mut Baseline> {
+        self.entries.get_mut(session).map(|(seen, baseline)| {
+            *seen = Instant::now();
+            baseline
+        })
+    }
+
+    pub fn put(&mut self, session: &str, baseline: Baseline) {
+        self.entries
+            .insert(session.to_owned(), (Instant::now(), baseline));
+        while self.entries.len() > MAX_BASELINES {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (seen, _))| *seen)
+                .map(|(id, _)| id.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
+
+    /// Forgets the sessions that are gone, so a server that has been up for a
+    /// month is not holding a copy of the library per session it ever had.
+    pub fn keep_only(&mut self, live: &dyn Fn(&str) -> bool) {
+        self.entries.retain(|id, _| live(id));
+    }
+
+    pub fn forget(&mut self, session: &str) {
+        self.entries.remove(session);
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 /// The parts of a poll that are not worth asking for every two seconds.
@@ -184,3 +287,68 @@ impl EventQueue {
 }
 
 pub type SharedState = Arc<AppState>;
+
+#[cfg(test)]
+mod baseline_tests {
+    use super::*;
+
+    fn baseline(epoch: u64) -> Baseline {
+        Baseline {
+            epoch,
+            keys: serde_json::json!(["name"]),
+            filters: serde_json::json!({}),
+            torrents: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn what_a_session_was_told_comes_back_to_it() {
+        let mut baselines = Baselines::default();
+        baselines.put("session-a", baseline(7));
+        assert_eq!(baselines.get("session-a").map(|it| it.epoch), Some(7));
+        assert!(baselines.get("session-b").is_none());
+    }
+
+    #[test]
+    fn only_a_few_sessions_may_hold_one_at_a_time() {
+        // Each of these is as big as the library, and a browser session is
+        // cheap to make. The one dropped is the one nobody has polled with
+        // for longest, which is the tab that was closed.
+        let mut baselines = Baselines::default();
+        for round in 0..10u64 {
+            baselines.put(&format!("session-{round}"), baseline(round));
+        }
+        assert_eq!(baselines.len(), MAX_BASELINES);
+        assert!(
+            baselines.get("session-9").is_some(),
+            "the most recent session lost its baseline"
+        );
+        assert!(
+            baselines.get("session-0").is_none(),
+            "the oldest session kept a copy of the library"
+        );
+    }
+
+    #[test]
+    fn a_session_that_has_gone_takes_its_copy_with_it() {
+        let mut baselines = Baselines::default();
+        baselines.put("live", baseline(1));
+        baselines.put("expired", baseline(1));
+
+        baselines.keep_only(&|id: &str| id == "live");
+
+        assert!(baselines.get("live").is_some());
+        assert!(baselines.get("expired").is_none());
+    }
+
+    #[test]
+    fn forgetting_one_leaves_the_others() {
+        let mut baselines = Baselines::default();
+        baselines.put("a", baseline(1));
+        baselines.put("b", baseline(1));
+        baselines.forget("a");
+        assert!(baselines.get("a").is_none());
+        assert!(baselines.get("b").is_some());
+        assert!(!baselines.is_empty());
+    }
+}
