@@ -292,6 +292,99 @@ async fn a_key_asked_for_twice_is_answered_once() {
     assert_eq!(names_of(only_status(&answer)), vec!["name".to_owned()]);
 }
 
+// ------------------------------------------------------- the tracker cache
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_remembered_tracker_is_dropped_when_the_trackers_change() {
+    // A torrent that has not announced yet falls back to the first tracker it
+    // lists, and that answer is remembered: asking libtorrent for it is a
+    // round trip to its own thread, and a poll would make one per torrent.
+    // What is remembered has to stop being remembered when somebody changes
+    // the list, or the sidebar groups the torrent under a tracker it no
+    // longer has — for as long as the daemon runs.
+    let (core, _dir) = daemon().await;
+    call(
+        &core,
+        "core.add_torrent_magnet",
+        vec![
+            Value::Str(format!(
+                "{MAGNET}&tr=udp://tracker.first.invalid:6969/announce"
+            )),
+            Value::Dict(Vec::new()),
+        ],
+    )
+    .await;
+
+    let host = |answer: &Value| -> String {
+        only_status(answer)
+            .iter()
+            .find(|(key, _)| key.as_str() == Some("tracker_host"))
+            .and_then(|(_, value)| value.as_str().map(str::to_owned))
+            .unwrap_or_default()
+    };
+
+    let before = call(
+        &core,
+        "core.get_torrents_status",
+        vec![Value::Dict(Vec::new()), keys(&["tracker_host"])],
+    )
+    .await;
+    assert_eq!(host(&before), "first.invalid");
+    // Asked twice, because the second answer is the one that comes from what
+    // was remembered rather than from libtorrent.
+    let again = call(
+        &core,
+        "core.get_torrents_status",
+        vec![Value::Dict(Vec::new()), keys(&["tracker_host"])],
+    )
+    .await;
+    assert_eq!(host(&again), "first.invalid", "the cached answer is wrong");
+
+    let id = only_status(&before)
+        .iter()
+        .find(|(key, _)| key.as_str() == Some("hash"))
+        .map(|(_, value)| value.clone());
+    let id = match id {
+        Some(Value::Str(id)) => id,
+        _ => {
+            // `hash` was not among the keys asked for above; take it from the
+            // dictionary the answer is keyed by.
+            let Value::Dict(torrents) = &before else {
+                panic!("a dictionary");
+            };
+            torrents[0].0.as_str().expect("an id").to_owned()
+        }
+    };
+
+    call(
+        &core,
+        "core.set_torrent_trackers",
+        vec![
+            Value::Str(id),
+            Value::List(vec![Value::Dict(vec![
+                (
+                    Value::Str("url".to_owned()),
+                    Value::Str("udp://tracker.second.invalid:6969/announce".to_owned()),
+                ),
+                (Value::Str("tier".to_owned()), Value::Int(0)),
+            ])]),
+        ],
+    )
+    .await;
+
+    let after = call(
+        &core,
+        "core.get_torrents_status",
+        vec![Value::Dict(Vec::new()), keys(&["tracker_host"])],
+    )
+    .await;
+    assert_eq!(
+        host(&after),
+        "second.invalid",
+        "the tracker that was remembered outlived the one that was set"
+    );
+}
+
 // -------------------------------------------------------------- one poll
 
 #[tokio::test(flavor = "multi_thread")]

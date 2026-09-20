@@ -12,10 +12,10 @@ may refuse the new one.
 
 ### Changed
 
-- **A poll costs a third of what it did.** Measured on a library of 400
+- **A poll costs a tenth of what it did.** Measured on a library of 400
   torrents: one refresh of the Web UI took 127 ms of the daemon's time and now
-  takes 36 ms, and the daemon's background cost with nobody watching fell from
-  16% of a core to 4%. Four things were paid for and never used:
+  takes 12 ms, and the daemon's background cost with nobody watching fell from
+  16% of a core to 4%. Five things were paid for and never used:
   - libtorrent was asked for the piece map of every torrent on every status
     call — one entry per piece, copied for a sweep four times a second, for
     every rule's pass and for every poll. Nothing read it. The one place that
@@ -30,6 +30,14 @@ may refuse the new one.
     for.
   - every torrent's status came from one call per handle, each taking
     libtorrent's session lock; they come from one call for the session now.
+  - the tracker a torrent falls back to, for the ones that have not announced
+    yet, was asked of libtorrent once per torrent per pass. Every
+    `torrent_handle` method is answered by libtorrent's own thread, so each of
+    those was a round trip between threads — thirty microseconds that became
+    two thirds of a poll on a library of four hundred, and that every paused
+    torrent and every torrent in the first minute after a restart paid. The
+    first tracker of each torrent is remembered now, and forgotten when the
+    trackers are replaced or a magnet's metadata brings its own.
 - **`redeluge.update_ui`**, which answers a torrent list, the sidebar's counts
   and the session totals from one walk of the library. The Web UI asked for
   those as three calls, and the daemon answers one call at a time per

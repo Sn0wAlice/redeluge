@@ -1197,6 +1197,7 @@ impl Rpc for Core {
                             trackers.iter().map(|(url, _)| url.clone()).collect();
                         let tiers: Vec<u8> = trackers.iter().map(|(_, tier)| *tier).collect();
                         let _ = state.session.replace_trackers(&id, &urls, &tiers);
+                        state.forget_trackers(&id);
                         if let Some(torrent) = state.torrents.get_mut(&id) {
                             torrent.options.trackers = stored
                                 .into_iter()
@@ -2967,19 +2968,23 @@ type FilterRow = (TorrentState, String, String, String, bool, String, bool);
 
 /// The sidebar's rows, read off a walk the caller already did.
 fn filter_rows(
-    state: &crate::manager::SessionState,
+    state: &mut crate::manager::SessionState,
     statuses: &[redeluge_libtorrent::TorrentStatus],
 ) -> Vec<FilterRow> {
     let session_paused = state.session_paused;
     statuses
         .iter()
         .filter_map(|status| {
-            let torrent = state.torrents.get(&status.info_hash)?;
+            if !state.torrents.contains_key(&status.info_hash) {
+                return None;
+            }
             // The fallback to the first tracker is why the list is wanted at
             // all: the sidebar groups by the announced one and the status
             // applies the same rule, so it is fetched only when there is
-            // nothing announced to fall back from.
+            // nothing announced to fall back from. Before the torrent is
+            // borrowed, because looking it up may fill the cache.
             let trackers = state.tracker_list(status, false);
+            let torrent = state.torrents.get(&status.info_hash)?;
             Some((
                 torrent.state(status, session_paused),
                 crate::torrent::current_tracker(&status.current_tracker, &trackers),
@@ -2997,7 +3002,7 @@ fn filter_rows(
 
 /// One status dictionary per torrent, read off a walk the caller already did.
 fn status_rows(
-    state: &crate::manager::SessionState,
+    state: &mut crate::manager::SessionState,
     statuses: &[redeluge_libtorrent::TorrentStatus],
     grace: u64,
     rules: &crate::features::tracker::Settings,
@@ -3006,15 +3011,20 @@ fn status_rows(
     let session_paused = state.session_paused;
     let mut out: Vec<(String, BTreeMap<String, Value>)> = Vec::new();
     for status in statuses {
-        let Some(torrent) = state.torrents.get(&status.info_hash) else {
+        if !state.torrents.contains_key(&status.info_hash) {
             continue;
-        };
+        }
+        // Before the torrent is borrowed: looking the trackers up may fill
+        // the cache that makes the next pass cheap.
         let trackers = state.tracker_list(status, keys.wants("trackers"));
         let idle_since = state
             .idle_since
             .get(&status.info_hash)
             .copied()
             .unwrap_or_default();
+        let Some(torrent) = state.torrents.get(&status.info_hash) else {
+            continue;
+        };
         out.push((
             status.info_hash.clone(),
             torrent.status_with_peers(

@@ -72,6 +72,15 @@ pub struct SessionState {
     /// first time again, and re-applying a rule that has not changed writes
     /// the same numbers.
     pub tracker_limits: BTreeMap<String, String>,
+    /// The first tracker each torrent lists, for the fallback below.
+    ///
+    /// Only the first, and only its URL: that is all the fallback reads. The
+    /// list itself is never served from here, because what a client asks the
+    /// `trackers` key for includes how each one is doing, and that changes
+    /// with every announce.
+    ///
+    /// Not saved. It is rebuilt the first time each torrent is looked at.
+    first_tracker: BTreeMap<String, String>,
     /// Where each torrent's byte count last moved, in its own active seconds.
     ///
     /// The clock the stuck rule measures from. Not saved, deliberately: a
@@ -127,14 +136,53 @@ impl SessionState {
     /// nobody asked for the list, neither applies and an empty list is the
     /// same answer for less work.
     pub fn tracker_list(
-        &self,
+        &mut self,
         status: &LtStatus,
         needs_list: bool,
     ) -> Vec<redeluge_libtorrent::TrackerEntry> {
-        if !needs_list && !status.current_tracker.is_empty() {
+        if needs_list {
+            let list = self.session.trackers(&status.info_hash).unwrap_or_default();
+            self.note_first_tracker(&status.info_hash, &list);
+            return list;
+        }
+        if !status.current_tracker.is_empty() {
             return Vec::new();
         }
-        self.session.trackers(&status.info_hash).unwrap_or_default()
+
+        // Nothing has been announced to, so the fallback is the first tracker
+        // the torrent lists — and that does not change while the daemon runs,
+        // except where this cache is dropped. Asking libtorrent for it costs
+        // about thirty microseconds: `torrent_handle` methods are answered by
+        // libtorrent's own thread, so each one is a round trip between
+        // threads whatever it returns. Thirty microseconds is nothing until
+        // it is once per torrent, four times a second, and then it is the
+        // most expensive thing a poll does — on a library of four hundred it
+        // was two thirds of the whole answer, and every torrent in a paused
+        // library takes this path, as does every torrent for the first minute
+        // after a restart.
+        if let Some(url) = self.first_tracker.get(&status.info_hash) {
+            return one_tracker(url);
+        }
+        let list = self.session.trackers(&status.info_hash).unwrap_or_default();
+        self.note_first_tracker(&status.info_hash, &list);
+        list
+    }
+
+    /// Remembers what the fallback should answer for this torrent.
+    fn note_first_tracker(&mut self, id: &str, list: &[redeluge_libtorrent::TrackerEntry]) {
+        let first = list
+            .first()
+            .map(|entry| entry.url.clone())
+            .unwrap_or_default();
+        self.first_tracker.insert(id.to_owned(), first);
+    }
+
+    /// Drops what is remembered about a torrent's trackers.
+    ///
+    /// Called wherever the list can change under us: somebody replaces it, or
+    /// a magnet's metadata arrives carrying trackers the magnet did not name.
+    pub fn forget_trackers(&mut self, id: &str) {
+        self.first_tracker.remove(id);
     }
 
     pub fn mark_dirty(&mut self) {
@@ -170,6 +218,7 @@ impl SessionState {
         // that had already been running for hours.
         self.progress_marks.remove(id);
         self.tracker_limits.remove(id);
+        self.first_tracker.remove(id);
     }
 
     /// The status of one torrent, or None when it is gone.
@@ -347,6 +396,7 @@ impl Manager {
             low_space: false,
             paused_by_session: std::collections::BTreeSet::new(),
             tracker_limits: BTreeMap::new(),
+            first_tracker: BTreeMap::new(),
             progress_marks: BTreeMap::new(),
             activity: std::sync::Arc::clone(&activity),
             peers: std::sync::Arc::clone(&peers),
@@ -851,8 +901,11 @@ fn handle_alert<F: Fn(Event)>(state: &mut SessionState, alert: &Alert, emit: &F)
         }
 
         AlertKind::MetadataReceived => {
-            // A magnet becomes a real torrent here. Writing the file now is
-            // what lets it restart without re-fetching its metadata.
+            // A magnet becomes a real torrent here, and the metadata can name
+            // trackers the magnet link did not.
+            state.forget_trackers(&id);
+            // Writing the file now is what lets it restart without
+            // re-fetching its metadata.
             let state_dir = state.state_dir();
             if let Ok(bytes) = state.session.torrent_file(&id) {
                 let path = torrent_file_path(&state_dir, &id);
@@ -883,6 +936,23 @@ fn handle_alert<F: Fn(Event)>(state: &mut SessionState, alert: &Alert, emit: &F)
 /// uses it for too.
 pub fn torrent_file_path(state_dir: &Path, id: &str) -> PathBuf {
     state_dir.join(format!("{id}.torrent"))
+}
+
+/// The fallback's answer, in the shape the callers read.
+///
+/// One entry carrying a URL, because [`crate::torrent::current_tracker`] takes
+/// a tracker list and reads the first one's URL out of it. Nothing else is
+/// filled in and nothing reads anything else: a caller that wants how a
+/// tracker is doing asks for the list itself, which is never served from the
+/// cache.
+fn one_tracker(url: &str) -> Vec<redeluge_libtorrent::TrackerEntry> {
+    if url.is_empty() {
+        return Vec::new();
+    }
+    vec![redeluge_libtorrent::TrackerEntry {
+        url: url.to_owned(),
+        ..Default::default()
+    }]
 }
 
 /// Builds the libtorrent request for a torrent the daemon is restoring.

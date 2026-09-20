@@ -1033,14 +1033,18 @@ fn decide_tracker_work(
     let mut work = TrackerWork::default();
 
     for status in state.session.all_torrent_status() {
-        let Some(torrent) = state.torrents.get(&status.info_hash) else {
+        if !state.torrents.contains_key(&status.info_hash) {
             continue;
-        };
+        }
 
         // The sidebar's grouping, so a rule applies to the row somebody set it
         // on. The two have to be the same function or the rule silently never
-        // matches.
+        // matches. Looked up before the torrent is borrowed, because it may
+        // fill the cache behind it.
         let trackers = state.tracker_list(&status, false);
+        let Some(torrent) = state.torrents.get(&status.info_hash) else {
+            continue;
+        };
         let announced = crate::torrent::current_tracker(&status.current_tracker, &trackers);
         let host = crate::torrent::tracker_host(&announced);
 
@@ -1919,6 +1923,10 @@ async fn describe(core: &Core, id: &str, trigger: webhook::Trigger) -> Option<we
     core.manager
         .with(move |state| {
             let status = state.session.torrent_status(&id).ok()?;
+            if !state.torrents.contains_key(&id) {
+                return None;
+            }
+            let trackers = state.tracker_list(&status, false);
             let torrent = state.torrents.get(&id)?;
 
             if trigger == webhook::Trigger::Finished {
@@ -1928,7 +1936,6 @@ async fn describe(core: &Core, id: &str, trigger: webhook::Trigger) -> Option<we
                 }
             }
 
-            let trackers = state.tracker_list(&status, false);
             let current = crate::torrent::current_tracker(&status.current_tracker, &trackers);
 
             let notice = webhook::Notice {

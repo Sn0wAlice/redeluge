@@ -272,7 +272,7 @@ impl From<ffi::FileEntry> for FileEntry {
 }
 
 /// One tracker in a torrent's announce list.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TrackerEntry {
     pub url: String,
     pub tier: u8,
