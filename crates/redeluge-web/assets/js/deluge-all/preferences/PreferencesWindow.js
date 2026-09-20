@@ -118,6 +118,7 @@ Deluge.preferences.PreferencesWindow = Ext.extend(Ext.Window, {
         // of labels is a setting like any other.
         this.addPage(new Deluge.preferences.Labels());
         this.addPage(new Deluge.preferences.AutoAdd());
+        this.addPage(new Deluge.preferences.Rss());
         this.addPage(new Deluge.preferences.Blocklist());
         this.addPage(new Deluge.preferences.Scheduler());
         this.addPage(new Deluge.preferences.Notifications());

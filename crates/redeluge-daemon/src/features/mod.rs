@@ -25,6 +25,7 @@ pub mod diskspace;
 pub mod identity;
 pub mod idlepause;
 pub mod label;
+pub mod rss;
 pub mod scheduler;
 pub mod stuck;
 pub mod tracker;
@@ -55,6 +56,7 @@ pub fn spawn(core: Arc<Core>) {
     tokio::spawn(watch_tracker_health(Arc::clone(&core)));
     tokio::spawn(watch_for_a_test_message(Arc::clone(&core)));
     tokio::spawn(maintain_country_database(Arc::clone(&core)));
+    tokio::spawn(follow_feeds(Arc::clone(&core)));
     tokio::spawn(maintain_blocklist(core));
 }
 
@@ -1362,6 +1364,186 @@ async fn remove_for_rule(
         Ok(Err(err)) => tracing::warn!(torrent = %id, rule = which, error = %err,
             "could not remove a torrent a rule is due to remove"),
         Err(err) => tracing::warn!(error = %err, "the torrent manager is not answering"),
+    }
+}
+
+// ------------------------------------------------------------------- feeds
+
+/// Reads the feeds and adds what the rules ask for.
+///
+/// The watched folders cover the case where something else decides and drops a
+/// file in a directory; this is the case where the decision is a line in a
+/// rule and a feed somebody follows.
+///
+/// Every minute is when this wakes; how often a feed is actually read is the
+/// interval in the settings, which is in minutes and defaults to half an hour.
+/// A feed is a page somebody else pays to serve, and reading it every two
+/// seconds because the daemon happens to loop is rude.
+async fn follow_feeds(core: Arc<Core>) {
+    let config_dir = core.config_dir.clone();
+    let mut seen = rss::Seen::load(&config_dir);
+    let mut last_read: std::collections::BTreeMap<String, std::time::Instant> =
+        std::collections::BTreeMap::new();
+
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+
+        let settings = rss::Settings::from_config(setting(&core, "rss").await.as_ref()).sane();
+        if !settings.worth_reading() {
+            continue;
+        }
+
+        // A feed that is no longer configured stops being remembered, so its
+        // record does not grow in a file for ever.
+        let names: Vec<String> = settings
+            .feeds
+            .iter()
+            .map(|feed| feed.name.clone())
+            .collect();
+        seen.keep_only(&names);
+
+        let every = Duration::from_secs(settings.interval * 60);
+        let mut changed = false;
+
+        for feed in settings.feeds.iter().filter(|feed| feed.enabled) {
+            let due = last_read
+                .get(&feed.name)
+                .is_none_or(|at| at.elapsed() >= every);
+            if !due {
+                continue;
+            }
+            last_read.insert(feed.name.clone(), std::time::Instant::now());
+
+            let body = match read_feed(&feed.url).await {
+                Some(body) => body,
+                None => continue,
+            };
+
+            let items = rss::items(&body);
+            if items.is_empty() {
+                warn_once(
+                    &format!("rss empty {}", feed.url),
+                    "nothing in that feed looks like an item with a link",
+                );
+                continue;
+            }
+
+            // The first pass over a feed marks everything and adds nothing. A
+            // feed's history is not a wish list, and following one should not
+            // be fifty torrents.
+            let first_look = !seen.read_before(&feed.name);
+            if first_look {
+                seen.start(&feed.name);
+                tracing::info!(feed = %feed.name, items = items.len(),
+                    "first look at a feed: noting what is in it, adding nothing");
+            }
+
+            for item in items {
+                if seen.knows(&feed.name, &item.id) {
+                    continue;
+                }
+                seen.remember(&feed.name, &item.id);
+                changed = true;
+                if first_look {
+                    continue;
+                }
+                let Some(rule) = settings.rule_for(&feed.name, &item.title) else {
+                    continue;
+                };
+                add_from_feed(&core, feed, rule, &item).await;
+            }
+        }
+
+        if changed {
+            seen.save(&config_dir);
+        }
+    }
+}
+
+/// Fetches one feed, or says why it could not.
+async fn read_feed(url: &str) -> Option<String> {
+    match crate::core::fetch(url).await {
+        Ok(body) => match String::from_utf8(body) {
+            Ok(text) => Some(text),
+            // A feed in another encoding is not something to guess at.
+            Err(_) => {
+                warn_once(
+                    &format!("rss encoding {url}"),
+                    "that feed is not UTF-8; it is not being read",
+                );
+                None
+            }
+        },
+        Err(err) => {
+            warn_once(
+                &format!("rss fetch {url}"),
+                &format!("could not read that feed: {}", err.message),
+            );
+            None
+        }
+    }
+}
+
+/// Adds one item the way its rule asked for.
+async fn add_from_feed(core: &Core, feed: &rss::Feed, rule: &rss::Rule, item: &rss::Item) {
+    let mut options = core.torrent_defaults().await;
+    options.paused = rule.paused;
+    if !rule.save_path.trim().is_empty() {
+        options.save_path = Some(rule.save_path.trim().to_owned());
+    }
+    let save_path = options.save_path.clone().unwrap_or_default();
+
+    let request = if item.link.starts_with("magnet:") {
+        options.magnet = Some(item.link.clone());
+        redeluge_libtorrent::AddTorrent::from_magnet(item.link.clone(), save_path)
+    } else {
+        match crate::core::fetch(&item.link).await {
+            Ok(dump) => redeluge_libtorrent::AddTorrent::from_file(dump, save_path),
+            Err(err) => {
+                tracing::warn!(feed = %feed.name, title = %item.title, error = %err.message,
+                    "could not download what a feed rule wanted");
+                return;
+            }
+        }
+    };
+
+    match core.add(request, options).await {
+        Ok(value) => {
+            let id = value.as_str().unwrap_or_default().to_owned();
+            if !rule.label.trim().is_empty() {
+                if let Err(err) = core.assign_label(&id, rule.label.trim()).await {
+                    tracing::warn!(torrent = %id, error = %err.message,
+                        "could not label a torrent a feed rule added");
+                }
+            }
+            tracing::info!(feed = %feed.name, rule = %rule.name, title = %item.title,
+                "added from a feed");
+            record(
+                core,
+                Action {
+                    at: now(),
+                    rule: rule::FEED,
+                    did: did::ADDED,
+                    torrent_id: id,
+                    name: item.title.clone(),
+                    detail: if rule.name.trim().is_empty() {
+                        feed.name.clone()
+                    } else {
+                        format!("{}, by {}", feed.name, rule.name.trim())
+                    },
+                },
+            );
+        }
+        Err(err) => {
+            // A duplicate is the ordinary case when two feeds carry the same
+            // release, and it is not a failure worth a warning every pass.
+            if err.exception == "AddTorrentError" && err.message.contains("already") {
+                tracing::debug!(title = %item.title, "a feed offered a torrent that is already here");
+            } else {
+                tracing::warn!(feed = %feed.name, title = %item.title, error = %err.message,
+                    "could not add what a feed rule wanted");
+            }
+        }
     }
 }
 

@@ -89,6 +89,38 @@ may refuse the new one.
     Interface, on by default. Turn it off for anything that reads the answers
     itself without keeping a copy of the list between them.
 
+- **Feeds, and rules that pull torrents out of them.** The watched folders
+  cover the case where something else decides and drops a file in a directory;
+  this is the other one — a feed you follow and a line saying which of its
+  items you want. Under Preferences, Feeds: the feeds in one list, the rules in
+  another, off until you turn it on.
+  - A rule is a pattern against the title (`*` for anything, case ignored, the
+    parts in the order you wrote them), optionally a second pattern for what to
+    leave out, and what to do with what it takes: a label, a folder, and
+    whether to add it stopped. A rule that names no feed applies to all of
+    them, and the first rule that wants an item is the one that gets it.
+  - Three limits, because a rule that adds torrents by itself has to be boring:
+    a rule with no pattern takes nothing rather than everything, the first look
+    at a feed notes what is in it and downloads none of it, and an item is
+    acted on once — which is remembered per feed, capped, and kept across
+    restarts.
+  - Both formats are read. What the daemon needs from an item is a title, a
+    link and something stable to call it by, and RSS and Atom put those in the
+    same few tags, so it is a scanner rather than an XML dependency for the
+    daemon. A feed that offers an enclosure is downloaded from that; one that
+    offers a magnet is added from the magnet.
+  - What a feed added shows up in Activity, under Feed, beside everything else
+    the daemon does on its own.
+- **A backup of the settings, and a way to put one back.** Under Preferences,
+  Other: one file with everything set here and in the daemon — the labels, the
+  tracker rules, the stuck rule, the notifications, the watched folders, the
+  block list, the schedule and the feeds. The torrents are listed in it rather
+  than exported, because a torrent is its file and its resume data and a list
+  of names cannot bring either back; what the list is for is knowing what you
+  had. Passwords and pinned certificates are left out on purpose: a backup that
+  carries them is a credential sitting in a downloads folder. A restore cannot
+  change how the server is reached, for the same reason the interface cannot.
+
 - **A label can refuse to have its torrents removed**, and it outranks the
   tracker rules. A tracker rule is the terms of a whole domain — remove
   finished torrents after a week — and a label is somebody naming the

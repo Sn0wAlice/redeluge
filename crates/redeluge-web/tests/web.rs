@@ -353,6 +353,7 @@ fn the_bundle_carries_a_page_for_each_feature() {
         "Deluge.preferences.AutoAdd",
         "Deluge.preferences.Blocklist",
         "Deluge.preferences.Scheduler",
+        "Deluge.preferences.Rss",
     ] {
         assert!(text.contains(page), "{page} is not in the bundle");
     }
@@ -361,6 +362,7 @@ fn the_bundle_carries_a_page_for_each_feature() {
         "new Deluge.preferences.AutoAdd()",
         "new Deluge.preferences.Blocklist()",
         "new Deluge.preferences.Scheduler()",
+        "new Deluge.preferences.Rss()",
     ] {
         assert!(text.contains(page), "{page} is never instantiated");
     }

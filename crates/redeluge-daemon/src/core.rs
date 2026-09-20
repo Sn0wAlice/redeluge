@@ -84,6 +84,7 @@ pub const REDELUGE_METHODS: &[&str] = &[
     "redeluge.get_tracker_health",
     "redeluge.get_tracker_info",
     "redeluge.list_directory",
+    "redeluge.test_feed",
     "redeluge.update_ui",
 ];
 
@@ -1597,6 +1598,51 @@ impl Rpc for Core {
             // their own; this exists because asking for all three is what a
             // client actually does, twice a second, and doing the walk once
             // is most of what that costs.
+            // What a feed offers, and which of the configured rules would
+            // take each item. Nothing is added: this is the answer to "will
+            // this rule do what I think it will", asked before it is left
+            // running for a month.
+            "redeluge.test_feed" => {
+                let url = string_arg(&args, 0, "a feed address")?;
+                let named = args.get(1).and_then(Value::as_str).unwrap_or("").to_owned();
+
+                let body = fetch(&url).await?;
+                let body = String::from_utf8(body)
+                    .map_err(|_| RpcError::invalid_argument("that feed is not UTF-8"))?;
+
+                let settings = {
+                    let config = self.config.lock().await;
+                    crate::features::rss::Settings::from_config(config.get("rss")).sane()
+                };
+
+                let items: Vec<Value> = crate::features::rss::items(&body)
+                    .into_iter()
+                    .map(|item| {
+                        let taken = settings.rule_for(&named, &item.title);
+                        Value::Dict(vec![
+                            (Value::Str("title".into()), Value::Str(item.title)),
+                            (Value::Str("link".into()), Value::Str(item.link)),
+                            (
+                                Value::Str("rule".into()),
+                                Value::Str(taken.map(|rule| rule.name.clone()).unwrap_or_default()),
+                            ),
+                            (Value::Str("taken".into()), Value::Bool(taken.is_some())),
+                            (
+                                Value::Str("label".into()),
+                                Value::Str(
+                                    taken.map(|rule| rule.label.clone()).unwrap_or_default(),
+                                ),
+                            ),
+                        ])
+                    })
+                    .collect();
+
+                Ok(Value::Dict(vec![(
+                    Value::Str("items".into()),
+                    Value::List(items),
+                )]))
+            }
+
             "redeluge.update_ui" => {
                 let keys = wanted_keys(&args, 0);
                 let filter = args.get(1).cloned();
@@ -2084,7 +2130,7 @@ impl Rpc for Core {
 ///
 /// Bounded on purpose: an unbounded download from a URL a client chose is a way
 /// to fill the daemon's memory from the outside.
-async fn fetch(url: &str) -> Result<Vec<u8>, RpcError> {
+pub(crate) async fn fetch(url: &str) -> Result<Vec<u8>, RpcError> {
     const MAX: usize = 16 * 1024 * 1024;
 
     let response = crate::features::http_client()

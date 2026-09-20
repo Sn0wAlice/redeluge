@@ -166,6 +166,8 @@ async fn dispatch(
         "web.update_ui" => web_update_ui(request, call, state).await,
         "web.get_config" => web_get_config(state).await,
         "web.set_config" => web_set_config(call, state).await,
+        "web.export_config" => web_export_config(state).await,
+        "web.import_config" => web_import_config(call, state).await,
         "web.get_themes" | "webutils.get_themes" => web_get_themes(state).await,
         "web.set_theme" => web_set_theme(call, state).await,
         // Deluge exported these two under both names: `web.*` is what the
@@ -1073,10 +1075,7 @@ async fn web_set_config(call: &JsonRequest, state: &SharedState) -> ApiResult {
     for (key, value) in changes {
         // Deliberately narrow: how the server is reached is the container's
         // business, and letting the browser change it can lock everyone out.
-        if matches!(
-            key.as_str(),
-            "interface" | "port" | "https" | "pkey" | "cert"
-        ) {
+        if REFUSED_WEB_KEYS.contains(&key.as_str()) {
             tracing::info!(key, "refusing to change a server binding from the Web UI");
             continue;
         }
@@ -1090,6 +1089,130 @@ async fn web_set_config(call: &JsonRequest, state: &SharedState) -> ApiResult {
         .map_err(|err| ApiError::local(err.to_string()))?;
     Ok(Json::Null)
 }
+
+/// Everything worth keeping a copy of, in one object.
+///
+/// The settings, not the library: the daemon's configuration — which is where
+/// the labels, the tracker rules, the stuck rule, the notifications, the
+/// watched folders, the block list and the schedule all live — and this
+/// server's own. The torrents are listed rather than exported, because a
+/// torrent is its `.torrent` file and its resume data, and a list of names
+/// cannot bring either back. What the list is for is knowing what you had.
+///
+/// Secrets are left out on purpose. The Web UI's password, the daemon accounts
+/// and the stored host passwords are not in the file, because a backup that
+/// carries them is a credential sitting in a downloads folder. Restoring one
+/// means typing those again, which is the right amount of friction.
+async fn web_export_config(state: &SharedState) -> ApiResult {
+    let daemon = call_daemon("core.get_config", vec![], state)
+        .await
+        .map(rencode_into_json)
+        .unwrap_or(Json::Null);
+
+    // Names, labels and where the files went: enough to know what was here.
+    let torrents = call_daemon(
+        "core.get_torrents_status",
+        vec![
+            Value::Dict(Vec::new()),
+            Value::List(
+                ["name", "label", "save_path", "total_wanted", "is_finished"]
+                    .into_iter()
+                    .map(|key| Value::Str(key.to_owned()))
+                    .collect(),
+            ),
+        ],
+        state,
+    )
+    .await
+    .map(rencode_into_json)
+    .unwrap_or(Json::Null);
+
+    let web = {
+        let config = state.web_config.read().await;
+        let mut kept = Map::new();
+        for (key, value) in &config.settings {
+            if SECRET_WEB_KEYS.contains(&key.as_str()) {
+                continue;
+            }
+            kept.insert(key.clone(), value.clone());
+        }
+        kept
+    };
+
+    Ok(json!({
+        "format": 1,
+        "version": state.settings.version,
+        "daemon": daemon,
+        "web": web,
+        "torrents": torrents,
+    }))
+}
+
+/// Puts a backup back.
+///
+/// The daemon's settings go through `core.set_config`, which refuses a key it
+/// does not know, so a file from a later version does not write nonsense into
+/// this one. This server's own go through the same list of things the
+/// interface may not change — how it is reached is the container's business,
+/// not a file's.
+async fn web_import_config(call: &JsonRequest, state: &SharedState) -> ApiResult {
+    let backup = match call.params.first() {
+        // Sent as text, because that is what a browser reads a file as.
+        Some(Json::String(text)) => serde_json::from_str::<Json>(text)
+            .map_err(|err| ApiError::local(format!("that is not a backup file: {err}")))?,
+        Some(value @ Json::Object(_)) => value.clone(),
+        _ => return Err(ApiError::local("web.import_config takes a backup")),
+    };
+
+    let Some(object) = backup.as_object() else {
+        return Err(ApiError::local("that is not a backup file"));
+    };
+    if object.get("format").and_then(Json::as_i64) != Some(1) {
+        return Err(ApiError::local(
+            "that file is not a backup this version can read",
+        ));
+    }
+
+    let mut applied = Map::new();
+
+    if let Some(Json::Object(daemon)) = object.get("daemon") {
+        let settings = Value::Dict(
+            daemon
+                .iter()
+                .map(|(key, value)| (Value::Str(key.clone()), json_to_rencode(value)))
+                .collect(),
+        );
+        let answered = call_daemon("core.set_config", vec![settings], state).await;
+        applied.insert("daemon".to_owned(), Json::Bool(answered.is_some()));
+    }
+
+    if let Some(Json::Object(web)) = object.get("web") {
+        let mut config = state.web_config.write().await;
+        let mut count = 0;
+        for (key, value) in web {
+            if SECRET_WEB_KEYS.contains(&key.as_str()) || REFUSED_WEB_KEYS.contains(&key.as_str()) {
+                continue;
+            }
+            config.settings.insert(key.clone(), value.clone());
+            count += 1;
+        }
+        let snapshot = config.clone();
+        drop(config);
+        crate::persist::save_config(&snapshot)
+            .await
+            .map_err(|err| ApiError::local(err.to_string()))?;
+        applied.insert("web".to_owned(), Json::from(count));
+    }
+
+    Ok(Json::Object(applied))
+}
+
+/// Web settings a backup never carries, in either direction.
+const SECRET_WEB_KEYS: &[&str] = &["pwd_sha1", "pwd_salt", "pwd_scrypt", "daemon_fingerprints"];
+
+/// Web settings a file is not allowed to change, for the same reason the
+/// interface is not: locking everyone out is not a setting.
+const REFUSED_WEB_KEYS: &[&str] = &["interface", "port", "https", "pkey", "cert"];
 
 async fn web_get_themes(_state: &SharedState) -> ApiResult {
     // Pairs, not names. The interface loads these straight into a combo box
@@ -1805,6 +1928,7 @@ pub const LOCAL_METHODS: &[&str] = &[
     "web.disconnect",
     "web.download_torrent_from_url",
     "web.edit_host",
+    "web.export_config",
     "web.get_config",
     "web.get_events",
     "web.get_host_status",
@@ -1817,6 +1941,7 @@ pub const LOCAL_METHODS: &[&str] = &[
     "web.get_torrent_files",
     "web.get_torrent_info",
     "web.get_torrent_status",
+    "web.import_config",
     "web.register_event_listener",
     "web.remove_host",
     "web.set_config",
@@ -2282,5 +2407,106 @@ mod method_list_tests {
             panic!("the method list was not answered");
         };
         assert_eq!(answer, json!(["core.something"]));
+    }
+}
+
+#[cfg(test)]
+mod backup_tests {
+    use super::epoch_tests::state;
+    use super::*;
+
+    fn call_with(params: Vec<Json>) -> JsonRequest {
+        JsonRequest {
+            method: "web.import_config".to_owned(),
+            params,
+            id: json!(1),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_backup_carries_the_settings_and_not_the_secrets() {
+        let state = state();
+        {
+            let mut config = state.web_config.write().await;
+            config
+                .settings
+                .insert("poll_interval".to_owned(), json!(5000));
+            config
+                .settings
+                .insert("pwd_sha1".to_owned(), json!("a secret"));
+            config
+                .settings
+                .insert("daemon_fingerprints".to_owned(), json!({"host": "aa"}));
+        }
+
+        let Ok(backup) = web_export_config(&state).await else {
+            panic!("the backup was not built");
+        };
+
+        assert_eq!(backup["format"], json!(1));
+        assert_eq!(backup["web"]["poll_interval"], json!(5000));
+        assert!(
+            backup["web"].get("pwd_sha1").is_none(),
+            "the password went into the backup"
+        );
+        assert!(
+            backup["web"].get("daemon_fingerprints").is_none(),
+            "the pinned certificates went into the backup"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_restore_puts_the_settings_back_and_leaves_the_bindings_alone() {
+        let state = state();
+        let file = json!({
+            "format": 1,
+            "web": {
+                "poll_interval": 9000,
+                // What a hand-edited file might try, and must not manage:
+                // locking everyone out is not a setting.
+                "interface": "0.0.0.0",
+                "port": 1,
+                "pwd_sha1": "somebody else's password",
+            },
+        })
+        .to_string();
+
+        let Ok(applied) = web_import_config(&call_with(vec![Json::String(file)]), &state).await
+        else {
+            panic!("the restore was refused");
+        };
+        assert_eq!(applied["web"], json!(1), "one setting should have applied");
+
+        let config = state.web_config.read().await;
+        assert_eq!(config.settings.get("poll_interval"), Some(&json!(9000)));
+        assert!(
+            config.settings.get("interface").is_none(),
+            "a file changed the binding"
+        );
+        assert!(
+            config.settings.get("port").is_none(),
+            "a file changed the port"
+        );
+        assert!(
+            config.settings.get("pwd_sha1").is_none(),
+            "a file set the password"
+        );
+    }
+
+    #[tokio::test]
+    async fn something_that_is_not_a_backup_is_refused() {
+        let state = state();
+        for attempt in [
+            json!("not json at all").to_string(),
+            json!({"format": 99}).to_string(),
+            json!({"web": {}}).to_string(),
+        ] {
+            assert!(
+                web_import_config(&call_with(vec![Json::String(attempt.clone())]), &state)
+                    .await
+                    .is_err(),
+                "{attempt} was accepted as a backup"
+            );
+        }
     }
 }

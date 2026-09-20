@@ -492,6 +492,10 @@ pub fn defaults(config_dir: &Path) -> Vec<(String, Json)> {
             "scheduler".into(),
             crate::features::scheduler::Settings::default_json(),
         ),
+        // Feeds, and the rules that pull torrents out of them. Off, and with
+        // nothing in it: a rule that adds torrents by itself is one somebody
+        // has to write on purpose.
+        ("rss".into(), crate::features::rss::Settings::default_json()),
         (
             "tracker".into(),
             crate::features::tracker::Settings::default_json(),

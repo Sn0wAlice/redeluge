@@ -91,6 +91,8 @@ Deluge.preferences.Other = Ext.extend(Ext.form.FormPanel, {
         });
 
         this.setDatabaseEnabled(false);
+        this.addBackupBox();
+
         this.on('show', this.onPageShow, this);
     },
 
@@ -119,6 +121,130 @@ Deluge.preferences.Other = Ext.extend(Ext.form.FormPanel, {
             },
             scope: this,
         });
+    },
+
+    /**
+     * Keeping a copy of the settings, and putting one back.
+     *
+     * The settings, not the library: the labels, the tracker rules, the stuck
+     * rule, the notifications, the watched folders, the block list and the
+     * schedule all live in the daemon's configuration, and the file carries
+     * all of it. The torrents are listed in it rather than exported, because a
+     * torrent is its file and its resume data and a list of names cannot bring
+     * either back — what the list is for is knowing what you had.
+     */
+    addBackupBox: function () {
+        var box = this.add({
+            xtype: 'fieldset',
+            border: false,
+            title: _('Backup'),
+            autoHeight: true,
+            style: 'padding-top: 5px; margin-bottom: 0px;',
+        });
+
+        box.add({
+            xtype: 'label',
+            text: _(
+                'A copy of everything set here and in the daemon, as one file. Passwords are left out on purpose: a backup that carries them is a credential sitting in a downloads folder, so restoring one means typing those again.'
+            ),
+            style: 'display: block; margin-bottom: 6px; opacity: 0.72;',
+        });
+
+        box.add({
+            xtype: 'button',
+            text: _('Download a backup'),
+            style: 'margin-bottom: 6px;',
+            handler: this.onBackup,
+            scope: this,
+        });
+
+        // A file input rather than a dialog of our own: the browser already
+        // has one, and it is the one people recognise.
+        this.restoreInput = Ext.DomHelper.append(
+            box.body || Ext.getBody(),
+            { tag: 'input', type: 'file', accept: '.json,application/json', style: 'display: none' },
+            true
+        );
+        this.restoreInput.on('change', this.onRestoreChosen, this);
+
+        box.add({
+            xtype: 'button',
+            text: _('Restore from a file'),
+            handler: function () {
+                this.restoreInput.dom.value = '';
+                this.restoreInput.dom.click();
+            },
+            scope: this,
+        });
+    },
+
+    onBackup: function () {
+        deluge.client.web.export_config({
+            success: function (backup) {
+                var when = new Date().toISOString().slice(0, 10);
+                var blob = new Blob([JSON.stringify(backup, null, 2)], {
+                    type: 'application/json',
+                });
+                var url = URL.createObjectURL(blob);
+                var link = document.createElement('a');
+                link.href = url;
+                link.download = 'redeluge-settings-' + when + '.json';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                // Revoked late: Safari has been known to start the download
+                // after the click returns.
+                setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+            },
+            failure: function () {
+                Ext.MessageBox.show({
+                    title: _('Backup'),
+                    msg: _('The settings could not be read.'),
+                    buttons: Ext.MessageBox.OK,
+                    icon: Ext.MessageBox.ERROR,
+                });
+            },
+            scope: this,
+        });
+    },
+
+    onRestoreChosen: function () {
+        var file = this.restoreInput.dom.files && this.restoreInput.dom.files[0];
+        if (!file) return;
+
+        Ext.MessageBox.confirm(
+            _('Restore'),
+            String.format(
+                _('Put the settings in {0} back? What is set now is replaced by what the file says. The torrents are not touched.'),
+                Ext.util.Format.htmlEncode(file.name)
+            ),
+            function (answer) {
+                if (answer !== 'yes') return;
+                var reader = new FileReader();
+                reader.onload = function () {
+                    deluge.client.web.import_config(String(reader.result), {
+                        success: function () {
+                            Ext.MessageBox.show({
+                                title: _('Restore'),
+                                msg: _('The settings were put back. Reload the page to see them.'),
+                                buttons: Ext.MessageBox.OK,
+                                icon: Ext.MessageBox.INFO,
+                            });
+                        },
+                        failure: function (error) {
+                            Ext.MessageBox.show({
+                                title: _('Restore'),
+                                msg: (error && error.error && error.error.message) || _('That file could not be read as a backup.'),
+                                buttons: Ext.MessageBox.OK,
+                                icon: Ext.MessageBox.ERROR,
+                            });
+                        },
+                    });
+                };
+                reader.readAsText(file);
+            },
+            this
+        );
     },
 
     onDatabaseToggled: function () {
