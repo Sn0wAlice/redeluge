@@ -367,6 +367,28 @@ fn the_bundle_carries_a_page_for_each_feature() {
 }
 
 #[test]
+fn every_delay_is_entered_as_days_and_hours() {
+    // The field is registered in one file and asked for by xtype in three
+    // others, and the bundle is built from a directory listing: a file that
+    // failed to land leaves three windows asking for a field nothing defines,
+    // which ExtJS answers with a blank space rather than an error.
+    let bundle = assets::get("js/deluge-all-debug.js").expect("the bundle");
+    let text = std::str::from_utf8(bundle).expect("JavaScript is UTF-8");
+
+    assert!(
+        text.contains("Ext.reg('durationfield'"),
+        "the duration field is not in the bundle"
+    );
+    // Three tracker rules, the label's stuck rule and the daemon's own: five
+    // delays, none of them a lone hours box any more.
+    assert_eq!(
+        text.matches("xtype: 'durationfield'").count(),
+        5,
+        "a delay went back to being entered in hours alone"
+    );
+}
+
+#[test]
 fn the_minified_bundle_is_shipped_and_smaller() {
     // `ScriptSet::Normal` looks for these names; without them the page falls
     // back to the debug bundle and nobody notices except the bandwidth.

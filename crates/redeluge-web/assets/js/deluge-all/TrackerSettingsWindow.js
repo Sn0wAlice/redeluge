@@ -120,7 +120,7 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
                     config.handler = this.onSwitched;
                     config.scope = this;
                 }
-                if (config.xtype === 'spinnerfield') {
+                if (Deluge.TrackerSettingsWindow.isNumber(config.xtype)) {
                     config.listeners = {
                         spin: { fn: this.describe, scope: this },
                         change: { fn: this.describe, scope: this },
@@ -174,7 +174,9 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
     defaultOf: function (spec) {
         if (spec.dflt !== undefined) return spec.dflt;
         if (spec.xtype === 'checkbox') return false;
-        if (spec.xtype === 'spinnerfield') return spec.value || 0;
+        if (Deluge.TrackerSettingsWindow.isNumber(spec.xtype)) {
+            return spec.value || 0;
+        }
         return '';
     },
 
@@ -466,7 +468,7 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
 
             if (field.getXType() === 'checkbox') {
                 field.setValue(value === true);
-            } else if (field.getXType() === 'spinnerfield') {
+            } else if (Deluge.TrackerSettingsWindow.isNumber(field.getXType())) {
                 field.setValue(Deluge.number(value, fallback));
             } else {
                 field.setValue(value);
@@ -522,7 +524,7 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
             var field = this.fields[name];
             if (field.getXType() === 'checkbox') {
                 options[name] = field.getValue() === true;
-            } else if (field.getXType() === 'spinnerfield') {
+            } else if (Deluge.TrackerSettingsWindow.isNumber(field.getXType())) {
                 // A blank number field reads as NaN and serialises as null,
                 // which the daemon has had to defend against once already.
                 options[name] = Deluge.number(
@@ -598,6 +600,16 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
         });
     },
 });
+
+/**
+ * The field types this window reads and writes as a number.
+ *
+ * A delay is entered as days and hours now, but it is still one number in the
+ * configuration, so it goes the same way in and out as a spinner does.
+ */
+Deluge.TrackerSettingsWindow.isNumber = function (xtype) {
+    return xtype === 'spinnerfield' || xtype === 'durationfield';
+};
 
 /**
  * The rules a tracker can carry.
@@ -703,15 +715,10 @@ Deluge.TrackerSettingsWindow.RULES = [
             },
             {
                 name: 'label_after_hours',
-                xtype: 'spinnerfield',
+                xtype: 'durationfield',
                 needs: 'label_when_done',
-                fieldLabel: _('Hours to wait then:'),
-                labelSeparator: '',
-                width: 80,
-                decimalPrecision: 1,
-                minValue: 0,
-                maxValue: 87600,
-                incrementValue: 1,
+                fieldLabel: _('Wait this long, then:'),
+                width: 220,
                 value: 0,
             },
         ],
@@ -733,14 +740,9 @@ Deluge.TrackerSettingsWindow.RULES = [
             },
             {
                 name: 'move_after_hours',
-                xtype: 'spinnerfield',
-                fieldLabel: _('Hours to wait:'),
-                labelSeparator: '',
-                width: 80,
-                decimalPrecision: 1,
-                minValue: 0,
-                maxValue: 87600,
-                incrementValue: 1,
+                xtype: 'durationfield',
+                fieldLabel: _('Wait this long:'),
+                width: 220,
                 value: 0,
             },
         ],
@@ -755,14 +757,9 @@ Deluge.TrackerSettingsWindow.RULES = [
         fields: [
             {
                 name: 'remove_after_hours',
-                xtype: 'spinnerfield',
-                fieldLabel: _('Hours to wait:'),
-                labelSeparator: '',
-                width: 80,
-                decimalPrecision: 1,
-                minValue: 0,
-                maxValue: 87600,
-                incrementValue: 1,
+                xtype: 'durationfield',
+                fieldLabel: _('Wait this long:'),
+                width: 220,
                 value: 0,
             },
             {

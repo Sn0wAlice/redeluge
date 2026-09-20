@@ -8,6 +8,21 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
+## [1.7.0] — 2026-09-20
+
+### Changed
+
+- **Every delay is entered as days and hours**, rather than as a number of
+  hours alone: the two tracker rules that wait before moving or removing a
+  torrent, the one that relabels it, and the rule for downloads that never
+  start, in Preferences and per label. A tracker that wants a month of seeding
+  was 720 in a box, which nobody types confidently or reads back as a month.
+  What is stored has not changed — one number of hours — so a rule set by an
+  older build opens as the same delay, split.
+- Anything worth a day or more typed into the hours box is carried into the
+  days box rather than marked invalid: 36 is a real way to say a day and a
+  half.
+
 ## [1.6.3] — 2026-09-19
 
 ### Added

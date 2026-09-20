@@ -304,9 +304,11 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
             handler: this.onStuckToggled,
             scope: this,
         });
-        this.stuck.hours = fieldset.add(
-            this.idleSpinner(_('Nothing arriving for (hours):'), 1)
-        );
+        this.stuck.hours = fieldset.add({
+            xtype: 'durationfield',
+            fieldLabel: _('Nothing arriving for:'),
+            width: 220,
+        });
         this.stuck.max_progress = fieldset.add(
             this.idleSpinner(_('And no further along than (%):'), 0)
         );

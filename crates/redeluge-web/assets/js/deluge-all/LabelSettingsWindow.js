@@ -101,9 +101,11 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
         });
 
         var stuck = this.group('apply_stuck', _('Downloads that never start'));
-        this.fields.stuck_hours = stuck.add(
-            this.spinner(_('Nothing arriving for (hours):'), 1, 1, 0)
-        );
+        this.fields.stuck_hours = stuck.add({
+            xtype: 'durationfield',
+            fieldLabel: _('Nothing arriving for:'),
+            width: 220,
+        });
         this.fields.stuck_max_progress = stuck.add(
             this.spinner(_('And no further along than (%):'), 0, 1, 0)
         );
@@ -267,7 +269,7 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
 
             if (field.getXType() === 'checkbox') {
                 field.setValue(value === true);
-            } else if (field.getXType() === 'spinnerfield') {
+            } else if (Deluge.LabelSettingsWindow.isNumber(field.getXType())) {
                 field.setValue(Deluge.number(value, this.defaultOf(name)));
             } else {
                 // A stored blank is a real answer for a path or a label, and
@@ -330,7 +332,7 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
             var field = this.fields[name];
             if (field.getXType() === 'checkbox') {
                 options[name] = field.getValue() === true;
-            } else if (field.getXType() === 'spinnerfield') {
+            } else if (Deluge.LabelSettingsWindow.isNumber(field.getXType())) {
                 // A blank number field reads as NaN and serialises as null,
                 // which the daemon has had to defend against once already.
                 options[name] = Deluge.number(
@@ -388,6 +390,16 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
         this.hide();
     },
 });
+
+/**
+ * The field types this window reads and writes as a number.
+ *
+ * A delay is entered as days and hours now, but it is still one number in the
+ * options, so it goes the same way in and out as a spinner does.
+ */
+Deluge.LabelSettingsWindow.isNumber = function (xtype) {
+    return xtype === 'spinnerfield' || xtype === 'durationfield';
+};
 
 /**
  * Which fields each switch governs.
