@@ -95,7 +95,10 @@ jobs:
       - name: Scan Cargo.lock
         id: scan
         continue-on-error: true
-        uses: mlab-sh/vuln-scan-action@v1
+        # The exact tag the action publishes. Its README's example says `@v1`,
+        # and there is no such tag — a floating major would resolve to whatever
+        # is on it anyway, which is not what a build worth reproducing runs.
+        uses: mlab-sh/vuln-scan-action@v1.0.0
         with:
           path: Cargo.lock
           fail-on: high
