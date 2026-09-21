@@ -1564,7 +1564,7 @@ dependencies = [
 
 [[package]]
 name = "redeluge-contract"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1572,7 +1572,7 @@ dependencies = [
 
 [[package]]
 name = "redeluge-daemon"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1603,7 +1603,7 @@ dependencies = [
 
 [[package]]
 name = "redeluge-libtorrent"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "anyhow",
  "cxx",
@@ -1616,7 +1616,7 @@ dependencies = [
 
 [[package]]
 name = "redeluge-rencode"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1625,7 +1625,7 @@ dependencies = [
 
 [[package]]
 name = "redeluge-rpc"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "flate2",
  "redeluge-contract",
@@ -1642,7 +1642,7 @@ dependencies = [
 
 [[package]]
 name = "redeluge-web"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "actix-files",
  "actix-http",

@@ -104,16 +104,25 @@ jobs:
           fail-on: high
           soft-fail: "true"
 
+      # Through the environment rather than into the script: these are a
+      # third-party action's outputs, read out of a lockfile a pull request
+      # can write, and a value interpolated into a `run:` is the shell's to
+      # parse, not a string.
       - name: Fail on what it found
         if: steps.scan.outputs.failed == 'true'
+        env:
+          TOTAL: ${{ steps.scan.outputs.total }}
+          PACKAGES: ${{ steps.scan.outputs.vulnerable-packages }}
         run: |
-          echo "::error::${{ steps.scan.outputs.total }} known vulnerabilities in ${{ steps.scan.outputs.vulnerable-packages }} packages, at or above the threshold"
+          echo "::error::${TOTAL} known vulnerabilities in ${PACKAGES} packages, at or above the threshold"
           exit 1
 
       - name: Say what it found
         if: steps.scan.outputs.failed != 'true'
+        env:
+          TOTAL: ${{ steps.scan.outputs.total }}
         run: |
-          total='${{ steps.scan.outputs.total }}'
+          total="$TOTAL"
           if [ -z "$total" ]; then
             echo "The scan did not answer — anonymous scans are rate limited."
           else

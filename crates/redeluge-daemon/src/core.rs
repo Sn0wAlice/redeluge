@@ -97,8 +97,15 @@ pub const REDELUGE_METHODS: &[&str] = &[
 /// level Deluge gives the nearest thing it has — `core.create_torrent` and
 /// `core.get_completion_paths` are both `Normal` — rather than a level chosen
 /// here.
-const REDELUGE_PRIVILEGED_METHODS: &[&str] =
-    &["redeluge.create_torrent", "redeluge.list_directory"];
+const REDELUGE_PRIVILEGED_METHODS: &[&str] = &[
+    "redeluge.create_torrent",
+    "redeluge.list_directory",
+    // Reading a feed is the daemon fetching an address the caller chose, which
+    // is not a read of anything this daemon holds: a read-only account could
+    // otherwise use it to ask the daemon what answers on the network it sits
+    // in. It is set beside the rules it tests, and those need this level too.
+    "redeluge.test_feed",
+];
 
 /// Everything a call can reach.
 pub struct Core {
@@ -2747,7 +2754,7 @@ impl Core {
         let grace = self.idle_grace().await;
         let rules = self.tracker_rules().await;
         let labels = self.labels().await;
-        let wanted_keys = crate::torrent::KeySet::of(&keys);
+        let wanted_keys = keys_for(&keys, filter.as_ref());
         let all = self
             .manager
             .with(move |state| {
@@ -2794,7 +2801,7 @@ impl Core {
         let grace = self.idle_grace().await;
         let rules = self.tracker_rules().await;
         let labels = self.labels().await;
-        let wanted_keys = crate::torrent::KeySet::of(&keys);
+        let wanted_keys = keys_for(&keys, filter.as_ref());
 
         let (rows, filters, counters, rates) = self
             .manager
@@ -3403,6 +3410,57 @@ fn is_dead_swarm(status: &BTreeMap<String, Value>) -> bool {
     !finished && number("total_seeds") == 0 && number("total_peers") == 0
 }
 
+/// The status fields the quick search looks in.
+const SEARCHED: &[&str] = &[
+    "name",
+    "state",
+    "tracker_host",
+    "tracker",
+    "tracker_status",
+    "label",
+    "hash",
+];
+
+/// The fields a `state` filter reads beyond `state` itself: `Active`,
+/// `Unregistered` and `Dead` are questions about the rates, the tracker's last
+/// word and the swarm.
+const STATE_NEEDS: &[&str] = &[
+    "download_payload_rate",
+    "upload_payload_rate",
+    "tracker_status",
+    "total_seeds",
+    "total_peers",
+    "is_finished",
+];
+
+/// The keys to build, which is what the client asked for plus what the filter
+/// needs to answer.
+///
+/// A status is built to the client's key list, and the filter runs against
+/// that same status: a key nobody asked to see is missing, and
+/// `matches_filter` reads a missing key as "does not match". The grid asks for
+/// the columns it draws, so filtering by a tracker with the Tracker column
+/// hidden matched nothing at all. The extra keys are built, filtered on, and
+/// then dropped by `filtered`, so the answer is the shape the client asked
+/// for.
+fn keys_for(keys: &Option<Vec<String>>, filter: Option<&Value>) -> crate::torrent::KeySet {
+    let Some(named) = keys else {
+        return crate::torrent::KeySet::all();
+    };
+    let mut named = named.clone();
+    for (key, _) in filter_pairs(filter) {
+        match key.as_str() {
+            "keyword" => named.extend(SEARCHED.iter().map(|key| (*key).to_owned())),
+            "state" => {
+                named.push(key);
+                named.extend(STATE_NEEDS.iter().map(|key| (*key).to_owned()));
+            }
+            _ => named.push(key),
+        }
+    }
+    crate::torrent::KeySet::of(&Some(named))
+}
+
 fn matches_filter(status: &BTreeMap<String, Value>, filter: &[(String, Vec<String>)]) -> bool {
     filter.iter().all(|(key, wanted)| {
         // "All" is how every client spells "no filter on this field".
@@ -3473,16 +3531,6 @@ fn matches_filter(status: &BTreeMap<String, Value>, filter: &[(String, Vec<Strin
 /// the status, and fetching every torrent's files to answer a keystroke would
 /// be a great deal of work for a search box.
 fn matches_keyword(status: &BTreeMap<String, Value>, term: &str) -> bool {
-    const SEARCHED: &[&str] = &[
-        "name",
-        "state",
-        "tracker_host",
-        "tracker",
-        "tracker_status",
-        "label",
-        "hash",
-    ];
-
     SEARCHED.iter().any(|key| {
         status
             .get(*key)
@@ -3540,6 +3588,30 @@ mod key_tests {
 #[cfg(test)]
 mod filter_tests {
     use super::*;
+
+    #[test]
+    fn filtering_asks_for_the_keys_the_filter_reads() {
+        // The grid asks for the columns it draws. Filtering by a tracker with
+        // the Tracker column hidden used to build a status with no
+        // `tracker_host` in it and match nothing.
+        let asked = Some(vec!["name".to_owned(), "state".to_owned()]);
+        let filter = Value::Dict(vec![(
+            Value::Str("tracker_host".to_owned()),
+            Value::Str("example.com".to_owned()),
+        )]);
+        assert!(keys_for(&asked, Some(&filter)).wants("tracker_host"));
+
+        // And the search reads more than the name.
+        let filter = Value::Dict(vec![(
+            Value::Str("keyword".to_owned()),
+            Value::Str("example".to_owned()),
+        )]);
+        let keys = keys_for(&asked, Some(&filter));
+        assert!(keys.wants("tracker_host") && keys.wants("hash"));
+
+        // A client that names no keys still gets all of them.
+        assert!(keys_for(&None, Some(&filter)).wants("anything"));
+    }
 
     fn status(state: &str, down: i64, up: i64) -> BTreeMap<String, Value> {
         let mut out = BTreeMap::new();

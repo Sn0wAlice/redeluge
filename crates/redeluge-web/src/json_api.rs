@@ -586,6 +586,10 @@ fn spawn_event_pump(client: redeluge_rpc::Client, state: SharedState) {
 async fn web_disconnect(state: &SharedState) -> ApiResult {
     *state.daemon.write().await = None;
     state.slow_stats.lock().await.clear();
+    // With the connection goes what it answered: the method list is that
+    // daemon's, and kept here it would be offered to a browser that has no
+    // daemon to call it on.
+    *state.daemon_methods.lock().await = None;
     Ok(Json::String("Connection was closed cleanly.".to_owned()))
 }
 

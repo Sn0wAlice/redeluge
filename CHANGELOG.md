@@ -8,6 +8,37 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
+## [1.8.1] — 2026-09-21
+
+### Fixed
+
+- **Clicking a tracker in the sidebar showed nothing.** Since 1.8.0 the daemon
+  builds only the status fields a client asked for, and the filter was applied
+  to that same trimmed status: a field nobody asked to see was missing, and a
+  missing field does not match. The grid asks for the columns it draws and the
+  Tracker column is off by default, so filtering by a tracker matched every
+  time exactly nothing. The keys a filter reads are now built whether or not
+  they are drawn, and dropped again before the answer goes out.
+  - The same fault took the search box with it — it looks in the name, the
+    tracker, the label and the infohash — and the `Active`, `Unregistered` and
+    `Dead` rows, which are questions about the rates, the tracker's last word
+    and the swarm rather than about the state.
+  - It applies to `core.get_torrents_status` as well, so a script that names
+    its keys and filters on a field it did not name gets its rows back.
+
+- **`redeluge.test_feed` was readable by a read-only account.** Reading a feed
+  is the daemon fetching an address the caller chose, which is not a read of
+  anything the daemon holds. It now takes the same level as the other calls
+  that reach outside the session.
+
+- **Disconnecting from a daemon left its method list behind.** `system.listMethods`
+  kept answering with the methods of a daemon that was no longer connected
+  until something connected again.
+
+- The vulnerability scan's report is passed to the shell through the
+  environment rather than pasted into the script, which is the difference
+  between a package name and a command.
+
 ## [1.8.0] — 2026-09-20
 
 ### Added
