@@ -374,12 +374,41 @@ fn now_seconds() -> f64 {
 type Job = Box<dyn FnOnce(&mut SessionState) + Send>;
 
 /// A handle onto the session thread.
+///
+/// `jobs` is declared first on purpose: dropping the last handle has to close
+/// the channel before `_thread` waits for the thread to notice it.
 #[derive(Clone)]
 pub struct Manager {
     jobs: mpsc::Sender<Job>,
     events: tokio::sync::broadcast::Sender<Event>,
     activity: std::sync::Arc<crate::activity::Log>,
     peers: std::sync::Arc<std::sync::Mutex<crate::peers::Ledger>>,
+    /// Held for its `Drop` and never read, hence the underscore.
+    _thread: std::sync::Arc<SessionThread>,
+}
+
+/// The session thread, waited for when the last handle to it goes.
+///
+/// Detached, the thread outlives the last caller: it is still inside `stop`,
+/// or inside libtorrent's own session destructor, when the process returns
+/// from `main` and the C++ runtime starts tearing itself down underneath it.
+/// That is the SIGSEGV the test binaries hit after the last test had already
+/// passed, and the daemon had the same race on every shutdown.
+struct SessionThread(Option<std::thread::JoinHandle<()>>);
+
+impl Drop for SessionThread {
+    fn drop(&mut self) {
+        let Some(handle) = self.0.take() else {
+            return;
+        };
+        // A handle dropped on the session thread itself would be a join on
+        // self, which never returns. Nothing does that today; a hang would be
+        // a worse failure than the one this fixes.
+        if handle.thread().id() == std::thread::current().id() {
+            return;
+        }
+        let _ = handle.join();
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -433,19 +462,20 @@ impl Manager {
             writer: crate::statewriter::StateWriter::start(),
         };
 
-        let manager = Self {
-            jobs,
-            events: events.clone(),
-            activity,
-            peers,
-        };
+        let events_for_handle = events.clone();
 
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("libtorrent".to_owned())
             .spawn(move || run(state, inbox, events))
             .map_err(|err| Error::Other(err.to_string()))?;
 
-        Ok(manager)
+        Ok(Self {
+            jobs,
+            events: events_for_handle,
+            activity,
+            peers,
+            _thread: std::sync::Arc::new(SessionThread(Some(thread))),
+        })
     }
 
     /// Runs a closure on the session thread and waits for its answer.
