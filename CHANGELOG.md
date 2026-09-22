@@ -1114,7 +1114,7 @@ existing installations keep working.
 Each of these was a control whose setting nothing read. The configuration keys
 stay, because the daemon answers Deluge's API and a client that asks for them
 must get them; only the controls are gone, and
-[Configuration](https://github.com/Sn0wAlice/redeluge/wiki/Configuration) lists
+[Configuration](https://github.com/retorrent/redeluge/wiki/Configuration) lists
 every one with its reason.
 
 - The Encryption page and the Cache page, whole. Encryption was never passed to

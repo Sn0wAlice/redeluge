@@ -76,7 +76,7 @@ The published image carries the usual OCI labels, so the version and the commit
 it was built from are readable without pulling it:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/sn0walice/redeluge:1.3.1
+docker buildx imagetools inspect ghcr.io/retorrent/redeluge:1.3.1
 ```
 
 A locally built image is tagged `redeluge:local` and carries no version,

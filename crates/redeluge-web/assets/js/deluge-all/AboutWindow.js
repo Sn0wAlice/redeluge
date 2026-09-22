@@ -117,7 +117,7 @@ Deluge.about.AboutWindow = Ext.extend(Ext.Window, {
             {
                 xtype: 'label',
                 style: 'padding-top: 5px; font-size: 12px;',
-                html: '<a href="https://github.com/Sn0wAlice/redeluge" target="_blank" rel="noopener">github.com/Sn0wAlice/redeluge</a>',
+                html: '<a href="https://github.com/retorrent/redeluge" target="_blank" rel="noopener">github.com/retorrent/redeluge</a>',
             },
         ]);
         this.addButton(_('Close'), this.onCloseClick, this);

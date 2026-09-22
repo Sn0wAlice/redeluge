@@ -895,7 +895,7 @@ fn the_interface_is_named_after_the_fork() {
         "the toolbar and the About window should name the fork"
     );
     assert!(
-        text.contains("github.com/Sn0wAlice/redeluge/wiki"),
+        text.contains("github.com/retorrent/redeluge/wiki"),
         "the Help button should open this project's wiki"
     );
     assert!(

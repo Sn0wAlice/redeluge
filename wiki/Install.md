@@ -11,7 +11,7 @@ first. The torrent list needs one conversion before the daemon will start.
 The shortest path, and the one that needs nothing installed but Docker.
 
 ```bash
-git clone https://github.com/Sn0wAlice/redeluge
+git clone https://github.com/retorrent/redeluge
 cd redeluge
 cp .env.example .env
 $EDITOR .env          # set DELUGE_WEB_PASSWORD

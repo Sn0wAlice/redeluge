@@ -5,7 +5,7 @@
 
 [Unit]
 Description=redeluge Web UI
-Documentation=https://github.com/Sn0wAlice/redeluge
+Documentation=https://github.com/retorrent/redeluge
 After=redeluged.service
 Wants=redeluged.service
 

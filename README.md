@@ -25,7 +25,7 @@ docker compose up -d --build
 ```
 
 The Web UI is then on <http://127.0.0.1:8112>, already connected to the daemon.
-See [Docker](https://github.com/Sn0wAlice/redeluge/wiki/Docker) in the wiki.
+See [Docker](https://github.com/retorrent/redeluge/wiki/Docker) in the wiki.
 
 ## Build it
 
@@ -38,7 +38,7 @@ cargo build --release
 
 The binaries land in `target/release/`. `docker/rust.sh` runs the whole test
 gate in a container, which is how it runs in development. See
-[Building and Testing](https://github.com/Sn0wAlice/redeluge/wiki/Building-and-Testing).
+[Building and Testing](https://github.com/retorrent/redeluge/wiki/Building-and-Testing).
 
 ## Coming from the Python Deluge
 
@@ -54,7 +54,7 @@ are. Two things change on first start, both announced in the log: a password
 stored as the old single-round SHA-1 is rewritten as scrypt, and the daemon
 certificate is regenerated because the one Deluge wrote is X.509 version 1,
 which rustls will not use. The old files are kept. The full account is in
-[Migrating from Deluge](https://github.com/Sn0wAlice/redeluge/wiki/Migrating-from-Deluge).
+[Migrating from Deluge](https://github.com/retorrent/redeluge/wiki/Migrating-from-Deluge).
 
 ## What is not here
 
@@ -64,23 +64,23 @@ Web UI and it is in English. A thin client still works: it speaks the same RPC.
 Four of the plugins are not missing, they are built in: labels, watched
 directories, the block list and the schedule. There is nothing to install and
 no plugin namespace to call; each is a key of `core.conf`. See
-[Features](https://github.com/Sn0wAlice/redeluge/wiki/Features).
+[Features](https://github.com/retorrent/redeluge/wiki/Features).
 
 ## Documentation
 
-**The documentation is the [wiki](https://github.com/Sn0wAlice/redeluge/wiki).**
+**The documentation is the [wiki](https://github.com/retorrent/redeluge/wiki).**
 It is generated from `wiki/` in this repository, so send a pull request against
 those files rather than editing pages in the wiki interface.
 
 | | |
 |---|---|
-| [Install](https://github.com/Sn0wAlice/redeluge/wiki/Install) | Container, from source, systemd |
-| [Configuration](https://github.com/Sn0wAlice/redeluge/wiki/Configuration) | `core.conf`, `web.conf`, accounts, TLS |
-| [Features](https://github.com/Sn0wAlice/redeluge/wiki/Features) | Labels, watched directories, block list, schedule |
-| [Web API](https://github.com/Sn0wAlice/redeluge/wiki/Web-API) | The JSON-RPC endpoint, with worked curl calls |
-| [OpenAPI](https://github.com/Sn0wAlice/redeluge/wiki/OpenAPI) | The specification, generated from the contract |
-| [Architecture](https://github.com/Sn0wAlice/redeluge/wiki/Architecture) | The crates, the FFI boundary, the contract |
-| [Migration](https://github.com/Sn0wAlice/redeluge/wiki/Migration-Overview) | How Python came out, phase by phase |
+| [Install](https://github.com/retorrent/redeluge/wiki/Install) | Container, from source, systemd |
+| [Configuration](https://github.com/retorrent/redeluge/wiki/Configuration) | `core.conf`, `web.conf`, accounts, TLS |
+| [Features](https://github.com/retorrent/redeluge/wiki/Features) | Labels, watched directories, block list, schedule |
+| [Web API](https://github.com/retorrent/redeluge/wiki/Web-API) | The JSON-RPC endpoint, with worked curl calls |
+| [OpenAPI](https://github.com/retorrent/redeluge/wiki/OpenAPI) | The specification, generated from the contract |
+| [Architecture](https://github.com/retorrent/redeluge/wiki/Architecture) | The crates, the FFI boundary, the contract |
+| [Migration](https://github.com/retorrent/redeluge/wiki/Migration-Overview) | How Python came out, phase by phase |
 
 In this repository: [`docs/openapi.yaml`](docs/openapi.yaml) is the API
 specification, [CHANGELOG.md](CHANGELOG.md) records where Deluge became

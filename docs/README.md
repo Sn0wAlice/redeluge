@@ -5,4 +5,4 @@ One file: `openapi.yaml`, the API specification, generated from
 of date.
 
 The prose documentation lives in `wiki/` at the repository root, which is
-mirrored to <https://github.com/Sn0wAlice/redeluge/wiki>.
+mirrored to <https://github.com/retorrent/redeluge/wiki>.

@@ -8,7 +8,7 @@
 
 [Unit]
 Description=redeluge BitTorrent daemon
-Documentation=https://github.com/Sn0wAlice/redeluge
+Documentation=https://github.com/retorrent/redeluge
 After=network-online.target
 Wants=network-online.target
 

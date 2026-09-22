@@ -57,8 +57,8 @@ LABEL org.opencontainers.image.title="redeluge" \
       org.opencontainers.image.description="Deluge's daemon and Web UI, rewritten in Rust" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}" \
-      org.opencontainers.image.source="https://github.com/Sn0wAlice/redeluge" \
-      org.opencontainers.image.documentation="https://github.com/Sn0wAlice/redeluge/wiki" \
+      org.opencontainers.image.source="https://github.com/retorrent/redeluge" \
+      org.opencontainers.image.documentation="https://github.com/retorrent/redeluge/wiki" \
       org.opencontainers.image.licenses="GPL-3.0-or-later"
 
 ENV DELUGE_CONFIG_DIR=/config \

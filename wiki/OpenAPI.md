@@ -1,7 +1,7 @@
 # OpenAPI
 
 The HTTP API has a machine-readable specification:
-[`docs/openapi.yaml`](https://github.com/Sn0wAlice/redeluge/blob/main/docs/openapi.yaml)
+[`docs/openapi.yaml`](https://github.com/retorrent/redeluge/blob/main/docs/openapi.yaml)
 in the repository. OpenAPI 3.1, one schema per method, 100 of them.
 
 It describes the API of the Python Deluge as much as of redeluge, because they

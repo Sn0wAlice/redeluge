@@ -258,7 +258,7 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
     },
 
     onHelpClick: function () {
-        window.open('https://github.com/Sn0wAlice/redeluge/wiki', '_blank');
+        window.open('https://github.com/retorrent/redeluge/wiki', '_blank');
     },
 
     onAboutClick: function () {
